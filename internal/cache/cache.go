@@ -59,8 +59,8 @@ func Component(raw string) string {
 	return s + "-" + hex.EncodeToString(sum[:4])
 }
 
-func (c *Cache) ArtifactPath(eco, name, version string) string {
-	return filepath.Join(c.Root, "artifacts", eco, Component(name), Component(version)+".tgz")
+func (c *Cache) ArtifactPath(eco, name, version, ext string) string {
+	return filepath.Join(c.Root, "artifacts", eco, Component(name), Component(version)+ext)
 }
 
 func (c *Cache) WorkspacePath(eco, name, from, to string) string {

@@ -10,22 +10,27 @@ import (
 
 	"github.com/rvagg/depvet/internal/classify"
 	"github.com/rvagg/depvet/internal/gitdiff"
+	"github.com/rvagg/depvet/internal/gopkg"
+	"github.com/rvagg/depvet/internal/manifest"
 	"github.com/rvagg/depvet/internal/npmpkg"
 )
 
-const SchemaVersion = 1
+// SchemaVersion 2: the npm-specific compat.engines field became the
+// ecosystem-neutral compat.constraints (a breaking rename, hence the
+// bump, per the evolution rule).
+const SchemaVersion = 2
 
 type Stats struct {
-	Tool         Tool               `json:"tool"`
-	Package      PkgRef             `json:"package"`
-	Artifact     Artifact           `json:"artifact"`
-	Runnable     Runnable           `json:"runnable"`
-	Compat       Compat             `json:"compat"`
-	Dependencies []npmpkg.DepChange `json:"dependencies"`
-	Files        FilesSection       `json:"files"`
-	Security     Security           `json:"security"`
-	Workspace    string             `json:"workspace"`
-	Notes        []string           `json:"notes,omitempty"`
+	Tool         Tool                 `json:"tool"`
+	Package      PkgRef               `json:"package"`
+	Artifact     Artifact             `json:"artifact"`
+	Runnable     Runnable             `json:"runnable"`
+	Compat       Compat               `json:"compat"`
+	Dependencies []manifest.DepChange `json:"dependencies"`
+	Files        FilesSection         `json:"files"`
+	Security     Security             `json:"security"`
+	Workspace    string               `json:"workspace"`
+	Notes        []string             `json:"notes,omitempty"`
 }
 
 type Tool struct {
@@ -60,20 +65,28 @@ type Artifact struct {
 type Source struct {
 	URL    string `json:"url"`
 	Digest string `json:"digest"`
+	// Verification distinguishes registry/sumdb-verified artifacts from
+	// TLS-trust-only ones; "tls-only" prefixed values get a note.
+	Verification string `json:"verification,omitempty"`
 }
 
 type Runnable struct {
-	Lifecycle []npmpkg.Change `json:"lifecycle"`
-	Bin       []npmpkg.Change `json:"bin"`
-	GypFrom   bool            `json:"nodeGypFrom"`
-	GypTo     bool            `json:"nodeGypTo"`
+	Lifecycle []manifest.Change `json:"lifecycle"`
+	Bin       []manifest.Change `json:"bin"`
+	GypFrom   bool              `json:"nodeGypFrom"`
+	GypTo     bool              `json:"nodeGypTo"`
+	// cgo means C compilation at the consumer's build time (Go only)
+	CgoFrom bool `json:"cgoFrom,omitempty"`
+	CgoTo   bool `json:"cgoTo,omitempty"`
 }
 
 type Compat struct {
-	TypeFrom string                `json:"typeFrom,omitempty"`
-	TypeTo   string                `json:"typeTo,omitempty"`
-	Engines  []npmpkg.Change       `json:"engines"`
-	Exports  []npmpkg.ExportChange `json:"exports"`
+	TypeFrom string `json:"typeFrom,omitempty"`
+	TypeTo   string `json:"typeTo,omitempty"`
+	// Constraints carry full display labels in Key: engines.node,
+	// go directive, toolchain, rust-version
+	Constraints []manifest.Change       `json:"constraints"`
+	Exports     []manifest.ExportChange `json:"exports"`
 }
 
 type Security struct {
@@ -129,8 +142,10 @@ type Input struct {
 	OldTree        string
 	NewTree        string
 	Diffs          []gitdiff.FileDiff
-	OldPkg         *npmpkg.Package
+	OldPkg         *npmpkg.Package // npm only
 	NewPkg         *npmpkg.Package
+	OldMod         *gopkg.Mod // go only
+	NewMod         *gopkg.Mod
 	SkippedLinks   []string
 	HostileEntries []string
 	SourceFrom     *Source
@@ -161,30 +176,47 @@ func Build(in Input) (*Stats, error) {
 	if in.SourceFrom == nil || in.SourceTo == nil {
 		s.Notes = append(s.Notes, "artifact provenance incomplete (cached before sidecars existed); refetch to restore")
 	}
-
-	for _, w := range in.OldPkg.Warnings {
-		s.Notes = append(s.Notes, "old package.json: "+w)
-	}
-	for _, w := range in.NewPkg.Warnings {
-		s.Notes = append(s.Notes, "new package.json: "+w)
+	for side, src := range map[string]*Source{"from": in.SourceFrom, "to": in.SourceTo} {
+		if src != nil && strings.HasPrefix(src.Verification, "tls-only") {
+			s.Notes = append(s.Notes, side+" artifact verified by TLS trust only (no registry integrity or checksum database record)")
+		}
 	}
 
-	s.Runnable.Lifecycle = npmpkg.LifecycleDelta(in.OldPkg, in.NewPkg)
-	s.Runnable.Bin = npmpkg.BinDelta(in.OldPkg, in.NewPkg)
-	s.Runnable.GypFrom = exists(filepath.Join(in.OldTree, "binding.gyp"))
-	s.Runnable.GypTo = exists(filepath.Join(in.NewTree, "binding.gyp"))
+	switch {
+	case in.OldPkg != nil && in.NewPkg != nil:
+		for _, w := range in.OldPkg.Warnings {
+			s.Notes = append(s.Notes, "old package.json: "+w)
+		}
+		for _, w := range in.NewPkg.Warnings {
+			s.Notes = append(s.Notes, "new package.json: "+w)
+		}
+		s.Runnable.Lifecycle = npmpkg.LifecycleDelta(in.OldPkg, in.NewPkg)
+		s.Runnable.Bin = npmpkg.BinDelta(in.OldPkg, in.NewPkg)
+		s.Runnable.GypFrom = exists(filepath.Join(in.OldTree, "binding.gyp"))
+		s.Runnable.GypTo = exists(filepath.Join(in.NewTree, "binding.gyp"))
+		if in.OldPkg.Type != in.NewPkg.Type {
+			s.Compat.TypeFrom = orDefault(in.OldPkg.Type, "commonjs")
+			s.Compat.TypeTo = orDefault(in.NewPkg.Type, "commonjs")
+		}
+		s.Compat.Constraints = npmpkg.EnginesDelta(in.OldPkg, in.NewPkg)
+		s.Compat.Exports, err = npmpkg.ExportsDelta(in.OldPkg, in.NewPkg)
+		if err != nil {
+			s.Notes = append(s.Notes, "exports resolution failed: "+err.Error())
+		}
+		s.Dependencies = npmpkg.DepsDelta(in.OldPkg, in.NewPkg)
 
-	if in.OldPkg.Type != in.NewPkg.Type {
-		s.Compat.TypeFrom = orDefault(in.OldPkg.Type, "commonjs")
-		s.Compat.TypeTo = orDefault(in.NewPkg.Type, "commonjs")
+	case in.OldMod != nil && in.NewMod != nil:
+		for _, w := range in.OldMod.Warnings {
+			s.Notes = append(s.Notes, "old go.mod: "+w)
+		}
+		for _, w := range in.NewMod.Warnings {
+			s.Notes = append(s.Notes, "new go.mod: "+w)
+		}
+		s.Runnable.CgoFrom = gopkg.ScanCgo(in.OldTree)
+		s.Runnable.CgoTo = gopkg.ScanCgo(in.NewTree)
+		s.Compat.Constraints = gopkg.ConstraintsDelta(in.OldMod, in.NewMod)
+		s.Dependencies = gopkg.RequireDelta(in.OldMod, in.NewMod)
 	}
-	s.Compat.Engines = npmpkg.EnginesDelta(in.OldPkg, in.NewPkg)
-	s.Compat.Exports, err = npmpkg.ExportsDelta(in.OldPkg, in.NewPkg)
-	if err != nil {
-		s.Notes = append(s.Notes, "exports resolution failed: "+err.Error())
-	}
-
-	s.Dependencies = npmpkg.DepsDelta(in.OldPkg, in.NewPkg)
 
 	agg := map[string]*ClassAgg{}
 	for _, d := range in.Diffs {

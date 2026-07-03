@@ -188,15 +188,17 @@ func sanitize(name string) (string, error) {
 			return "", fmt.Errorf("control byte 0x%02x in name", b)
 		}
 	}
-	// Windows-shaped escapes: path.Clean is slash-only, so ..\evil,
-	// C:evil and \\unc\share would survive it and become separators on
-	// a Windows filesystem
+	// Windows-shaped escapes: path.Clean is slash-only, so ..\evil and
+	// \\unc\share would survive it and become separators on a Windows
+	// filesystem. Colons are rejected in ANY position because prefix
+	// stripping can promote an interior segment to the front (package/
+	// c:evil -> c:evil, a drive-relative path on Windows), and NTFS
+	// treats name:stream as an alternate data stream.
 	if strings.ContainsRune(name, '\\') {
 		return "", fmt.Errorf("backslash in name")
 	}
-	if len(name) >= 2 && name[1] == ':' &&
-		(name[0] >= 'a' && name[0] <= 'z' || name[0] >= 'A' && name[0] <= 'Z') {
-		return "", fmt.Errorf("windows drive prefix")
+	if strings.ContainsRune(name, ':') {
+		return "", fmt.Errorf("colon in name (windows drive/ADS)")
 	}
 	clean := path.Clean(name)
 	if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {

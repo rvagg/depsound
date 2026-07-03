@@ -27,7 +27,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestNormalizeVersion(t *testing.T) {
-	cases := map[string]string{
+	npmCases := map[string]string{
 		"v2.5.0":       "2.5.0", // dependabot/tag form
 		"V2.5.0":       "2.5.0",
 		"2.5.0":        "2.5.0",
@@ -35,9 +35,32 @@ func TestNormalizeVersion(t *testing.T) {
 		"v":            "v",
 		"2.5.0-beta.1": "2.5.0-beta.1",
 	}
-	for in, want := range cases {
-		if got := NormalizeVersion(NPM, in); got != want {
-			t.Errorf("NormalizeVersion(npm, %q) = %q, want %q", in, got, want)
+	for in, want := range npmCases {
+		got, err := NormalizeVersion(NPM, in)
+		if err != nil || got != want {
+			t.Errorf("NormalizeVersion(npm, %q) = %q, %v, want %q", in, got, err, want)
+		}
+	}
+
+	goCases := map[string]string{
+		"0.20.1":                               "v0.20.1",
+		"v0.20.1":                              "v0.20.1",
+		"1.14.47":                              "v1.14.47",
+		"v0.1.1-0.20260103110540-f8a47775ebe5": "v0.1.1-0.20260103110540-f8a47775ebe5",
+		"0.1.1-0.20260103110540-f8a47775ebe5":  "v0.1.1-0.20260103110540-f8a47775ebe5",
+		"v2.0.0+incompatible":                  "v2.0.0+incompatible",
+	}
+	for in, want := range goCases {
+		got, err := NormalizeVersion(Go, in)
+		if err != nil || got != want {
+			t.Errorf("NormalizeVersion(go, %q) = %q, %v, want %q", in, got, err, want)
+		}
+	}
+
+	// commit hashes and branch names must fail clearly, not 404 weirdly
+	for _, bad := range []string{"f8a47775ebe5", "master", "0abc123def"} {
+		if got, err := NormalizeVersion(Go, bad); err == nil {
+			t.Errorf("NormalizeVersion(go, %q) = %q, want error", bad, got)
 		}
 	}
 }

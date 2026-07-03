@@ -13,14 +13,6 @@ import (
 // export subpath under each standard condition set, run the specified Node
 // resolution algorithm against both versions and diff the outcomes.
 
-type ExportChange struct {
-	Subpath   string `json:"subpath"`
-	Condition string `json:"condition"` // require or import
-	From      string `json:"from"`      // "path (format)", or "" for unresolvable
-	To        string `json:"to"`
-	Note      string `json:"note,omitempty"`
-}
-
 func ExportsDelta(a, b *Package) ([]ExportChange, error) {
 	oldT, err := resolutionTable(a)
 	if err != nil {

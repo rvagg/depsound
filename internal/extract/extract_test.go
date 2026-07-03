@@ -94,6 +94,9 @@ func TestHostileNamesSkippedAndRecorded(t *testing.T) {
 		"../evil", "package/../../evil", "/abs/evil",
 		"package/esc\x1b]0;pwn\x07.js",
 		"..\\evil", "C:\\evil", "c:evil", "\\\\unc\\share\\evil",
+		// prefix stripping must not promote an interior segment into a
+		// drive-relative path
+		"package/c:evil", "package/ads.txt:stream",
 	}
 	for _, name := range hostile {
 		src := makeTarGz(t, []entry{

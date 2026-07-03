@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/rvagg/depvet/internal/npmpkg"
+	"github.com/rvagg/depvet/internal/manifest"
 	"github.com/rvagg/depvet/internal/stats"
 )
 
@@ -40,17 +40,25 @@ func Text(s *stats.Stats) string {
 	}
 
 	w("")
-	if len(s.Runnable.Lifecycle) == 0 && !s.Runnable.GypFrom && !s.Runnable.GypTo && len(s.Runnable.Bin) == 0 {
-		w("runnable: no lifecycle scripts, no binding.gyp, no bin changes")
+	r := s.Runnable
+	if len(r.Lifecycle) == 0 && !r.GypFrom && !r.GypTo && len(r.Bin) == 0 && !r.CgoFrom && !r.CgoTo {
+		w("runnable: no lifecycle scripts, no build-time execution surface, no bin changes")
 	} else {
 		w("runnable:")
-		for _, c := range s.Runnable.Lifecycle {
+		for _, c := range r.Lifecycle {
 			w("  WARNING lifecycle %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
 		}
-		if s.Runnable.GypFrom || s.Runnable.GypTo {
-			w("  binding.gyp (node-gyp runs at install): %v -> %v", s.Runnable.GypFrom, s.Runnable.GypTo)
+		if r.GypFrom || r.GypTo {
+			w("  binding.gyp (node-gyp runs at install): %v -> %v", r.GypFrom, r.GypTo)
 		}
-		for _, c := range s.Runnable.Bin {
+		if r.CgoFrom || r.CgoTo {
+			line := fmt.Sprintf("  cgo (C compiled at consumer build time): %v -> %v", r.CgoFrom, r.CgoTo)
+			if !r.CgoFrom && r.CgoTo {
+				line = "  WARNING" + line[1:] + "  [cgo INTRODUCED by this update]"
+			}
+			w("%s", line)
+		}
+		for _, c := range r.Bin {
 			w("  bin %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
 		}
 	}
@@ -116,8 +124,8 @@ func compat(s *stats.Stats) []string {
 	if s.Compat.TypeFrom != s.Compat.TypeTo && (s.Compat.TypeFrom != "" || s.Compat.TypeTo != "") {
 		out = append(out, fmt.Sprintf("WARNING type: %s -> %s (module format flip)", taint(s.Compat.TypeFrom), taint(s.Compat.TypeTo)))
 	}
-	for _, c := range s.Compat.Engines {
-		out = append(out, fmt.Sprintf("engines.%s: %s", taint(c.Key), changeDetail(c)))
+	for _, c := range s.Compat.Constraints {
+		out = append(out, fmt.Sprintf("%s: %s", taint(c.Key), changeDetail(c)))
 	}
 	for _, e := range s.Compat.Exports {
 		line := fmt.Sprintf("exports %q %s: %s -> %s", taint(e.Subpath), e.Condition, blank(taint(e.From)), blank(taint(e.To)))
@@ -129,7 +137,7 @@ func compat(s *stats.Stats) []string {
 	return out
 }
 
-func changeDetail(c npmpkg.Change) string {
+func changeDetail(c manifest.Change) string {
 	switch c.Status {
 	case "added":
 		return fmt.Sprintf("added %q", taint(c.To))

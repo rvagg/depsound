@@ -66,17 +66,31 @@ func NPM(ctx context.Context, client *http.Client, name, version, dest string) e
 		return fmt.Errorf("npm:%s@%s: %w", name, version, err)
 	}
 	digest := meta.Dist.Integrity
+	verification := VerifyRegistry512
 	if digest == "" {
 		digest = "sha1-" + meta.Dist.Shasum
+		verification = VerifyTLSOnlySHA1
 	}
-	return writeMeta(dest, Meta{URL: meta.Dist.Tarball, Digest: digest})
+	return writeMeta(dest, Meta{URL: meta.Dist.Tarball, Digest: digest, Verification: verification})
 }
+
+// Verification methods recorded in the provenance sidecar. A report must
+// be able to distinguish registry/sumdb-verified artifacts from ones
+// resting on TLS trust alone; the "tls-only" prefix is what stats keys
+// its degradation note on.
+const (
+	VerifySumDB       = "sumdb-lookup"
+	VerifyRegistry512 = "registry-sha512"
+	VerifyTLSOnly     = "tls-only"
+	VerifyTLSOnlySHA1 = "tls-only-sha1"
+)
 
 // Meta is the provenance sidecar stored beside each cached artifact so
 // reports remain traceable to exact inputs.
 type Meta struct {
-	URL    string `json:"url"`
-	Digest string `json:"digest"`
+	URL          string `json:"url"`
+	Digest       string `json:"digest"`
+	Verification string `json:"verification,omitempty"`
 }
 
 func MetaPath(artifactPath string) string { return artifactPath + ".meta.json" }

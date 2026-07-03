@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/rvagg/depvet/internal/manifest"
 )
 
 type Package struct {
@@ -96,14 +98,12 @@ func (p *Package) warn(key string) {
 	p.Warnings = append(p.Warnings, fmt.Sprintf("field %q has unexpected shape, partially or fully ignored", key))
 }
 
-// Change is a generic keyed string delta: lifecycle scripts, bin entries,
-// engines. Status is added, removed or changed.
-type Change struct {
-	Key    string `json:"key"`
-	Status string `json:"status"`
-	From   string `json:"from,omitempty"`
-	To     string `json:"to,omitempty"`
-}
+// Delta types are the shared ecosystem-neutral ones.
+type (
+	Change       = manifest.Change
+	DepChange    = manifest.DepChange
+	ExportChange = manifest.ExportChange
+)
 
 // lifecycleScripts can execute on a consumer's machine in some install
 // path; they are the number one npm attack signal. npm runs pre<x>/post<x>
@@ -145,17 +145,14 @@ func binMap(p *Package) map[string]string {
 	return m
 }
 
+// EnginesDelta emits full display labels (engines.node) since Change.Key
+// is rendered verbatim across ecosystems.
 func EnginesDelta(a, b *Package) []Change {
-	return mapDelta(a.Engines, b.Engines)
-}
-
-type DepChange struct {
-	Section string `json:"section"` // dependencies, peerDependencies, optionalDependencies
-	Name    string `json:"name"`
-	Status  string `json:"status"`
-	From    string `json:"from,omitempty"`
-	To      string `json:"to,omitempty"`
-	Flag    string `json:"flag,omitempty"` // non-registry specs: git/url/file
+	deltas := mapDelta(a.Engines, b.Engines)
+	for i := range deltas {
+		deltas[i].Key = "engines." + deltas[i].Key
+	}
+	return deltas
 }
 
 func DepsDelta(a, b *Package) []DepChange {

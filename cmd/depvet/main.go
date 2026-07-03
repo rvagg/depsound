@@ -16,13 +16,14 @@ import (
 	"github.com/rvagg/depvet/internal/extract"
 	"github.com/rvagg/depvet/internal/fetch"
 	"github.com/rvagg/depvet/internal/gitdiff"
+	"github.com/rvagg/depvet/internal/gopkg"
 	"github.com/rvagg/depvet/internal/npmpkg"
 	"github.com/rvagg/depvet/internal/output"
 	"github.com/rvagg/depvet/internal/spec"
 	"github.com/rvagg/depvet/internal/stats"
 )
 
-const version = "0.1.1"
+const version = "0.2.0"
 
 const usage = `depvet: vet a dependency update by diffing its published artifacts
 
@@ -74,8 +75,14 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	from := spec.NormalizeVersion(sp.Eco, rest[1])
-	to := spec.NormalizeVersion(sp.Eco, rest[2])
+	from, err := spec.NormalizeVersion(sp.Eco, rest[1])
+	if err != nil {
+		return err
+	}
+	to, err := spec.NormalizeVersion(sp.Eco, rest[2])
+	if err != nil {
+		return err
+	}
 
 	c, err := cache.Open(cacheDir)
 	if err != nil {
@@ -147,21 +154,29 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	// while making progress
 	client := &http.Client{}
 
+	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip"}[sp.Eco]
 	arts := map[string]string{}
 	srcs := map[string]*stats.Source{}
 	for _, v := range []string{from, to} {
-		dest := c.ArtifactPath(string(sp.Eco), sp.Name, v)
+		dest := c.ArtifactPath(string(sp.Eco), sp.Name, v, ext)
 		if _, err := os.Stat(dest); err != nil {
 			fmt.Fprintf(os.Stderr, "depvet: fetching %s@%s\n", sp, v)
 		}
 		// always goes through fetch: cache hits are rehashed against the
 		// sidecar digest there, and failures refetch
-		if err := fetch.NPM(ctx, client, sp.Name, v, dest); err != nil {
+		var err error
+		switch sp.Eco {
+		case spec.NPM:
+			err = fetch.NPM(ctx, client, sp.Name, v, dest)
+		case spec.Go:
+			err = fetch.GoModule(ctx, client, sp.Name, v, dest)
+		}
+		if err != nil {
 			return nil, err
 		}
 		arts[v] = dest
 		if m := fetch.ReadMeta(dest); m != nil {
-			srcs[v] = &stats.Source{URL: m.URL, Digest: m.Digest}
+			srcs[v] = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
 		}
 	}
 
@@ -180,7 +195,15 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	fmt.Fprintf(os.Stderr, "depvet: extracting and diffing\n")
 	var skippedLinks, hostileEntries []string
 	for v, sub := range map[string]string{from: "old", to: "new"} {
-		rep, err := extract.TarGz(arts[v], filepath.Join(tmp, sub), extract.DefaultLimits)
+		var rep *extract.Report
+		var err error
+		switch sp.Eco {
+		case spec.NPM:
+			rep, err = extract.TarGz(arts[v], filepath.Join(tmp, sub), extract.DefaultLimits)
+		case spec.Go:
+			// module zips declare their root: module@version/
+			rep, err = extract.Zip(arts[v], filepath.Join(tmp, sub), sp.Name+"@"+v, extract.DefaultLimits)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -197,29 +220,36 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 		return nil, err
 	}
 
-	oldPkg, err := npmpkg.Load(filepath.Join(tmp, "old"))
-	if err != nil {
-		return nil, fmt.Errorf("old tree: %w", err)
-	}
-	newPkg, err := npmpkg.Load(filepath.Join(tmp, "new"))
-	if err != nil {
-		return nil, fmt.Errorf("new tree: %w", err)
-	}
-
-	st, err := stats.Build(stats.Input{
+	input := stats.Input{
 		ToolVersion:    version,
 		Pkg:            stats.PkgRef{Ecosystem: string(sp.Eco), Name: sp.Name, From: from, To: to},
 		Workspace:      ws,
 		OldTree:        filepath.Join(tmp, "old"),
 		NewTree:        filepath.Join(tmp, "new"),
 		Diffs:          diffs,
-		OldPkg:         oldPkg,
-		NewPkg:         newPkg,
 		SkippedLinks:   skippedLinks,
 		HostileEntries: hostileEntries,
 		SourceFrom:     srcs[from],
 		SourceTo:       srcs[to],
-	})
+	}
+	switch sp.Eco {
+	case spec.NPM:
+		if input.OldPkg, err = npmpkg.Load(input.OldTree); err != nil {
+			return nil, fmt.Errorf("old tree: %w", err)
+		}
+		if input.NewPkg, err = npmpkg.Load(input.NewTree); err != nil {
+			return nil, fmt.Errorf("new tree: %w", err)
+		}
+	case spec.Go:
+		if input.OldMod, err = gopkg.Load(input.OldTree); err != nil {
+			return nil, fmt.Errorf("old tree: %w", err)
+		}
+		if input.NewMod, err = gopkg.Load(input.NewTree); err != nil {
+			return nil, fmt.Errorf("new tree: %w", err)
+		}
+	}
+
+	st, err := stats.Build(input)
 	if err != nil {
 		return nil, err
 	}
