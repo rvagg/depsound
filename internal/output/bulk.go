@@ -89,7 +89,8 @@ func Bulk(results []BulkResult) string {
 	})
 	if len(clean) > 0 {
 		w("")
-		w("no notable signals:")
+		w("NO FLAGS RAISED (%d): NOT the same as safe. These were not assessed", len(clean))
+		w("for reachability, semantics, intent, or test coverage, a starting point:")
 		for _, r := range clean {
 			w("  %s", taint(r.Ref))
 		}
@@ -113,8 +114,16 @@ func Bulk(results []BulkResult) string {
 		w("  %-40s  %d files +%d/-%d  %s", taint(r.Ref), d.files, d.added, d.removed, digestLine(d))
 	}
 
+	// coverage boundary once, at the aggregate (same for every dep); the
+	// anti-false-security spine, not a footer disclaimer
 	w("")
-	w("detail on any dep: depvet <eco>:<name> <from> <to>  (advisory leads, not a gate)")
+	w("=== COVERAGE: heuristic triage, NOT a verdict ===")
+	w("checked: artifact diff, file classes, manifest compat, execution surface, OSV.")
+	w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
+	w("  TRANSITIVE deps these bumps pull in; publish provenance. Silence != safe.")
+	w("next: for each dep you rely on, intersect the diff with your usage ->")
+	w("  depvet surface <eco>:<name> <from> <to> --uses=<your imports>")
+	w("detail on any dep: depvet <eco>:<name> <from> <to>  (leads, not a gate)")
 	return b.String()
 }
 

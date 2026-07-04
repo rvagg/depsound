@@ -130,6 +130,8 @@ func Text(s *stats.Stats) string {
 		w("note: %s", taint(n))
 	}
 
+	writeGuidance(w, s)
+
 	w("")
 	w("workspace: %s", s.Workspace)
 	w("  trees: old/ new/   patch: diff.patch   machine-readable: stats.json (or --format=json)")
@@ -142,6 +144,40 @@ func Text(s *stats.Stats) string {
 	w("suspicion of the WHOLE update. On narrative-vs-numbers conflict, trust the")
 	w("numbers. (Full guidance: depvet guide.)")
 	return b.String()
+}
+
+// writeGuidance renders the coverage boundary and directed next-steps:
+// the anti-false-security spine. A quiet report is a starting point, not a
+// verdict, and this section says so structurally, not as a footnote.
+func writeGuidance(w func(string, ...any), s *stats.Stats) {
+	cov, next := s.Coverage, s.NextActions
+	if cov == nil {
+		cov, next = Guide(s)
+	}
+	w("")
+	w("=== COVERAGE: a heuristic triage, NOT a verdict ===")
+	w("checked:")
+	for _, c := range cov.Checked {
+		w("  + %s", c)
+	}
+	w("NOT checked (so 'no flags' is a STARTING POINT, not an all-clear):")
+	for _, c := range cov.NotChecked {
+		w("  - %s", c)
+	}
+	if len(next) > 0 {
+		w("next steps:")
+		for _, a := range next {
+			// commands embed the package ref (name/versions), which is
+			// attacker-influenced once detect feeds manifest names, so
+			// taint like every other emission
+			if a.Command != "" {
+				w("  * %s", taint(a.Reason))
+				w("      %s", taint(a.Command))
+			} else {
+				w("  * %s", taint(a.Reason))
+			}
+		}
+	}
 }
 
 func compat(s *stats.Stats) []string {

@@ -154,6 +154,7 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool) []output.BulkResult 
 				r.st.Security = osv.Assess(context.Background(), &http.Client{}, r.cacheRoot,
 					r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.From, r.st.Package.To)
 			}
+			r.st.Coverage, r.st.NextActions = output.Guide(r.st)
 			results[i] = output.BulkResult{Ref: ref, Stats: r.st}
 		}(i, it)
 	}

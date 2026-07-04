@@ -194,6 +194,11 @@ func diffCmd(args []string) error {
 		r.st.Security = osv.Assess(context.Background(), client, r.cacheRoot,
 			r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.From, r.st.Package.To)
 	}
+	// coverage + next-steps depend on the merged OSV, so compute here (not
+	// in the deterministic workspace build) and attach for text and JSON
+	if format == "stats" || format == "json" {
+		r.st.Coverage, r.st.NextActions = output.Guide(r.st)
+	}
 
 	switch format {
 	case "stats":
@@ -313,7 +318,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	}
 	defer os.RemoveAll(tmp)
 
-	fmt.Fprintf(os.Stderr, "depvet: extracting and diffing\n")
+	fmt.Fprintf(os.Stderr, "depvet: %s %s->%s: extracting and diffing\n", sp, from, to)
 	var skippedLinks, hostileEntries []string
 	for v, sub := range map[string]string{from: "old", to: "new"} {
 		var rep *extract.Report

@@ -35,6 +35,22 @@ type Stats struct {
 	Security     Security             `json:"security"`
 	Workspace    string               `json:"workspace"`
 	Notes        []string             `json:"notes,omitempty"`
+	// Coverage and NextActions are the anti-false-security spine: what
+	// the tool did and did NOT check, and where to point judgement next.
+	// Populated at report time (they depend on the live OSV merge), so a
+	// clean result never reads as a verdict.
+	Coverage    *Coverage    `json:"coverage,omitempty"`
+	NextActions []NextAction `json:"nextActions,omitempty"`
+}
+
+type Coverage struct {
+	Checked    []string `json:"checked"`
+	NotChecked []string `json:"notChecked"`
+}
+
+type NextAction struct {
+	Reason  string `json:"reason"`
+	Command string `json:"command,omitempty"`
 }
 
 type Tool struct {
