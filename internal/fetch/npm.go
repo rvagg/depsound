@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/rvagg/depvet/internal/version"
 )
 
 // npmRegistry is a var so tests can point it at a local server.
@@ -30,7 +32,7 @@ const metaTimeout = 30 * time.Second
 // tests can shorten it.
 var stallTimeout = 30 * time.Second
 
-const userAgent = "depvet/0.1 (+https://github.com/rvagg/depvet)"
+const userAgent = version.UserAgent
 
 // NPM fetches name@version into dest. The version metadata document
 // supplies the canonical tarball URL and integrity, which is verified

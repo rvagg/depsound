@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/rvagg/depvet/internal/manifest"
+	"github.com/rvagg/depvet/internal/osv"
 	"github.com/rvagg/depvet/internal/stats"
 )
 
@@ -105,7 +106,7 @@ func Text(s *stats.Stats) string {
 	}
 
 	w("")
-	w("security: %s", s.Security.Note)
+	writeSecurity(w, s.Security)
 	for _, n := range s.Notes {
 		w("note: %s", taint(n))
 	}
@@ -157,6 +158,47 @@ func Files(s *stats.Stats) string {
 		w("  %-1s %-9s %+5d/-%-5d %s", e.Status, e.Class, e.Added, e.Removed, path)
 	}
 	return b.String()
+}
+
+// writeSecurity renders the OSV assessment: fixed-by-upgrade first (the
+// argument FOR the bump), then still-present (the bump doesn't help) and
+// introduced (the bump makes it worse), each a lead, never a gate.
+func writeSecurity(w func(string, ...any), sec osv.Assessment) {
+	if !sec.Queried {
+		note := sec.Note
+		if note == "" {
+			note = "not queried"
+		}
+		w("security (OSV): %s", note)
+		return
+	}
+	total := len(sec.FixedByUpgrade) + len(sec.StillPresent) + len(sec.Introduced)
+	if total == 0 {
+		w("security (OSV): no known vulnerabilities in either version (as of %s)", sec.FetchedAt)
+		return
+	}
+	w("security (OSV, %s):", sec.FetchedAt)
+	writeVulns(w, "FIXED by this upgrade", sec.FixedByUpgrade)
+	writeVulns(w, "WARNING still present after upgrade", sec.StillPresent)
+	writeVulns(w, "WARNING introduced by this upgrade", sec.Introduced)
+	w("  (advisory leads, not a gate; confirm relevance to your usage and code paths)")
+}
+
+func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {
+	if len(vulns) == 0 {
+		return
+	}
+	w("  %s:", label)
+	for _, v := range vulns {
+		line := "    " + taint(v.ID)
+		if len(v.Aliases) > 0 {
+			line += " (" + taint(strings.Join(v.Aliases, ", ")) + ")"
+		}
+		if v.Summary != "" {
+			line += ": " + taint(v.Summary)
+		}
+		w("%s", line)
+	}
 }
 
 func changeDetail(c manifest.Change) string {

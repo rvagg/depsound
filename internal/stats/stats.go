@@ -13,6 +13,7 @@ import (
 	"github.com/rvagg/depvet/internal/gopkg"
 	"github.com/rvagg/depvet/internal/manifest"
 	"github.com/rvagg/depvet/internal/npmpkg"
+	"github.com/rvagg/depvet/internal/osv"
 )
 
 // SchemaVersion 2: the npm-specific compat.engines field became the
@@ -90,10 +91,10 @@ type Compat struct {
 	Exports     []manifest.ExportChange `json:"exports"`
 }
 
-type Security struct {
-	Queried bool   `json:"queried"`
-	Note    string `json:"note,omitempty"`
-}
+// Security is the OSV assessment. It is NOT part of the deterministic
+// workspace build (OSV is an advisory snapshot); it is queried live at
+// report time and merged in before rendering.
+type Security = osv.Assessment
 
 type FilesSection struct {
 	Changed      int         `json:"changed"`
@@ -169,7 +170,8 @@ func Build(in Input) (*Stats, error) {
 		Tool:      Tool{Name: "depvet", Version: in.ToolVersion, Schema: SchemaVersion},
 		Package:   in.Pkg,
 		Workspace: in.Workspace,
-		Security:  Security{Queried: false, Note: "OSV integration pending"},
+		// Security is queried live at report time, not baked into the
+		// deterministic workspace.
 	}
 
 	var err error

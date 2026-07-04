@@ -18,18 +18,18 @@ import (
 	"github.com/rvagg/depvet/internal/gitdiff"
 	"github.com/rvagg/depvet/internal/gopkg"
 	"github.com/rvagg/depvet/internal/npmpkg"
+	"github.com/rvagg/depvet/internal/osv"
 	"github.com/rvagg/depvet/internal/output"
 	"github.com/rvagg/depvet/internal/spec"
 	"github.com/rvagg/depvet/internal/stats"
 	"github.com/rvagg/depvet/internal/surface"
+	"github.com/rvagg/depvet/internal/version"
 )
-
-const version = "0.3.3"
 
 const usage = `depvet: vet a dependency update by diffing its published artifacts
 
 usage:
-  depvet <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files]
+  depvet <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files] [--no-osv]
   depvet surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
   depvet show    <ecosystem>:<name> <from> <to> --file=X | --dir=Y | --symbol=Z
 
@@ -70,7 +70,7 @@ func run(args []string) error {
 			fmt.Println(usage)
 			return nil
 		case "-v", "--version", "version":
-			fmt.Printf("depvet %s (stats schema %d)\n", version, stats.SchemaVersion)
+			fmt.Printf("depvet %s (stats schema %d)\n", version.Version, stats.SchemaVersion)
 			return nil
 		case "surface":
 			return surfaceCmd(args[1:])
@@ -83,10 +83,11 @@ func run(args []string) error {
 
 // resolved holds a materialized workspace and its parsed spec.
 type resolved struct {
-	ws  string
-	sp  spec.Spec
-	st  *stats.Stats
-	idx *surface.Index
+	ws        string
+	cacheRoot string
+	sp        spec.Spec
+	st        *stats.Stats
+	idx       *surface.Index
 }
 
 // commonArgs parses the shared "<spec> <from> <to>" tail plus --cache-dir,
@@ -148,20 +149,34 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 	if err != nil {
 		return nil, nil, err
 	}
-	return &resolved{ws: ws, sp: sp, st: st, idx: idx}, pos[3:], nil
+	return &resolved{ws: ws, cacheRoot: c.Root, sp: sp, st: st, idx: idx}, pos[3:], nil
 }
 
 func diffCmd(args []string) error {
 	format := "stats"
+	noOSV := false
 	r, _, err := resolveWorkspace(args, func(a string) (bool, error) {
-		if v, ok := strings.CutPrefix(a, "--format="); ok {
-			format = v
-			return true, nil
+		switch {
+		case strings.HasPrefix(a, "--format="):
+			format = strings.TrimPrefix(a, "--format=")
+		case a == "--no-osv":
+			noOSV = true
+		default:
+			return false, nil
 		}
-		return false, nil
+		return true, nil
 	})
 	if err != nil {
 		return err
+	}
+
+	// OSV is advisory and time-varying, so it is queried live (TTL-cached)
+	// at report time for the human/JSON reports, not baked into the
+	// workspace. patch/files stay pristine and skip it.
+	if !noOSV && (format == "stats" || format == "json") {
+		client := &http.Client{}
+		r.st.Security = osv.Assess(context.Background(), client, r.cacheRoot,
+			r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.From, r.st.Package.To)
 	}
 
 	switch format {
@@ -216,7 +231,7 @@ func loadWorkspace(ws string) (*stats.Stats, error) {
 	if err := json.Unmarshal(b, &st); err != nil {
 		return nil, err
 	}
-	if st.Tool.Version != version || st.Tool.Schema != stats.SchemaVersion {
+	if st.Tool.Version != version.Version || st.Tool.Schema != stats.SchemaVersion {
 		return nil, fmt.Errorf("workspace built by %s schema %d, rebuilding", st.Tool.Version, st.Tool.Schema)
 	}
 	for _, member := range []string{"diff.patch", "surface.json", "old", "new"} {
@@ -318,7 +333,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	}
 
 	input := stats.Input{
-		ToolVersion:    version,
+		ToolVersion:    version.Version,
 		Pkg:            stats.PkgRef{Ecosystem: string(sp.Eco), Name: sp.Name, From: from, To: to},
 		Workspace:      ws,
 		OldTree:        filepath.Join(tmp, "old"),
