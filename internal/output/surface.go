@@ -84,14 +84,14 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 		w("")
 		w("UNMAPPED (could not resolve to changed paths; NOT a no-change result):")
 		for _, r := range unmapped {
-			w("  %s  %s", taint(r.Unit), r.Detail)
+			w("  %s  %s", taint(r.Unit), taint(r.Detail))
 		}
 	}
 	if len(oos) > 0 {
 		w("")
 		w("OUT OF SCOPE (mechanism unsupported):")
 		for _, r := range oos {
-			w("  %s  %s", taint(r.Unit), r.Detail)
+			w("  %s  %s", taint(r.Unit), taint(r.Detail))
 		}
 	}
 

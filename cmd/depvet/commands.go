@@ -90,9 +90,19 @@ func surfaceCmd(args []string) error {
 		res.Detail = detail
 		res.Files = annotate(res.Files)
 		res.Descendants = annotate(res.Descendants)
-		if sourceOnly && len(res.Files) == 0 && res.Status == surface.StatusMatched {
-			res.Status = surface.StatusNoChangedFiles
-			res.Detail = "only non-source files (test/docs/generated) changed here"
+		// --source-only can empty a positive result; recompute its status
+		// from what survives, so neither matched nor subpackagesOnly is
+		// left claiming files it no longer has.
+		if sourceOnly && (res.Status == surface.StatusMatched || res.Status == surface.StatusSubpackagesOnly) {
+			switch {
+			case len(res.Files) > 0:
+				res.Status = surface.StatusMatched
+			case len(res.Descendants) > 0:
+				res.Status = surface.StatusSubpackagesOnly
+			default:
+				res.Status = surface.StatusNoChangedFiles
+				res.Detail = "only non-source files (test/docs/generated) changed here"
+			}
 		}
 		results = append(results, res)
 	}
@@ -131,7 +141,13 @@ func showCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if (file != "") == (dir != "") && symbol == "" || (file != "" && dir != "") {
+	set := 0
+	for _, s := range []string{file, dir, symbol} {
+		if s != "" {
+			set++
+		}
+	}
+	if set != 1 {
 		return fmt.Errorf("show needs exactly one of --file=, --dir=, --symbol=")
 	}
 

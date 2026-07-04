@@ -188,6 +188,15 @@ func (idx *Index) Match(unit string, prefixes []string, packageDirs bool) UnitRe
 	for _, f := range idx.Files {
 		for _, p := range prefixes {
 			own, desc := matchKind(f.Path, p, packageDirs)
+			// A rename can move a file OUT of this unit's package
+			// (old x/a.go -> new y/a.go): the new path misses, but the
+			// file WAS in the unit, a removal from its surface. Test the
+			// old path too, else a rename-away reports the false
+			// "noChangedFiles" all-clear. FileSurface carries OldPath, so
+			// the renderer shows the move.
+			if !own && !desc && f.OldPath != "" {
+				own, desc = matchKind(f.OldPath, p, packageDirs)
+			}
 			if own {
 				r.Files = append(r.Files, f)
 				break

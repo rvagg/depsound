@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestParseEmpty(t *testing.T) {
@@ -61,6 +62,23 @@ func TestAssessBuckets(t *testing.T) {
 	}
 	if len(a.Introduced) != 1 || a.Introduced[0].ID != "GHSA-c" {
 		t.Errorf("introduced = %+v", a.Introduced)
+	}
+}
+
+// A cache hit must present the ORIGINAL fetch time, not time.Now(): the
+// assessment is stamped with the older of the two queries.
+func TestCacheStampIsFetchTime(t *testing.T) {
+	root := t.TempDir()
+	old := time.Now().Add(-3 * time.Hour).UTC().Truncate(time.Second)
+	writeCache(root, "npm", "pkg", "1.0.0", nil, old)
+	writeCache(root, "npm", "pkg", "2.0.0", nil, old)
+
+	a := Assess(context.Background(), http.DefaultClient, root, "npm", "pkg", "1.0.0", "2.0.0")
+	if !a.Queried {
+		t.Fatal("cache miss")
+	}
+	if a.FetchedAt != old.Format(time.RFC3339) {
+		t.Errorf("fetchedAt = %s, want cached %s (not now)", a.FetchedAt, old.Format(time.RFC3339))
 	}
 }
 

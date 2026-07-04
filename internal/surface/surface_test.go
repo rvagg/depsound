@@ -121,6 +121,30 @@ func TestMatchStatuses(t *testing.T) {
 	}
 }
 
+// A file renamed OUT of a unit's package must not report noChangedFiles:
+// the file left the unit, a change to its surface, caught via OldPath.
+func TestMatchRenameAway(t *testing.T) {
+	idx := &Index{Files: []FileSurface{
+		{Path: "y/moved.go", OldPath: "x/moved.go", Hunks: []Hunk{{}}},
+	}}
+	// unit x: the file used to live here, now gone; must be MATCHED, not
+	// the false all-clear
+	r := idx.Match("x", []string{"x"}, true)
+	if r.Status != StatusMatched || len(r.Files) != 1 {
+		t.Errorf("rename-away from x = %+v (want matched)", r)
+	}
+	// unit y: the file arrived here
+	r = idx.Match("y", []string{"y"}, true)
+	if r.Status != StatusMatched || len(r.Files) != 1 {
+		t.Errorf("rename-into y = %+v (want matched)", r)
+	}
+	// unit z: uninvolved
+	r = idx.Match("z", []string{"z"}, true)
+	if r.Status != StatusNoChangedFiles {
+		t.Errorf("uninvolved z = %+v", r)
+	}
+}
+
 func TestSymbolHunksAndExtract(t *testing.T) {
 	p := writePatch(t)
 	idx, err := Parse(p, "old", "new")

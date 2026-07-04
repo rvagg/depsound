@@ -25,6 +25,12 @@ var (
 // supplies the sha256 checksum, verified before the artifact enters the
 // cache. Cache hits are rehashed against the sidecar like every artifact.
 func Crate(ctx context.Context, client *http.Client, name, version_, dest string) error {
+	// crate names are a strict charset; validating up front closes URL
+	// injection before name interpolation (detect will feed
+	// manifest-derived names here).
+	if !validCrateName(name) {
+		return fmt.Errorf("crates:%s: invalid crate name (allowed: letters, digits, - _)", name)
+	}
 	if _, err := os.Stat(dest); err == nil {
 		if m := ReadMeta(dest); m != nil && verifyCrate(dest, m.Digest) {
 			return nil
@@ -101,6 +107,18 @@ func indexPath(name string) string {
 	}
 }
 
+func validCrateName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 func verifyCrate(path, digest string) bool {
 	hexsum, ok := strings.CutPrefix(digest, "sha256-")
 	if !ok {
@@ -119,6 +137,8 @@ func verifyCrate(path, digest string) bool {
 }
 
 func getBytes(ctx context.Context, client *http.Client, u string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err

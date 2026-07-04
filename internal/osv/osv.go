@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rvagg/depvet/internal/cache"
 	"github.com/rvagg/depvet/internal/version"
 )
 
@@ -76,13 +77,20 @@ func Assess(ctx context.Context, client *http.Client, cacheRoot, eco, name, from
 	if !ok {
 		return Assessment{Note: "OSV has no ecosystem mapping for " + eco}
 	}
-	fromV, err1 := query(ctx, client, cacheRoot, osvEco, name, osvVersion(osvEco, from))
-	toV, err2 := query(ctx, client, cacheRoot, osvEco, name, osvVersion(osvEco, to))
+	fromV, fromT, err1 := query(ctx, client, cacheRoot, osvEco, name, osvVersion(osvEco, from))
+	toV, toT, err2 := query(ctx, client, cacheRoot, osvEco, name, osvVersion(osvEco, to))
 	if err1 != nil || err2 != nil {
 		return Assessment{Note: "OSV lookup failed (network or API); no vulnerability data"}
 	}
 
-	a := Assessment{Queried: true, Ecosystem: osvEco, FetchedAt: time.Now().UTC().Format(time.RFC3339)}
+	// Stamp with the OLDER of the two fetches: cache hits carry their
+	// original fetch time, so a 6h-old cached query must not present as
+	// just-fetched.
+	fetchedAt := fromT
+	if toT.Before(fetchedAt) {
+		fetchedAt = toT
+	}
+	a := Assessment{Queried: true, Ecosystem: osvEco, FetchedAt: fetchedAt.UTC().Format(time.RFC3339)}
 	fromSet := index(fromV)
 	toSet := index(toV)
 	for key, v := range fromSet {
@@ -130,9 +138,9 @@ func sortVulns(vs []Vuln) {
 	sort.Slice(vs, func(i, j int) bool { return vs[i].ID < vs[j].ID })
 }
 
-func query(ctx context.Context, client *http.Client, cacheRoot, osvEco, name, version string) ([]Vuln, error) {
-	if v, ok := readCache(cacheRoot, osvEco, name, version); ok {
-		return v, nil
+func query(ctx context.Context, client *http.Client, cacheRoot, osvEco, name, version string) ([]Vuln, time.Time, error) {
+	if v, ts, ok := readCache(cacheRoot, osvEco, name, version); ok {
+		return v, ts, nil
 	}
 	body, _ := json.Marshal(map[string]any{
 		"version": version,
@@ -142,25 +150,26 @@ func query(ctx context.Context, client *http.Client, cacheRoot, osvEco, name, ve
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OSV query: %s", resp.Status)
+		return nil, time.Time{}, fmt.Errorf("OSV query: %s", resp.Status)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	vulns := parse(raw)
-	writeCache(cacheRoot, osvEco, name, version, vulns)
-	return vulns, nil
+	now := time.Now().UTC()
+	writeCache(cacheRoot, osvEco, name, version, vulns, now)
+	return vulns, now, nil
 }
 
 // parse handles OSV's response shape, including the empty-result form
@@ -213,30 +222,33 @@ type cacheEnvelope struct {
 	Vulns     []Vuln    `json:"vulns"`
 }
 
+// cachePath reuses cache.Component (sanitized + hash-suffixed) per the
+// key-to-path invariant, so scoped/underscore/case-variant names cannot
+// alias to one another's advisory data.
 func cachePath(cacheRoot, osvEco, name, version string) string {
-	safe := func(s string) string { return strings.NewReplacer("/", "_", "@", "_", ":", "_").Replace(s) }
-	return filepath.Join(cacheRoot, "osv", safe(osvEco), safe(name), safe(version)+".json")
+	return filepath.Join(cacheRoot, "osv",
+		cache.Component(osvEco), cache.Component(name), cache.Component(version)+".json")
 }
 
-func readCache(cacheRoot, osvEco, name, version string) ([]Vuln, bool) {
+func readCache(cacheRoot, osvEco, name, version string) ([]Vuln, time.Time, bool) {
 	if cacheRoot == "" {
-		return nil, false
+		return nil, time.Time{}, false
 	}
 	b, err := os.ReadFile(cachePath(cacheRoot, osvEco, name, version))
 	if err != nil {
-		return nil, false
+		return nil, time.Time{}, false
 	}
 	var env cacheEnvelope
 	if json.Unmarshal(b, &env) != nil {
-		return nil, false
+		return nil, time.Time{}, false
 	}
 	if time.Since(env.FetchedAt) > cacheTTL {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	return env.Vulns, true
+	return env.Vulns, env.FetchedAt, true
 }
 
-func writeCache(cacheRoot, osvEco, name, version string, vulns []Vuln) {
+func writeCache(cacheRoot, osvEco, name, version string, vulns []Vuln, fetchedAt time.Time) {
 	if cacheRoot == "" {
 		return
 	}
@@ -244,7 +256,7 @@ func writeCache(cacheRoot, osvEco, name, version string, vulns []Vuln) {
 	if os.MkdirAll(filepath.Dir(p), 0o755) != nil {
 		return
 	}
-	b, err := json.Marshal(cacheEnvelope{FetchedAt: time.Now().UTC(), Vulns: vulns})
+	b, err := json.Marshal(cacheEnvelope{FetchedAt: fetchedAt, Vulns: vulns})
 	if err != nil {
 		return
 	}
