@@ -30,9 +30,25 @@ const (
 	Meta      Class = "meta"
 )
 
+// Basis records how strong a generated classification is: a marker or a
+// generated-file suffix is confident; a path rule (dist/, vendor/) is
+// weak, since such a file may be hand-edited (or a hidden payload). Only
+// strong bases justify excluding a file from the review-surface subtotal.
+type BasisKind string
+
+const (
+	BasisNone   BasisKind = ""
+	BasisMarker BasisKind = "marker"
+	BasisSuffix BasisKind = "suffix"
+	BasisPath   BasisKind = "path"
+)
+
+func (b BasisKind) Strong() bool { return b == BasisMarker || b == BasisSuffix }
+
 type Result struct {
 	Class    Class
 	Evidence string
+	Basis    BasisKind
 }
 
 // generatedMarkers are matched case-insensitively against the head of the
@@ -71,7 +87,7 @@ var metaBasenames = []string{
 // content (from whichever version has the file); binary comes from the diff.
 func File(relPath string, head []byte, binary bool) Result {
 	if binary {
-		return Result{Binary, "binary content"}
+		return Result{Class: Binary, Evidence: "binary content"}
 	}
 	lower := strings.ToLower(relPath)
 	base := lower[strings.LastIndex(lower, "/")+1:]
@@ -79,50 +95,50 @@ func File(relPath string, head []byte, binary bool) Result {
 	dirSegs := segs[:len(segs)-1]
 
 	if m := markerIn(head); m != "" {
-		return Result{Generated, fmt.Sprintf("marker in file head: %q", m)}
+		return Result{Class: Generated, Evidence: fmt.Sprintf("marker in file head: %q", m), Basis: BasisMarker}
 	}
 	for _, s := range generatedSuffixes {
 		if strings.HasSuffix(base, s) {
-			return Result{Generated, "path rule: *" + s}
+			return Result{Class: Generated, Evidence: "path rule: *" + s, Basis: BasisSuffix}
 		}
 	}
 	for _, seg := range dirSegs {
 		for _, g := range generatedPathParts {
 			if seg == g {
-				return Result{Generated, "path rule: " + g + "/"}
+				return Result{Class: Generated, Evidence: "path rule: " + g + "/", Basis: BasisPath}
 			}
 		}
 	}
 	for _, seg := range dirSegs {
 		for _, t := range testPathParts {
 			if seg == t {
-				return Result{Test, "path rule: " + t + "/"}
+				return Result{Class: Test, Evidence: "path rule: " + t + "/"}
 			}
 		}
 	}
 	if strings.HasSuffix(base, "_test.go") || strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") {
-		return Result{Test, "test filename"}
+		return Result{Class: Test, Evidence: "test filename"}
 	}
 	for _, s := range docsSuffixes {
 		if strings.HasSuffix(base, s) {
-			return Result{Docs, "doc filename"}
+			return Result{Class: Docs, Evidence: "doc filename"}
 		}
 	}
 	for _, d := range docsBasenames {
 		if base == d || strings.HasPrefix(base, d+".") {
-			return Result{Docs, "doc filename"}
+			return Result{Class: Docs, Evidence: "doc filename"}
 		}
 	}
 	if len(dirSegs) > 0 && dirSegs[0] == "docs" {
-		return Result{Docs, "path rule: docs/"}
+		return Result{Class: Docs, Evidence: "path rule: docs/"}
 	}
 	if slices.Contains(metaBasenames, base) {
-		return Result{Meta, "manifest/metadata filename"}
+		return Result{Class: Meta, Evidence: "manifest/metadata filename"}
 	}
 	if strings.HasPrefix(base, ".") || (len(segs) > 1 && strings.HasPrefix(segs[0], ".")) {
-		return Result{Meta, "dotfile"}
+		return Result{Class: Meta, Evidence: "dotfile"}
 	}
-	return Result{Source, ""}
+	return Result{Class: Source}
 }
 
 func markerIn(head []byte) string {

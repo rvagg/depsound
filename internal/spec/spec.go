@@ -11,8 +11,9 @@ import (
 type Ecosystem string
 
 const (
-	NPM Ecosystem = "npm"
-	Go  Ecosystem = "go"
+	NPM    Ecosystem = "npm"
+	Go     Ecosystem = "go"
+	Crates Ecosystem = "crates"
 )
 
 type Spec struct {
@@ -26,9 +27,9 @@ func Parse(s string) (Spec, error) {
 		return Spec{}, fmt.Errorf("spec %q: want <ecosystem>:<name>, e.g. npm:commander", s)
 	}
 	switch Ecosystem(eco) {
-	case NPM, Go:
+	case NPM, Go, Crates:
 	default:
-		return Spec{}, fmt.Errorf("spec %q: unsupported ecosystem %q (supported: npm, go)", s, eco)
+		return Spec{}, fmt.Errorf("spec %q: unsupported ecosystem %q (supported: npm, go, crates)", s, eco)
 	}
 	return Spec{Eco: Ecosystem(eco), Name: name}, nil
 }

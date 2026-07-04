@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/rvagg/depvet/internal/cache"
+	"github.com/rvagg/depvet/internal/cratepkg"
 	"github.com/rvagg/depvet/internal/extract"
 	"github.com/rvagg/depvet/internal/fetch"
 	"github.com/rvagg/depvet/internal/gitdiff"
@@ -33,7 +34,7 @@ usage:
   depvet surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
   depvet show    <ecosystem>:<name> <from> <to> --file=X | --dir=Y | --symbol=Z
 
-ecosystems: npm, go
+ecosystems: npm, go, crates
 
 surface intersects the diff with your consumer usage units and reports
 per-unit status. Units are ecosystem-native: Go import paths, npm
@@ -257,7 +258,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	// while making progress
 	client := &http.Client{}
 
-	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip"}[sp.Eco]
+	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate"}[sp.Eco]
 	arts := map[string]string{}
 	srcs := map[string]*stats.Source{}
 	for _, v := range []string{from, to} {
@@ -273,6 +274,8 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 			err = fetch.NPM(ctx, client, sp.Name, v, dest)
 		case spec.Go:
 			err = fetch.GoModule(ctx, client, sp.Name, v, dest)
+		case spec.Crates:
+			err = fetch.Crate(ctx, client, sp.Name, v, dest)
 		}
 		if err != nil {
 			return nil, err
@@ -306,6 +309,9 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 		case spec.Go:
 			// module zips declare their root: module@version/
 			rep, err = extract.Zip(arts[v], filepath.Join(tmp, sub), sp.Name+"@"+v, extract.DefaultLimits)
+		case spec.Crates:
+			// .crate is a gzip tarball rooted at name-version/
+			rep, err = extract.TarGz(arts[v], filepath.Join(tmp, sub), extract.DefaultLimits)
 		}
 		if err != nil {
 			return nil, err
@@ -357,6 +363,13 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 			return nil, fmt.Errorf("old tree: %w", err)
 		}
 		if input.NewMod, err = gopkg.Load(input.NewTree); err != nil {
+			return nil, fmt.Errorf("new tree: %w", err)
+		}
+	case spec.Crates:
+		if input.OldCrate, err = cratepkg.Load(input.OldTree); err != nil {
+			return nil, fmt.Errorf("old tree: %w", err)
+		}
+		if input.NewCrate, err = cratepkg.Load(input.NewTree); err != nil {
 			return nil, fmt.Errorf("new tree: %w", err)
 		}
 	}

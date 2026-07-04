@@ -83,6 +83,7 @@ func NPM(ctx context.Context, client *http.Client, name, version, dest string) e
 const (
 	VerifySumDB       = "sumdb-lookup"
 	VerifyRegistry512 = "registry-sha512"
+	VerifyRegistry256 = "registry-sha256"
 	VerifyTLSOnly     = "tls-only"
 	VerifyTLSOnlySHA1 = "tls-only-sha1"
 )

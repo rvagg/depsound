@@ -3,6 +3,7 @@ package stats
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rvagg/depvet/internal/gitdiff"
@@ -95,7 +96,16 @@ func TestBuild(t *testing.T) {
 		st.Embedded[0].From != "1.0.0" || st.Embedded[0].To != "1.1.0" {
 		t.Errorf("embedded marker delta = %+v", st.Embedded)
 	}
-	if len(st.Notes) != 0 {
-		t.Errorf("unexpected notes with full provenance: %v", st.Notes)
+	// gen.pb.go (suffix) and vendor.h (marker vendored) are confidently
+	// generated, so excluded from review surface with a disclaimer note;
+	// package.json (meta) and lib/a.js (source) stay in.
+	if st.Files.ReviewFiles != 2 {
+		t.Errorf("review surface files = %d, want 2 (package.json + lib/a.js)", st.Files.ReviewFiles)
+	}
+	if len(st.Files.ExcludedGen) != 2 {
+		t.Errorf("excluded generated = %v", st.Files.ExcludedGen)
+	}
+	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0], "heuristic classified generated") {
+		t.Errorf("expected the review-surface heuristic disclaimer, got: %v", st.Notes)
 	}
 }

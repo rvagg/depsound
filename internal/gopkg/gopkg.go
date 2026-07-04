@@ -61,7 +61,10 @@ func ConstraintsDelta(a, b *Mod) []manifest.Change {
 }
 
 // RequireDelta reports direct requirement changes plus any replace
-// directives, which bypass the module proxy and are always flagged.
+// directives. A replace in a DEPENDENCY's go.mod is inert for consumers
+// (Go applies replace only in the main module), unlike npm/crates
+// redirects which do reach consumers; so it is surfaced as an author-
+// build signal, not framed as a redirect of the consumer's graph.
 func RequireDelta(a, b *Mod) []manifest.DepChange {
 	var out []manifest.DepChange
 	for _, c := range mapDelta(requires(a), requires(b)) {
@@ -72,7 +75,7 @@ func RequireDelta(a, b *Mod) []manifest.DepChange {
 	for _, c := range mapDelta(replaces(a), replaces(b)) {
 		dc := manifest.DepChange{
 			Section: "replace", Name: c.Key, Status: c.Status, From: c.From, To: c.To,
-			Flag: "replace directive bypasses the module proxy",
+			Flag: "replace directive (ignored when this module is a dependency; a signal about the author's build, not a redirect of your graph)",
 		}
 		out = append(out, dc)
 	}

@@ -3,12 +3,14 @@
 package stats
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/rvagg/depvet/internal/classify"
+	"github.com/rvagg/depvet/internal/cratepkg"
 	"github.com/rvagg/depvet/internal/gitdiff"
 	"github.com/rvagg/depvet/internal/gopkg"
 	"github.com/rvagg/depvet/internal/manifest"
@@ -80,6 +82,12 @@ type Runnable struct {
 	// cgo means C compilation at the consumer's build time (Go only)
 	CgoFrom bool `json:"cgoFrom,omitempty"`
 	CgoTo   bool `json:"cgoTo,omitempty"`
+	// build.rs and proc-macro both run code at the consumer's compile
+	// time (crates only)
+	BuildRSFrom   bool `json:"buildRsFrom,omitempty"`
+	BuildRSTo     bool `json:"buildRsTo,omitempty"`
+	ProcMacroFrom bool `json:"procMacroFrom,omitempty"`
+	ProcMacroTo   bool `json:"procMacroTo,omitempty"`
 }
 
 type Compat struct {
@@ -97,13 +105,23 @@ type Compat struct {
 type Security = osv.Assessment
 
 type FilesSection struct {
-	Changed      int         `json:"changed"`
-	Added        int         `json:"linesAdded"`
-	Removed      int         `json:"linesRemoved"`
-	ByClass      []ClassAgg  `json:"byClass"`
-	TrivialChurn int         `json:"trivialChurn"` // changed files with <=2 line delta
-	Flagged      []Flag      `json:"flagged"`
-	Entries      []FileEntry `json:"entries"`
+	Changed int `json:"changed"`
+	Added   int `json:"linesAdded"`
+	Removed int `json:"linesRemoved"`
+	// ReviewSurface* excludes confidently-generated (marker/suffix) and
+	// binary files: the hand-written surface a reviewer actually reads.
+	// It is a triage aid, NOT a trust boundary: the full totals above
+	// still count everything, and path-only "generated" files (weakly
+	// classified, possibly hand-edited or a hidden payload) are KEPT in
+	// the surface deliberately.
+	ReviewFiles   int         `json:"reviewSurfaceFiles"`
+	ReviewAdded   int         `json:"reviewSurfaceAdded"`
+	ReviewRemoved int         `json:"reviewSurfaceRemoved"`
+	ExcludedGen   []string    `json:"excludedGenerated,omitempty"`
+	ByClass       []ClassAgg  `json:"byClass"`
+	TrivialChurn  int         `json:"trivialChurn"` // changed files with <=2 line delta
+	Flagged       []Flag      `json:"flagged"`
+	Entries       []FileEntry `json:"entries"`
 }
 
 type ClassAgg struct {
@@ -159,6 +177,8 @@ type Input struct {
 	NewPkg         *npmpkg.Package
 	OldMod         *gopkg.Mod // go only
 	NewMod         *gopkg.Mod
+	OldCrate       *cratepkg.Crate // crates only
+	NewCrate       *cratepkg.Crate
 	SkippedLinks   []string
 	HostileEntries []string
 	SourceFrom     *Source
@@ -230,6 +250,22 @@ func Build(in Input) (*Stats, error) {
 		s.Runnable.CgoTo = gopkg.ScanCgo(in.NewTree)
 		s.Compat.Constraints = gopkg.ConstraintsDelta(in.OldMod, in.NewMod)
 		s.Dependencies = gopkg.RequireDelta(in.OldMod, in.NewMod)
+
+	case in.OldCrate != nil && in.NewCrate != nil:
+		for _, w := range in.OldCrate.Warnings {
+			s.Notes = append(s.Notes, "old Cargo.toml: "+w)
+		}
+		for _, w := range in.NewCrate.Warnings {
+			s.Notes = append(s.Notes, "new Cargo.toml: "+w)
+		}
+		s.Runnable.BuildRSFrom = in.OldCrate.HasBuildRS()
+		s.Runnable.BuildRSTo = in.NewCrate.HasBuildRS()
+		s.Runnable.ProcMacroFrom = in.OldCrate.ProcMacro
+		s.Runnable.ProcMacroTo = in.NewCrate.ProcMacro
+		s.Compat.Constraints = append(
+			cratepkg.ConstraintsDelta(in.OldCrate, in.NewCrate),
+			cratepkg.FeaturesDelta(in.OldCrate, in.NewCrate)...)
+		s.Dependencies = cratepkg.DepsDelta(in.OldCrate, in.NewCrate)
 	}
 
 	agg := map[string]*ClassAgg{}
@@ -245,7 +281,7 @@ func Build(in Input) (*Stats, error) {
 			present, deltas := embeddedScan(in.OldTree, in.NewTree, d.Path, d.Status)
 			s.Embedded = append(s.Embedded, deltas...)
 			if present && res.Class == classify.Source {
-				res = classify.Result{Class: classify.Generated, Evidence: "embeds an upstream identity marker (vendored)"}
+				res = classify.Result{Class: classify.Generated, Evidence: "embeds an upstream identity marker (vendored)", Basis: classify.BasisMarker}
 			}
 		}
 
@@ -261,6 +297,20 @@ func Build(in Input) (*Stats, error) {
 		s.Files.Removed += d.Removed
 		if d.Status == "M" && d.Added+d.Removed <= 2 && !d.Binary {
 			s.Files.TrivialChurn++
+		}
+
+		// Review surface: exclude only CONFIDENTLY-generated (marker or
+		// suffix) and binary files. Path-only "generated" files stay in,
+		// because a hand-edit or hidden payload under dist/ must not be
+		// silently dropped from the number a reviewer trusts.
+		if d.Binary || (res.Class == classify.Generated && res.Basis.Strong()) {
+			if res.Class == classify.Generated && res.Basis.Strong() {
+				s.Files.ExcludedGen = append(s.Files.ExcludedGen, d.Path)
+			}
+		} else {
+			s.Files.ReviewFiles++
+			s.Files.ReviewAdded += d.Added
+			s.Files.ReviewRemoved += d.Removed
 		}
 
 		a := agg[string(res.Class)]
@@ -290,6 +340,15 @@ func Build(in Input) (*Stats, error) {
 	sort.Slice(s.Files.ByClass, func(i, j int) bool {
 		return s.Files.ByClass[i].Files > s.Files.ByClass[j].Files
 	})
+
+	// Always disclose the heuristic when the review-surface number leans on
+	// it: a file only APPEARS generated to our classifier, and markers are
+	// attacker-writable. This note rides into agent context (JSON notes).
+	if n := len(s.Files.ExcludedGen); n > 0 {
+		s.Notes = append(s.Notes, fmt.Sprintf(
+			"review surface excludes %d file(s) our heuristic classified generated; this is a GUESS (markers are attacker-writable), inspect them if the change's intent is unclear: %s",
+			n, strings.Join(s.Files.ExcludedGen, ", ")))
+	}
 	return s, nil
 }
 

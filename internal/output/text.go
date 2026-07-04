@@ -23,6 +23,10 @@ func Text(s *stats.Stats) string {
 		s.Files.Changed, s.Files.Added, s.Files.Removed,
 		s.Artifact.FilesFrom, s.Artifact.FilesTo,
 		bytes(s.Artifact.BytesFrom), bytes(s.Artifact.BytesTo))
+	if s.Files.ReviewFiles < s.Files.Changed {
+		w("  review surface (excl. generated/binary, HEURISTIC): %d files +%d/-%d",
+			s.Files.ReviewFiles, s.Files.ReviewAdded, s.Files.ReviewRemoved)
+	}
 	for _, c := range s.Files.ByClass {
 		w("  %-10s %3d files  +%d/-%d", c.Class, c.Files, c.Added, c.Removed)
 	}
@@ -50,7 +54,8 @@ func Text(s *stats.Stats) string {
 
 	w("")
 	r := s.Runnable
-	if len(r.Lifecycle) == 0 && !r.GypFrom && !r.GypTo && len(r.Bin) == 0 && !r.CgoFrom && !r.CgoTo {
+	if len(r.Lifecycle) == 0 && !r.GypFrom && !r.GypTo && len(r.Bin) == 0 && !r.CgoFrom && !r.CgoTo &&
+		!r.BuildRSFrom && !r.BuildRSTo && !r.ProcMacroFrom && !r.ProcMacroTo {
 		w("runnable: no lifecycle scripts, no build-time execution surface, no bin changes")
 	} else {
 		w("runnable:")
@@ -64,6 +69,20 @@ func Text(s *stats.Stats) string {
 			line := fmt.Sprintf("  cgo (C compiled at consumer build time): %v -> %v", r.CgoFrom, r.CgoTo)
 			if !r.CgoFrom && r.CgoTo {
 				line = "  WARNING" + line[1:] + "  [cgo INTRODUCED by this update]"
+			}
+			w("%s", line)
+		}
+		if r.BuildRSFrom || r.BuildRSTo {
+			line := fmt.Sprintf("  build.rs (runs at consumer compile time): %v -> %v", r.BuildRSFrom, r.BuildRSTo)
+			if !r.BuildRSFrom && r.BuildRSTo {
+				line = "  WARNING" + line[1:] + "  [build.rs INTRODUCED by this update]"
+			}
+			w("%s", line)
+		}
+		if r.ProcMacroFrom || r.ProcMacroTo {
+			line := fmt.Sprintf("  proc-macro (runs in the compiler): %v -> %v", r.ProcMacroFrom, r.ProcMacroTo)
+			if !r.ProcMacroFrom && r.ProcMacroTo {
+				line = "  WARNING" + line[1:] + "  [proc-macro INTRODUCED by this update]"
 			}
 			w("%s", line)
 		}
