@@ -31,6 +31,7 @@ const usage = `depvet: vet a dependency update by diffing its published artifact
 
 usage:
   depvet <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files] [--no-osv]
+  depvet <ecosystem>:<name> [version]   [--format=stats|json] [--no-osv] [--cooldown=5d]   # census (version defaults to latest)
   depvet bulk    [--file=list] [--format=stats|json] [--no-osv]   # list on stdin
   depvet surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
   depvet show    <ecosystem>:<name> <from> <to> --file=X | --dir=Y | --symbol=Z
@@ -85,9 +86,33 @@ func run(args []string) error {
 			return showCmd(args[1:])
 		case "bulk":
 			return bulkCmd(args[1:])
+		case "census":
+			return censusCmd(args[1:])
 		}
 	}
+	// spec alone or spec+version (1-2 positionals) is a census; spec+from+to
+	// (3) is a diff. The tool is a "vet", so a lone spec/version means "what
+	// am I signing up for", version defaulting to latest.
+	if n := positionalCount(args); n == 1 || n == 2 {
+		return censusCmd(args)
+	}
 	return diffCmd(args)
+}
+
+// positionalCount counts non-flag arguments.
+func positionalCount(args []string) int {
+	n := 0
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			n++
+		}
+	}
+	return n
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // resolved holds a materialized workspace and its parsed spec.

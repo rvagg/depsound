@@ -56,3 +56,27 @@ func TestParseBulkJSON(t *testing.T) {
 		t.Error("incomplete JSON entry should error")
 	}
 }
+
+func TestPositionalCount(t *testing.T) {
+	if positionalCount([]string{"npm:x", "1", "2", "--no-osv"}) != 3 {
+		t.Error("diff form should have 3 positionals")
+	}
+	if positionalCount([]string{"npm:x", "1", "--format=json"}) != 2 {
+		t.Error("census form should have 2 positionals")
+	}
+}
+
+func TestParseCooldown(t *testing.T) {
+	for in, wantHours := range map[string]float64{"5": 120, "5d": 120, "12h": 12, "": 0} {
+		d, err := parseCooldown(in)
+		if err != nil {
+			t.Errorf("parseCooldown(%q): %v", in, err)
+		}
+		if d.Hours() != wantHours {
+			t.Errorf("parseCooldown(%q) = %v, want %v hours", in, d, wantHours)
+		}
+	}
+	if _, err := parseCooldown("nonsense"); err == nil {
+		t.Error("nonsense cooldown should error")
+	}
+}

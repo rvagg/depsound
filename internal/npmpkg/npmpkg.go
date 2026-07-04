@@ -127,6 +127,42 @@ func LifecycleDelta(a, b *Package) []Change {
 	return out
 }
 
+// LifecyclePresent lists the lifecycle scripts a package ships (the
+// absolute/census form): what would run on install, not a delta.
+func LifecyclePresent(p *Package) []Change {
+	var out []Change
+	for _, k := range lifecycleScripts {
+		if v := p.Scripts[k]; v != "" {
+			out = append(out, Change{Key: k, Status: "present", To: v})
+		}
+	}
+	return out
+}
+
+// DepsPresent lists all declared dependencies (absolute/census form).
+func DepsPresent(p *Package) []DepChange {
+	var out []DepChange
+	sections := []struct {
+		name string
+		m    map[string]string
+	}{{"dependencies", p.Deps}, {"peerDependencies", p.Peer}, {"optionalDependencies", p.Optional}}
+	for _, s := range sections {
+		names := make([]string, 0, len(s.m))
+		for n := range s.m {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			dc := DepChange{Section: s.name, Name: n, Status: "present", To: s.m[n]}
+			if f := specFlag(s.m[n]); f != "" {
+				dc.Flag = f
+			}
+			out = append(out, dc)
+		}
+	}
+	return out
+}
+
 func BinDelta(a, b *Package) []Change {
 	return mapDelta(binMap(a), binMap(b))
 }

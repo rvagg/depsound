@@ -111,6 +111,32 @@ func Assess(ctx context.Context, client *http.Client, cacheRoot, eco, name, from
 	return a
 }
 
+// Present looks up the vulnerabilities affecting a SINGLE version (the
+// absolute/census framing, vs Assess's delta). Degrades to nil on
+// failure or unmapped ecosystem; a security lookup must not block a
+// review. queried reports whether the lookup actually ran.
+func Present(ctx context.Context, client *http.Client, cacheRoot, eco, name, version string) (vulns []Vuln, fetchedAt string, queried bool) {
+	osvEco, ok := Ecosystem(eco)
+	if !ok {
+		return nil, "", false
+	}
+	v, ts, err := query(ctx, client, cacheRoot, osvEco, name, osvVersion(osvEco, version))
+	if err != nil {
+		return nil, "", false
+	}
+	// dedupe by alias so GHSA+CVE+RUSTSEC of one advisory count once
+	seen := map[string]bool{}
+	for _, vu := range v {
+		key := canonical(vu)
+		if !seen[key] {
+			seen[key] = true
+			vulns = append(vulns, vu)
+		}
+	}
+	sortVulns(vulns)
+	return vulns, ts.UTC().Format(time.RFC3339), true
+}
+
 // index keys vulns by a canonical id that collapses aliases (an advisory
 // returned as both GHSA-x and CVE-y, or GHSA and RUSTSEC, is one vuln).
 func index(vulns []Vuln) map[string]Vuln {

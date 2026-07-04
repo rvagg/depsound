@@ -165,3 +165,27 @@ func TestLoadForgiving(t *testing.T) {
 		t.Errorf("array engines should degrade to empty: %v", p.Engines)
 	}
 }
+
+func TestPresentHelpers(t *testing.T) {
+	p := &Package{
+		Scripts: map[string]string{"postinstall": "node s.js", "test": "mocha"},
+		Deps:    map[string]string{"a": "^1.0.0", "b": "github:evil/b"},
+	}
+	life := LifecyclePresent(p)
+	if len(life) != 1 || life[0].Key != "postinstall" || life[0].Status != "present" {
+		t.Errorf("LifecyclePresent = %+v", life)
+	}
+	deps := DepsPresent(p)
+	var flagged int
+	for _, d := range deps {
+		if d.Status != "present" {
+			t.Errorf("dep not 'present': %+v", d)
+		}
+		if d.Flag != "" {
+			flagged++
+		}
+	}
+	if len(deps) != 2 || flagged != 1 {
+		t.Errorf("DepsPresent = %+v", deps)
+	}
+}

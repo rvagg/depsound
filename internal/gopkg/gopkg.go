@@ -82,6 +82,21 @@ func RequireDelta(a, b *Mod) []manifest.DepChange {
 	return out
 }
 
+// RequirePresent lists direct requirements (absolute/census form).
+func RequirePresent(m *Mod) []manifest.DepChange {
+	reqs := requires(m)
+	names := make([]string, 0, len(reqs))
+	for n := range reqs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []manifest.DepChange
+	for _, n := range names {
+		out = append(out, manifest.DepChange{Section: "require", Name: n, Status: "present", To: reqs[n]})
+	}
+	return out
+}
+
 func goVersion(m *Mod) string {
 	if m.File.Go != nil {
 		return m.File.Go.Version

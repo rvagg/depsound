@@ -198,6 +198,31 @@ func flagFor(section, spec string) string {
 	return ""
 }
 
+// DepsPresent lists declared dependencies across sections (absolute/
+// census form), with path/git/alias redirects flagged.
+func DepsPresent(c *Crate) []manifest.DepChange {
+	var out []manifest.DepChange
+	sections := []struct {
+		name string
+		m    map[string]string
+	}{{"dependencies", c.Deps}, {"dev-dependencies", c.DevDeps}, {"build-dependencies", c.BuildDeps}}
+	for _, s := range sections {
+		names := make([]string, 0, len(s.m))
+		for n := range s.m {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			dc := manifest.DepChange{Section: s.name, Name: n, Status: "present", To: s.m[n]}
+			if f := flagFor(s.name, s.m[n]); f != "" {
+				dc.Flag = f
+			}
+			out = append(out, dc)
+		}
+	}
+	return out
+}
+
 func specFlag(spec string) string {
 	switch {
 	case strings.Contains(spec, "path"):

@@ -66,3 +66,9 @@ func (c *Cache) ArtifactPath(eco, name, version, ext string) string {
 func (c *Cache) WorkspacePath(eco, name, from, to string) string {
 	return filepath.Join(c.Root, "workspaces", eco, Component(name), Component(from)+"--"+Component(to))
 }
+
+// CensusPath is the persisted single-version tree, so an agent can grep
+// the package it is vetting the way it greps a diff workspace.
+func (c *Cache) CensusPath(eco, name, version string) string {
+	return filepath.Join(c.Root, "census", eco, Component(name), Component(version))
+}
