@@ -31,6 +31,7 @@ const usage = `depvet: vet a dependency update by diffing its published artifact
 
 usage:
   depvet <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files] [--no-osv]
+  depvet bulk    [--file=list] [--format=stats|json] [--no-osv]   # list on stdin
   depvet surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
   depvet show    <ecosystem>:<name> <from> <to> --file=X | --dir=Y | --symbol=Z
 
@@ -46,6 +47,11 @@ or show --dir=, or pass --subtree to count the whole area as one match.
   --source-only    drop test/docs/generated matches
   --subtree        subtree (whole-area) matching, not per-package
   --format=json    machine output
+
+bulk runs the analysis over a LIST of dependency changes (one
+"<eco>:<name> <from> <to>" per line, or a JSON array) from stdin or
+--file=, and reports an aggregate rollup + per-dependency table. The list
+is yours to supply (from a PR diff, go.mod diff, etc.).
 
 show extracts targeted slices of the diff as a valid patch on stdout.
 
@@ -77,6 +83,8 @@ func run(args []string) error {
 			return surfaceCmd(args[1:])
 		case "show":
 			return showCmd(args[1:])
+		case "bulk":
+			return bulkCmd(args[1:])
 		}
 	}
 	return diffCmd(args)
@@ -120,37 +128,44 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 		return nil, nil, fmt.Errorf("want <ecosystem>:<name> <from> <to>\n%s", usage)
 	}
 
-	sp, err := spec.Parse(pos[0])
+	r, err := analyze(cacheDir, pos[0], pos[1], pos[2])
 	if err != nil {
 		return nil, nil, err
 	}
-	from, err := spec.NormalizeVersion(sp.Eco, pos[1])
-	if err != nil {
-		return nil, nil, err
-	}
-	to, err := spec.NormalizeVersion(sp.Eco, pos[2])
-	if err != nil {
-		return nil, nil, err
-	}
+	return r, pos[3:], nil
+}
 
+// analyze resolves one (spec, from, to) to a materialized workspace: the
+// reusable core shared by the single-pair commands and bulk mode.
+func analyze(cacheDir, specStr, fromArg, toArg string) (*resolved, error) {
+	sp, err := spec.Parse(specStr)
+	if err != nil {
+		return nil, err
+	}
+	from, err := spec.NormalizeVersion(sp.Eco, fromArg)
+	if err != nil {
+		return nil, err
+	}
+	to, err := spec.NormalizeVersion(sp.Eco, toArg)
+	if err != nil {
+		return nil, err
+	}
 	c, err := cache.Open(cacheDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	ws := c.WorkspacePath(string(sp.Eco), sp.Name, from, to)
 	st, err := loadWorkspace(ws)
 	if err != nil {
 		if st, err = materialize(c, sp, from, to, ws); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-	} else {
-		fmt.Fprintf(os.Stderr, "depvet: workspace cache hit\n")
 	}
 	idx, err := loadIndex(ws)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return &resolved{ws: ws, cacheRoot: c.Root, sp: sp, st: st, idx: idx}, pos[3:], nil
+	return &resolved{ws: ws, cacheRoot: c.Root, sp: sp, st: st, idx: idx}, nil
 }
 
 func diffCmd(args []string) error {
