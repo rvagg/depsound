@@ -14,6 +14,7 @@ package classify
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -61,7 +62,7 @@ var docsSuffixes = []string{".md", ".markdown", ".rst", ".adoc"}
 var docsBasenames = []string{"license", "licence", "notice", "authors", "changelog", "readme", "copying"}
 
 var metaBasenames = []string{
-	"package.json", "package-lock.json", "go.mod", "go.sum",
+	"package.json", "package-lock.json", "go.mod", "go.sum", "version.json",
 	"cargo.toml", "cargo.toml.orig", "cargo.lock", ".cargo_vcs_info.json",
 	"tsconfig.json", "makefile",
 }
@@ -135,6 +136,35 @@ func markerIn(head []byte) string {
 		return generatedMarkers[i]
 	}
 	return ""
+}
+
+// embeddedMarkers recognize identity strings a file embeds about the
+// UPSTREAM code it vendors (not the package's own version). A changed
+// value is surfaced as a lead: "this blob embeds X, X moved A->B" points
+// the agent at the real upstream change, which the vendoring package's
+// changelog routinely under-describes.
+//
+// A small best-effort allowlist, not a general version detector. Adding a
+// pattern is welcome: anchor and quote-delimit it so it cannot match
+// ordinary code, and never match a package's OWN version (a top-level
+// const Version, package.json "version"), which is tautological. Group 1
+// is the marker name, group 2 its value.
+var embeddedMarkers = []*regexp.Regexp{
+	// C identity macros (#define <NAME>_VERSION / _SOURCE_ID "..."),
+	// common in vendored C amalgamations shipped to avoid a system dep.
+	regexp.MustCompile(`(?m)^#\s*define\s+(\w*(?:VERSION|SOURCE_ID))\s+"([^"]*)"`),
+}
+
+// EmbeddedMarkers extracts recognized upstream-identity markers from a
+// vendored blob, keyed by marker name.
+func EmbeddedMarkers(content []byte) map[string]string {
+	out := map[string]string{}
+	for _, re := range embeddedMarkers {
+		for _, m := range re.FindAllSubmatch(content, -1) {
+			out[string(m[1])] = string(m[2])
+		}
+	}
+	return out
 }
 
 // JSMetrics are minification measurements, reported rather than judged.

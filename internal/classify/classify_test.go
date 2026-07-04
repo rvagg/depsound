@@ -43,6 +43,32 @@ func TestFile(t *testing.T) {
 	}
 }
 
+func TestEmbeddedMarkers(t *testing.T) {
+	// a vendored C amalgamation self-declaring upstream identity; the
+	// same convention any cgo package vendoring a C lib may use
+	src := []byte(`#ifndef X
+#define LIBFOO_VERSION        "3.53.2"
+#define LIBFOO_VERSION_NUMBER 3053002
+#  define LIBFOO_SOURCE_ID    "2026-06-03 d6e03d8c"
+#define UNRELATED "nope"
+const Version = "1.0.0"
+`)
+	got := EmbeddedMarkers(src)
+	if got["LIBFOO_VERSION"] != "3.53.2" {
+		t.Errorf("LIBFOO_VERSION = %q", got["LIBFOO_VERSION"])
+	}
+	if got["LIBFOO_SOURCE_ID"] != "2026-06-03 d6e03d8c" {
+		t.Errorf("LIBFOO_SOURCE_ID = %q", got["LIBFOO_SOURCE_ID"])
+	}
+	if _, ok := got["UNRELATED"]; ok {
+		t.Error("matched a non-version define")
+	}
+	// must NOT match a package's own version convention (tautological)
+	if _, ok := got["Version"]; ok {
+		t.Error("matched a package-own version const")
+	}
+}
+
 func TestMetrics(t *testing.T) {
 	minified := append(bytes.Repeat([]byte("x"), 4000), []byte("\n//# sourceMappingURL=x.map\n")...)
 	m := Metrics(minified)

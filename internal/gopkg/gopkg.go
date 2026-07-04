@@ -21,6 +21,16 @@ type Mod struct {
 	Warnings []string
 }
 
+// Path returns the module path declared in go.mod, or "" if absent. It is
+// the exact prefix to strip from an import path to get a tree-relative
+// package directory.
+func (m *Mod) Path() string {
+	if m.File.Module != nil {
+		return m.File.Module.Mod.Path
+	}
+	return ""
+}
+
 // Load parses dir/go.mod. Like the npm loader, it is forgiving: a
 // missing or unparseable go.mod degrades to empty with a warning, since
 // pre-modules artifacts exist and must still be analysable.

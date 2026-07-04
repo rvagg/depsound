@@ -90,6 +90,16 @@ replace github.com/c/d v2.0.0+incompatible => github.com/fork/d v2.0.1+incompati
 	}
 }
 
+func TestModulePath(t *testing.T) {
+	m := load(t, "module github.com/mattn/go-sqlite3\ngo 1.21\n")
+	if m.Path() != "github.com/mattn/go-sqlite3" {
+		t.Errorf("Path() = %q", m.Path())
+	}
+	if load(t, "").Path() != "" {
+		t.Error("missing go.mod should yield empty module path")
+	}
+}
+
 func TestLoadForgiving(t *testing.T) {
 	m := load(t, "") // no go.mod at all
 	if len(m.Warnings) != 1 {

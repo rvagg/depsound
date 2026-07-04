@@ -28,6 +28,7 @@ type Stats struct {
 	Compat       Compat               `json:"compat"`
 	Dependencies []manifest.DepChange `json:"dependencies"`
 	Files        FilesSection         `json:"files"`
+	Embedded     []EmbeddedMarker     `json:"embeddedMarkers,omitempty"`
 	Security     Security             `json:"security"`
 	Workspace    string               `json:"workspace"`
 	Notes        []string             `json:"notes,omitempty"`
@@ -127,6 +128,17 @@ type Flag struct {
 	Metrics classify.JSMetrics `json:"metrics"`
 }
 
+// EmbeddedMarker is a recognized upstream-identity string (see
+// classify.EmbeddedMarkers) whose value changed inside a vendored blob: a
+// lead pointing at the real upstream delta to review when the generated
+// churn is otherwise opaque.
+type EmbeddedMarker struct {
+	File string `json:"file"`
+	Name string `json:"name"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
 // maxHeadBytes bounds the classification read; generated markers live in
 // the first lines of real generated files.
 const maxHeadBytes = 4096
@@ -223,6 +235,18 @@ func Build(in Input) (*Stats, error) {
 		head := readHead(in.NewTree, in.OldTree, d)
 		res := classify.File(d.Path, head, d.Binary)
 
+		// A C-family file that embeds a recognized upstream identity
+		// marker is vendored code (a marker deep in the file, past the
+		// head-classification window, e.g. sqlite3-binding.h). Reclassify
+		// source -> generated and collect the marker delta in one read.
+		if d.Status != "D" && !d.Binary && isCFamily(d.Path) {
+			present, deltas := embeddedScan(in.OldTree, in.NewTree, d.Path, d.Status)
+			s.Embedded = append(s.Embedded, deltas...)
+			if present && res.Class == classify.Source {
+				res = classify.Result{Class: classify.Generated, Evidence: "embeds an upstream identity marker (vendored)"}
+			}
+		}
+
 		e := FileEntry{
 			Path: d.Path, OldPath: d.OldPath, Status: d.Status,
 			Class: string(res.Class), Added: d.Added, Removed: d.Removed,
@@ -256,6 +280,7 @@ func Build(in Input) (*Stats, error) {
 				}
 			}
 		}
+
 	}
 	for _, a := range agg {
 		s.Files.ByClass = append(s.Files.ByClass, *a)
@@ -264,6 +289,44 @@ func Build(in Input) (*Stats, error) {
 		return s.Files.ByClass[i].Files > s.Files.ByClass[j].Files
 	})
 	return s, nil
+}
+
+// embeddedScan reads a changed file once and reports whether it embeds
+// recognized upstream-identity markers (for vendored-code reclassification)
+// and which markers changed value (the review lead).
+func embeddedScan(oldTree, newTree, path, status string) (present bool, deltas []EmbeddedMarker) {
+	newC, err := os.ReadFile(filepath.Join(newTree, path))
+	if err != nil {
+		return false, nil
+	}
+	newV := classify.EmbeddedMarkers(newC)
+	if len(newV) == 0 {
+		return false, nil
+	}
+	if status != "M" {
+		return true, nil
+	}
+	oldC, err := os.ReadFile(filepath.Join(oldTree, path))
+	if err != nil {
+		return true, nil
+	}
+	oldV := classify.EmbeddedMarkers(oldC)
+	for name, to := range newV {
+		if from := oldV[name]; from != to {
+			deltas = append(deltas, EmbeddedMarker{File: path, Name: name, From: from, To: to})
+		}
+	}
+	sort.Slice(deltas, func(i, j int) bool { return deltas[i].Name < deltas[j].Name })
+	return true, deltas
+}
+
+func isCFamily(p string) bool {
+	for _, ext := range []string{".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"} {
+		if strings.HasSuffix(p, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func readHead(newTree, oldTree string, d gitdiff.FileDiff) []byte {
