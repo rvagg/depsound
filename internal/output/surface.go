@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rvagg/depvet/internal/stats"
-	"github.com/rvagg/depvet/internal/surface"
+	"github.com/rvagg/depsound/internal/stats"
+	"github.com/rvagg/depsound/internal/surface"
 )
 
 // Surface renders the consumer-intersection report: matched units first
@@ -18,7 +18,7 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depvet surface %s:%s %s -> %s", s.Package.Ecosystem, taint(s.Package.Name), taint(s.Package.From), taint(s.Package.To))
+	w("depsound surface %s:%s %s -> %s", s.Package.Ecosystem, taint(s.Package.Name), taint(s.Package.From), taint(s.Package.To))
 	w("")
 
 	var matched, subpkg, clear, unmapped, oos []surface.UnitResult
@@ -125,7 +125,7 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	}
 	if outside > 0 {
 		w("- %d of %d changed files fall outside your units; a small match is", outside, len(idx.Files))
-		w("  not low impact. Review the full diff: depvet %s:%s %s %s",
+		w("  not low impact. Review the full diff: depsound %s:%s %s %s",
 			s.Package.Ecosystem, taint(s.Package.Name), s.Package.From, s.Package.To)
 	}
 	w("")

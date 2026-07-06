@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rvagg/depvet/internal/gopkg"
-	"github.com/rvagg/depvet/internal/output"
-	"github.com/rvagg/depvet/internal/spec"
-	"github.com/rvagg/depvet/internal/surface"
+	"github.com/rvagg/depsound/internal/gopkg"
+	"github.com/rvagg/depsound/internal/output"
+	"github.com/rvagg/depsound/internal/spec"
+	"github.com/rvagg/depsound/internal/surface"
 )
 
 // surfaceCmd intersects the diff with a consumer's usage units and reports
@@ -177,7 +177,7 @@ func showCmd(args []string) error {
 	if len(sel) == 0 {
 		return fmt.Errorf("no changed content matches that selector")
 	}
-	fmt.Fprintf(os.Stderr, "depvet: workspace %s\n", r.ws)
+	fmt.Fprintf(os.Stderr, "depsound: workspace %s\n", r.ws)
 	_, err = os.Stdout.Write(r.idx.Extract(raw, sel))
 	return err
 }

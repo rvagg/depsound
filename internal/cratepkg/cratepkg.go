@@ -8,7 +8,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/rvagg/depvet/internal/manifest"
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 // Crate is the parsed Cargo.toml. crates.io publishes a NORMALIZED

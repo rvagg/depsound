@@ -12,17 +12,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rvagg/depvet/internal/cache"
-	"github.com/rvagg/depvet/internal/classify"
-	"github.com/rvagg/depvet/internal/cratepkg"
-	"github.com/rvagg/depvet/internal/extract"
-	"github.com/rvagg/depvet/internal/fetch"
-	"github.com/rvagg/depvet/internal/gopkg"
-	"github.com/rvagg/depvet/internal/npmpkg"
-	"github.com/rvagg/depvet/internal/osv"
-	"github.com/rvagg/depvet/internal/output"
-	"github.com/rvagg/depvet/internal/spec"
-	"github.com/rvagg/depvet/internal/stats"
+	"github.com/rvagg/depsound/internal/cache"
+	"github.com/rvagg/depsound/internal/classify"
+	"github.com/rvagg/depsound/internal/cratepkg"
+	"github.com/rvagg/depsound/internal/extract"
+	"github.com/rvagg/depsound/internal/fetch"
+	"github.com/rvagg/depsound/internal/gopkg"
+	"github.com/rvagg/depsound/internal/npmpkg"
+	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/output"
+	"github.com/rvagg/depsound/internal/spec"
+	"github.com/rvagg/depsound/internal/stats"
 )
 
 // censusCmd vets a SINGLE version in absolute terms: "what am I signing up
@@ -127,7 +127,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate"}[sp.Eco]
 	art := c.ArtifactPath(string(sp.Eco), sp.Name, v, ext)
 	if _, err := os.Stat(art); err != nil {
-		fmt.Fprintf(os.Stderr, "depvet: %s %s: fetching\n", sp, v)
+		fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", sp, v)
 	}
 	switch sp.Eco {
 	case spec.NPM:

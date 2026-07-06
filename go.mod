@@ -1,4 +1,4 @@
-module github.com/rvagg/depvet
+module github.com/rvagg/depsound
 
 go 1.26
 

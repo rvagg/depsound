@@ -3,7 +3,7 @@ package output
 import (
 	"fmt"
 
-	"github.com/rvagg/depvet/internal/stats"
+	"github.com/rvagg/depsound/internal/stats"
 )
 
 // coverageChecked and coverageNotChecked are the honest inverse of the
@@ -27,7 +27,7 @@ var coverageNotChecked = []string{
 }
 
 // Guide computes the coverage boundary and directed next-steps for a
-// report. It is deliberately loud about limits: depvet is a heuristic
+// report. It is deliberately loud about limits: depsound is a heuristic
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
 func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	cov := &stats.Coverage{Checked: coverageChecked, NotChecked: coverageNotChecked}
@@ -40,7 +40,7 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	if len(r.Lifecycle) > 0 || (!r.GypFrom && r.GypTo) || (!r.CgoFrom && r.CgoTo) ||
 		(!r.BuildRSFrom && r.BuildRSTo) || (!r.ProcMacroFrom && r.ProcMacroTo) {
 		add("install/build code runs on the consumer's machine; read it",
-			"depvet show "+ref+" --file=<the script>")
+			"depsound show "+ref+" --file=<the script>")
 	}
 	// Only NEW or RESIDUAL risk earns a next-step; FixedByUpgrade needs no
 	// action (it is the argument FOR the upgrade) and is shown in the
@@ -59,6 +59,6 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	// spot, so the standing next-step is to intersect the diff with actual
 	// usage. This is the anti-closure nudge on an otherwise-quiet result.
 	add("reachability and semantics are NOT assessed; if you rely on this dependency, intersect the diff with your usage",
-		"depvet surface "+ref+" --uses=<your import paths>")
+		"depsound surface "+ref+" --uses=<your import paths>")
 	return cov, na
 }

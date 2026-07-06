@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rvagg/depvet/internal/version"
+	"github.com/rvagg/depsound/internal/version"
 )
 
 // npmRegistry is a var so tests can point it at a local server.

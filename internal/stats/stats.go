@@ -1,4 +1,4 @@
-// Package stats defines depvet's report schema (the contract consumed by
+// Package stats defines depsound's report schema (the contract consumed by
 // agents) and assembles it from the diff, the trees and the manifests.
 package stats
 
@@ -9,13 +9,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rvagg/depvet/internal/classify"
-	"github.com/rvagg/depvet/internal/cratepkg"
-	"github.com/rvagg/depvet/internal/gitdiff"
-	"github.com/rvagg/depvet/internal/gopkg"
-	"github.com/rvagg/depvet/internal/manifest"
-	"github.com/rvagg/depvet/internal/npmpkg"
-	"github.com/rvagg/depvet/internal/osv"
+	"github.com/rvagg/depsound/internal/classify"
+	"github.com/rvagg/depsound/internal/cratepkg"
+	"github.com/rvagg/depsound/internal/gitdiff"
+	"github.com/rvagg/depsound/internal/gopkg"
+	"github.com/rvagg/depsound/internal/manifest"
+	"github.com/rvagg/depsound/internal/npmpkg"
+	"github.com/rvagg/depsound/internal/osv"
 )
 
 // SchemaVersion 2: the npm-specific compat.engines field became the
@@ -203,7 +203,7 @@ type Input struct {
 
 func Build(in Input) (*Stats, error) {
 	s := &Stats{
-		Tool:      Tool{Name: "depvet", Version: in.ToolVersion, Schema: SchemaVersion},
+		Tool:      Tool{Name: "depsound", Version: in.ToolVersion, Schema: SchemaVersion},
 		Package:   in.Pkg,
 		Workspace: in.Workspace,
 		// Security is queried live at report time, not baked into the

@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rvagg/depvet/internal/version"
+	"github.com/rvagg/depsound/internal/version"
 )
 
 // Vars so tests can point them at local servers.

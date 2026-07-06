@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rvagg/depvet/internal/manifest"
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 type Package struct {
@@ -31,7 +31,7 @@ type Package struct {
 
 // Load is deliberately forgiving: unknown fields are ignored and
 // misshapen known fields degrade to empty with a warning. A package npm
-// would install must never be one depvet refuses to analyse; only
+// would install must never be one depsound refuses to analyse; only
 // package.json not being a JSON object at all is an error.
 func Load(dir string) (*Package, error) {
 	b, err := os.ReadFile(filepath.Join(dir, "package.json"))

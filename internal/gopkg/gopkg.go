@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/mod/modfile"
 
-	"github.com/rvagg/depvet/internal/manifest"
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 type Mod struct {

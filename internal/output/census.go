@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rvagg/depvet/internal/manifest"
-	"github.com/rvagg/depvet/internal/osv"
-	"github.com/rvagg/depvet/internal/stats"
+	"github.com/rvagg/depsound/internal/manifest"
+	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/stats"
 )
 
 // Census is the absolute footprint of a SINGLE version: what you would be
@@ -53,7 +53,7 @@ func CensusText(c *Census) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depvet census %s:%s %s  (footprint if you adopt it; not a diff)", c.Ecosystem, taint(c.Name), taint(c.Version))
+	w("depsound census %s:%s %s  (footprint if you adopt it; not a diff)", c.Ecosystem, taint(c.Name), taint(c.Version))
 	if c.Resolved != "" {
 		w("resolved: %s", taint(c.Resolved))
 	}
@@ -175,7 +175,7 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 	ref := fmt.Sprintf("%s:%s %s", c.Ecosystem, c.Name, c.Version)
 	if c.hasExec() {
 		na = append(na, stats.NextAction{Reason: "it runs code on install/build; read that code before adopting",
-			Command: "depvet show " + ref + " --file=<the script>  (once show supports census)"})
+			Command: "depsound show " + ref + " --file=<the script>  (once show supports census)"})
 	}
 	if len(c.Vulns) > 0 {
 		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known vulnerabilit(ies) in this version; consider a patched version or an alternative", len(c.Vulns))})

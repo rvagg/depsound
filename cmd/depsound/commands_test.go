@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/rvagg/depvet/internal/spec"
+	"github.com/rvagg/depsound/internal/spec"
 )
 
 // The false-negative bug: a root-package import must map to the whole

@@ -4,8 +4,8 @@ package version
 
 // Version is the tool version, bumped on release; it also gates workspace
 // reuse and stamps stats.json.
-const Version = "0.7.1"
+const Version = "0.8.0"
 
-// UserAgent is the sole User-Agent for all depvet HTTP requests, derived
+// UserAgent is the sole User-Agent for all depsound HTTP requests, derived
 // from Version so it can never disagree with it.
-const UserAgent = "depvet/" + Version + " (+https://github.com/rvagg/depvet)"
+const UserAgent = "depsound/" + Version + " (+https://github.com/rvagg/depsound)"

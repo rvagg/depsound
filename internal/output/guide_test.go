@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rvagg/depvet/internal/npmpkg"
-	"github.com/rvagg/depvet/internal/osv"
-	"github.com/rvagg/depvet/internal/stats"
+	"github.com/rvagg/depsound/internal/npmpkg"
+	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/stats"
 )
 
 func TestGuideCoverageAlwaysPresent(t *testing.T) {

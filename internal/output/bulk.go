@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rvagg/depvet/internal/stats"
+	"github.com/rvagg/depsound/internal/stats"
 )
 
 // BulkResult pairs a dependency-change reference with its analysis, or an
@@ -37,7 +37,7 @@ func Bulk(results []BulkResult) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depvet bulk: %d dependencies", len(results))
+	w("depsound bulk: %d dependencies", len(results))
 
 	var failed, execHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
 	digests := map[string]digest{}
@@ -122,8 +122,8 @@ func Bulk(results []BulkResult) string {
 	w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
 	w("  TRANSITIVE deps these bumps pull in; publish provenance. Silence != safe.")
 	w("next: for each dep you rely on, intersect the diff with your usage ->")
-	w("  depvet surface <eco>:<name> <from> <to> --uses=<your imports>")
-	w("detail on any dep: depvet <eco>:<name> <from> <to>  (leads, not a gate)")
+	w("  depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
+	w("detail on any dep: depsound <eco>:<name> <from> <to>  (leads, not a gate)")
 	return b.String()
 }
 

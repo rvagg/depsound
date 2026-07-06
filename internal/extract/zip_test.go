@@ -75,7 +75,7 @@ func TestZipHostileNames(t *testing.T) {
 }
 
 // The go toolchain rejects duplicate and case-colliding zip entries, so
-// depvet must not silently materialize a tree the ecosystem would never
+// depsound must not silently materialize a tree the ecosystem would never
 // install: first occurrence wins, collision recorded hostile.
 func TestZipDuplicateAndCaseCollision(t *testing.T) {
 	var buf bytes.Buffer

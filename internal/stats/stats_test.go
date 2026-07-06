@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rvagg/depvet/internal/gitdiff"
-	"github.com/rvagg/depvet/internal/npmpkg"
+	"github.com/rvagg/depsound/internal/gitdiff"
+	"github.com/rvagg/depsound/internal/npmpkg"
 )
 
 func TestBuild(t *testing.T) {

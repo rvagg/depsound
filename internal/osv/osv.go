@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rvagg/depvet/internal/cache"
-	"github.com/rvagg/depvet/internal/version"
+	"github.com/rvagg/depsound/internal/cache"
+	"github.com/rvagg/depsound/internal/version"
 )
 
 var apiURL = "https://api.osv.dev/v1/query"
@@ -46,7 +46,7 @@ type Assessment struct {
 	Note           string `json:"note,omitempty"`
 }
 
-// Ecosystem maps a depvet ecosystem id to OSV's. Returns false when OSV
+// Ecosystem maps a depsound ecosystem id to OSV's. Returns false when OSV
 // has no matching ecosystem.
 func Ecosystem(eco string) (string, bool) {
 	switch eco {
@@ -60,7 +60,7 @@ func Ecosystem(eco string) (string, bool) {
 	return "", false
 }
 
-// osvVersion adapts depvet's version string to what OSV expects: Go
+// osvVersion adapts depsound's version string to what OSV expects: Go
 // advisory ranges are semver without the leading v that Go modules carry.
 func osvVersion(osvEco, version string) string {
 	if osvEco == "Go" {

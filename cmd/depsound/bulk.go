@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/rvagg/depvet/internal/osv"
-	"github.com/rvagg/depvet/internal/output"
-	"github.com/rvagg/depvet/internal/spec"
+	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/output"
+	"github.com/rvagg/depsound/internal/spec"
 )
 
 // bulkConcurrency bounds parallel materialization; the cache is
@@ -21,7 +21,7 @@ const bulkConcurrency = 4
 
 // bulkCmd runs the per-pair pipeline over a LIST of dependency changes and
 // aggregates. The list is the agent's to supply (it already has it from
-// the PR/diff); depvet does the analysis, not the extraction.
+// the PR/diff); depsound does the analysis, not the extraction.
 func bulkCmd(args []string) error {
 	cacheDir, format, inputFile := "", "stats", ""
 	noOSV := false

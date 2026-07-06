@@ -1,4 +1,4 @@
-// Package cache lays out depvet's on-disk state. Artifacts are immutable
+// Package cache lays out depsound's on-disk state. Artifacts are immutable
 // compressed downloads keyed by (ecosystem, name, version); workspaces are
 // regenerable derivations keyed by the version pair and tool version.
 package cache
@@ -22,7 +22,7 @@ func Open(root string) (*Cache, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolving cache dir: %w", err)
 		}
-		root = filepath.Join(base, "depvet")
+		root = filepath.Join(base, "depsound")
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err

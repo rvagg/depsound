@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rvagg/depvet/internal/npmpkg"
-	"github.com/rvagg/depvet/internal/stats"
+	"github.com/rvagg/depsound/internal/npmpkg"
+	"github.com/rvagg/depsound/internal/stats"
 )
 
 // Attacker-influenced strings must reach the terminal with C0/C1 control
