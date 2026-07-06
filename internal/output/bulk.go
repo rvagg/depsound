@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -21,13 +22,11 @@ type digest struct {
 	exec     bool
 	execWhat []string
 	compat   bool
-	deps     int
 	osvFixed int
 	osvStill int
 	osvIntro int
-	files    int
-	added    int
-	removed  int
+	stillIDs string // pre-joined advisory IDs: a pointer to act on, not a count
+	introIDs string
 }
 
 // Bulk renders the aggregate: a rollup of which deps trip which signals
@@ -37,7 +36,9 @@ func Bulk(results []BulkResult) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depsound bulk: %d dependencies", len(results))
+	w("depsound bulk: %d dependencies analysed (cached).", len(results))
+	w("this is a ROUTER: a fired signal is a POINTER to inspect, not a summary.")
+	w("drill any dep with: depsound <eco>:<name> <from> <to>  (now instant, cached)")
 
 	var failed, execHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
 	digests := map[string]digest{}
@@ -75,11 +76,13 @@ func Bulk(results []BulkResult) string {
 	section(w, "WARNING new build/install execution surface", execHits, func(r BulkResult) string {
 		return strings.Join(digests[r.Ref].execWhat, ", ")
 	})
-	section(w, "WARNING vulnerabilities INTRODUCED by the upgrade", introHits, func(r BulkResult) string {
-		return fmt.Sprintf("%d introduced", digests[r.Ref].osvIntro)
+	section(w, "WARNING CVEs INTRODUCED by the upgrade", introHits, func(r BulkResult) string {
+		d := digests[r.Ref]
+		return fmt.Sprintf("%d introduced: %s", d.osvIntro, d.introIDs)
 	})
-	section(w, "vulnerabilities STILL PRESENT after the upgrade", stillHits, func(r BulkResult) string {
-		return fmt.Sprintf("%d still present", digests[r.Ref].osvStill)
+	section(w, "CVEs STILL PRESENT after the upgrade (bump did not fix them)", stillHits, func(r BulkResult) string {
+		d := digests[r.Ref]
+		return fmt.Sprintf("%d still present: %s", d.osvStill, d.stillIDs)
 	})
 	section(w, "compatibility changes", compatHits, func(r BulkResult) string {
 		return "constraints/exports changed"
@@ -103,37 +106,23 @@ func Bulk(results []BulkResult) string {
 		}
 	}
 
-	w("")
-	w("per-dependency:")
-	for _, r := range results {
-		if r.Stats == nil {
-			w("  %-40s  ERROR", taint(r.Ref))
-			continue
-		}
-		d := digests[r.Ref]
-		w("  %-40s  %d files +%d/-%d  %s", taint(r.Ref), d.files, d.added, d.removed, digestLine(d))
-	}
-
 	// coverage boundary once, at the aggregate (same for every dep); the
-	// anti-false-security spine, not a footer disclaimer
+	// anti-false-security spine, proportionate to a router (one block, not
+	// repeated per dep). CVE scan is named backward-looking, not "security"
 	w("")
 	w("=== COVERAGE: heuristic triage, NOT a verdict ===")
-	w("checked: artifact diff, file classes, manifest compat, execution surface, OSV.")
+	w("checked: artifact diff, file classes, manifest compat, execution surface,")
+	w("  KNOWN-CVE scan (OSV, backward-looking; blind to novel/injected code).")
 	w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
 	w("  TRANSITIVE deps these bumps pull in; publish provenance. Silence != safe.")
 	w("next: for each dep you rely on, intersect the diff with your usage ->")
 	w("  depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
-	w("detail on any dep: depsound <eco>:<name> <from> <to>  (leads, not a gate)")
 	return b.String()
 }
 
 func digestOf(s *stats.Stats) digest {
 	d := digest{
-		compat:  s.Compat.TypeFrom != s.Compat.TypeTo || len(s.Compat.Constraints) > 0 || len(s.Compat.Exports) > 0,
-		deps:    len(s.Dependencies),
-		files:   s.Files.Changed,
-		added:   s.Files.Added,
-		removed: s.Files.Removed,
+		compat: s.Compat.TypeFrom != s.Compat.TypeTo || len(s.Compat.Constraints) > 0 || len(s.Compat.Exports) > 0,
 	}
 	r := s.Runnable
 	for _, c := range r.Lifecycle {
@@ -159,38 +148,32 @@ func digestOf(s *stats.Stats) digest {
 	d.osvFixed = len(s.Security.FixedByUpgrade)
 	d.osvStill = len(s.Security.StillPresent)
 	d.osvIntro = len(s.Security.Introduced)
+	d.stillIDs = joinVulnIDs(s.Security.StillPresent, 5)
+	d.introIDs = joinVulnIDs(s.Security.Introduced, 5)
 	sort.Strings(d.execWhat)
 	return d
 }
 
-// digestLine is the compact per-dep signal string.
-func digestLine(d digest) string {
-	var parts []string
-	if d.exec {
-		parts = append(parts, "EXEC")
+// joinVulnIDs renders advisory IDs (preferring the CVE alias, more
+// recognizable than a GHSA id) so the router points at what to act on,
+// not just how many. Capped so a heavy dep does not become a wall.
+func joinVulnIDs(vulns []osv.Vuln, max int) string {
+	var ids []string
+	for i, v := range vulns {
+		if i >= max {
+			ids = append(ids, fmt.Sprintf("+%d more", len(vulns)-max))
+			break
+		}
+		id := v.ID
+		for _, a := range v.Aliases {
+			if strings.HasPrefix(a, "CVE-") {
+				id = a
+				break
+			}
+		}
+		ids = append(ids, id)
 	}
-	if d.compat {
-		parts = append(parts, "compat")
-	}
-	if d.deps > 0 {
-		parts = append(parts, fmt.Sprintf("%d deps", d.deps))
-	}
-	sec := ""
-	switch {
-	case d.osvIntro > 0:
-		sec = fmt.Sprintf("OSV +%d introduced!", d.osvIntro)
-	case d.osvStill > 0:
-		sec = fmt.Sprintf("OSV %d still-present", d.osvStill)
-	case d.osvFixed > 0:
-		sec = fmt.Sprintf("OSV %d fixed", d.osvFixed)
-	}
-	if sec != "" {
-		parts = append(parts, sec)
-	}
-	if len(parts) == 0 {
-		return "clean"
-	}
-	return strings.Join(parts, "  ")
+	return strings.Join(ids, ", ")
 }
 
 func section(w func(string, ...any), title string, hits []BulkResult, detail func(BulkResult) string) {

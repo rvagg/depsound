@@ -65,7 +65,9 @@ func CensusText(c *Census) string {
 
 	w("")
 	if !c.hasExec() {
-		w("execution surface: none declared (no install/build scripts, cgo, proc-macro)")
+		w("install/build execution surface: none declared (no lifecycle scripts, cgo,")
+		w("  build.rs, proc-macro, gyp). NOTE: this is install/build only; the library")
+		w("  code still runs when your code imports and calls it.")
 	} else {
 		w("WARNING execution surface (runs code on install/build):")
 		for _, l := range c.Lifecycle {
@@ -104,11 +106,12 @@ func CensusText(c *Census) string {
 
 	w("")
 	if !c.OSVQueried {
-		w("security (OSV): not queried")
+		w("known-CVE scan (OSV, backward-looking): not queried")
 	} else if len(c.Vulns) == 0 {
-		w("security (OSV): no known vulnerabilities in this version (as of %s)", c.OSVFetchedAt)
+		w("known-CVE scan (OSV, backward-looking), as of %s: no advisories for this version", c.OSVFetchedAt)
+		w("  (KNOWN CVEs only; says NOTHING about novel or injected malicious code)")
 	} else {
-		w("WARNING security (OSV, %s): %d known vulnerabilit(ies) in this version:", c.OSVFetchedAt, len(c.Vulns))
+		w("WARNING known-CVE scan (OSV, backward-looking), as of %s: %d advisor(ies) for this version:", c.OSVFetchedAt, len(c.Vulns))
 		for _, v := range c.Vulns {
 			line := "  " + taint(v.ID)
 			if len(v.Aliases) > 0 {
@@ -162,7 +165,7 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 			"the published artifact (files, size, classes)",
 			"declared execution surface (install/build scripts, cgo, proc-macro, gyp)",
 			"declared DIRECT dependencies",
-			"known vulnerabilities in this version (OSV)",
+			"KNOWN CVEs for this version (OSV, backward-looking; blind to novel/injected code)",
 		},
 		NotChecked: []string{
 			"the FULL TRANSITIVE subtree you adopt (only direct deps shown here)",
@@ -172,10 +175,13 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 		},
 	}
 	var na []stats.NextAction
-	ref := fmt.Sprintf("%s:%s %s", c.Ecosystem, c.Name, c.Version)
 	if c.hasExec() {
-		na = append(na, stats.NextAction{Reason: "it runs code on install/build; read that code before adopting",
-			Command: "depsound show " + ref + " --file=<the script>  (once show supports census)"})
+		// point at the persisted tree, which exists NOW, not a not-yet-built
+		// show mode: the script bodies are already listed above; the files
+		// they invoke are in the tree, so this doorway actually opens
+		na = append(na, stats.NextAction{
+			Reason:  "it runs code on install/build; read that code before adopting (script bodies are listed above)",
+			Command: "read the scripts/build files they invoke in the package tree: " + c.Tree})
 	}
 	if len(c.Vulns) > 0 {
 		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known vulnerabilit(ies) in this version; consider a patched version or an alternative", len(c.Vulns))})

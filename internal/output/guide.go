@@ -15,7 +15,7 @@ var coverageChecked = []string{
 	"file classification (source vs generated/test/docs, heuristic)",
 	"manifest compatibility: constraints, exports, dependency deltas",
 	"build/install execution surface (lifecycle scripts, build.rs, cgo, gyp, proc-macro)",
-	"known vulnerabilities via OSV (fixed / still-present / introduced)",
+	"KNOWN CVEs via OSV (backward-looking; blind to novel/injected code)",
 }
 
 var coverageNotChecked = []string{
