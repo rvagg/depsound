@@ -109,3 +109,26 @@ func TestBuild(t *testing.T) {
 		t.Errorf("expected the review-surface heuristic disclaimer, got: %v", st.Notes)
 	}
 }
+
+func TestGHAPinNote(t *testing.T) {
+	sha := "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+	src := func(kind string) *Source { return &Source{Digest: "git-" + sha, RefKind: kind} }
+
+	// escalating tiers: sha immutable, tag mutable, branch unpinned
+	if n := ghaPinNote("to", sha, src("sha")); strings.Contains(n, "WARNING") || !strings.Contains(n, "immutable") {
+		t.Errorf("sha pin = %q", n)
+	}
+	if n := ghaPinNote("to", "v6.1.0", src("tag")); !strings.Contains(n, "WARNING") || !strings.Contains(n, "MUTABLE") || !strings.Contains(n, sha) {
+		t.Errorf("tag pin = %q", n)
+	}
+	if n := ghaPinNote("to", "master", src("branch")); !strings.Contains(n, "WARNING") || !strings.Contains(n, "UNPINNED") {
+		t.Errorf("branch pin = %q", n)
+	}
+	// fallback when the sidecar predates RefKind: infer from the ref shape
+	if n := ghaPinNote("to", "v6.1.0", &Source{Digest: "git-" + sha}); !strings.Contains(n, "WARNING") {
+		t.Errorf("fallback tag pin = %q", n)
+	}
+	if isHexSHA("v6.1.0") || !isHexSHA(sha) {
+		t.Error("isHexSHA misclassified")
+	}
+}

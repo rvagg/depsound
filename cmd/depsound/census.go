@@ -98,6 +98,9 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	if err != nil {
 		return nil, err
 	}
+	if sp.Eco == spec.GHA && (versionReq == "" || versionReq == "latest") {
+		return nil, fmt.Errorf("gha census needs a ref (no 'latest'): depsound gha:owner/repo[/sub] <tag|branch|sha>")
+	}
 	c, err := cache.Open(cacheDir)
 	if err != nil {
 		return nil, err
@@ -124,7 +127,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		}
 	}
 
-	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate"}[sp.Eco]
+	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate", spec.GHA: ".tar.gz"}[sp.Eco]
 	art := c.ArtifactPath(string(sp.Eco), sp.Name, v, ext)
 	if _, err := os.Stat(art); err != nil {
 		fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", sp, v)
@@ -136,6 +139,8 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		err = fetch.GoModule(ctx, client, sp.Name, v, art)
 	case spec.Crates:
 		err = fetch.Crate(ctx, client, sp.Name, v, art)
+	case spec.GHA:
+		err = fetch.GHA(ctx, client, sp.Name, v, art)
 	}
 	if err != nil {
 		return nil, err
@@ -148,7 +153,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		tmp := tree + ".tmp"
 		os.RemoveAll(tmp)
 		switch sp.Eco {
-		case spec.NPM, spec.Crates:
+		case spec.NPM, spec.Crates, spec.GHA:
 			_, err = extract.TarGz(art, tmp, extract.DefaultLimits)
 		case spec.Go:
 			_, err = extract.Zip(art, tmp, sp.Name+"@"+v, extract.DefaultLimits)
@@ -163,12 +168,56 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 			return nil, err
 		}
 	}
-	cen.Tree = tree
-	cen.ByClass, cen.Bytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(tree)
-	if err := censusManifest(sp.Eco, tree, cen); err != nil {
+
+	// a GHA sub-path action is scoped to what you adopt (owner/repo/SUB),
+	// not the whole repo; census the sub-tree and note the scoping.
+	scoped := tree
+	if sp.Sub != "" {
+		scoped = filepath.Join(tree, sp.Sub)
+		if !exists(scoped) {
+			return nil, fmt.Errorf("gha sub-path %q not present at %s@%s; check the path", sp.Sub, sp.Name, v)
+		}
+		cen.Name = sp.Name + "/" + sp.Sub
+	}
+	cen.Tree = scoped
+	cen.ByClass, cen.Bytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(scoped)
+	if sp.Eco == spec.GHA {
+		censusGHANotes(cen, art, v, sp.Sub)
+	} else if err := censusManifest(sp.Eco, tree, cen); err != nil {
 		return nil, err
 	}
 	return cen, nil
+}
+
+// censusGHANotes adds the pinning (sha/tag/branch) and sub-path scoping
+// notes to a GHA census, reading the resolved commit + pin tier from the
+// artifact sidecar.
+func censusGHANotes(cen *output.Census, art, ref, sub string) {
+	m := fetch.ReadMeta(art)
+	sha, kind := "", ""
+	if m != nil {
+		sha = strings.TrimPrefix(m.Digest, "git-")
+		kind = m.RefKind
+	}
+	cen.Resolved = fmt.Sprintf("%s (%s) -> %s", ref, orUnknown(kind), sha)
+	switch kind {
+	case "sha":
+		cen.Notes = append(cen.Notes, "SHA pin (immutable, good practice)")
+	case "branch":
+		cen.Notes = append(cen.Notes, fmt.Sprintf("WARNING BRANCH pin %q is UNPINNED: a branch moves on EVERY push, so adopters run whatever is there at run time (worst practice). Pin a tag or, better, a SHA", ref))
+	default:
+		cen.Notes = append(cen.Notes, fmt.Sprintf("WARNING TAG pin %q is MUTABLE (re-pointable, the tj-actions vector); prefer a SHA pin", ref))
+	}
+	if sub != "" {
+		cen.Notes = append(cen.Notes, fmt.Sprintf("scoped to sub-path action %q; it may reference repo-level code outside it (not shown)", sub))
+	}
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "ref"
+	}
+	return s
 }
 
 // parseCooldown accepts "5", "5d", or a Go duration like "120h".

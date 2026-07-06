@@ -41,7 +41,12 @@ usage:
   depsound surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
   depsound show    <ecosystem>:<name> <from> <to> --file=X | --dir=Y | --symbol=Z
 
-ecosystems: npm, go, crates
+ecosystems: npm, go, crates, gha
+  gha is a GitHub Action: owner/repo[/sub-path] pinned to a SHA (immutable),
+  tag (mutable, re-pointable) or branch (unpinned, moves every push).
+  depsound resolves each ref to its commit and grades the pin. Diff:
+  depsound gha:actions/cache v5.0.5 v6.1.0. Census a single ref (what you
+  adopt): depsound gha:owner/repo/sub-path <tag|branch|sha>.
 
 surface intersects the diff with your consumer usage units and reports
 per-unit status. Units are ecosystem-native: Go import paths, npm
@@ -184,7 +189,13 @@ func analyze(cacheDir, specStr, fromArg, toArg string) (*resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	ws := c.WorkspacePath(string(sp.Eco), sp.Name, from, to)
+	// the artifact is keyed on the repo (shared across sub-paths), but the
+	// workspace is scoped to the sub-path, so fold Sub into the workspace key
+	wsKey := sp.Name
+	if sp.Sub != "" {
+		wsKey += "/" + sp.Sub
+	}
+	ws := c.WorkspacePath(string(sp.Eco), wsKey, from, to)
 	st, err := loadWorkspace(ws)
 	if err != nil {
 		if st, err = materialize(c, sp, from, to, ws); err != nil {
@@ -308,7 +319,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	// while making progress
 	client := &http.Client{}
 
-	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate"}[sp.Eco]
+	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate", spec.GHA: ".tar.gz"}[sp.Eco]
 	arts := map[string]string{}
 	srcs := map[string]*stats.Source{}
 	for _, v := range []string{from, to} {
@@ -326,13 +337,15 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 			err = fetch.GoModule(ctx, client, sp.Name, v, dest)
 		case spec.Crates:
 			err = fetch.Crate(ctx, client, sp.Name, v, dest)
+		case spec.GHA:
+			err = fetch.GHA(ctx, client, sp.Name, v, dest)
 		}
 		if err != nil {
 			return nil, err
 		}
 		arts[v] = dest
 		if m := fetch.ReadMeta(dest); m != nil {
-			srcs[v] = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
+			srcs[v] = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification, RefKind: m.RefKind}
 		}
 	}
 
@@ -362,6 +375,9 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 		case spec.Crates:
 			// .crate is a gzip tarball rooted at name-version/
 			rep, err = extract.TarGz(arts[v], filepath.Join(tmp, sub), extract.DefaultLimits)
+		case spec.GHA:
+			// GitHub tarball is rooted at repo-<sha>/, auto-stripped
+			rep, err = extract.TarGz(arts[v], filepath.Join(tmp, sub), extract.DefaultLimits)
 		}
 		if err != nil {
 			return nil, err
@@ -374,13 +390,28 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 		}
 	}
 
+	// a GHA sub-path action is scoped to what you actually adopt: diff the
+	// sub-tree, not the whole repo. Name stays owner/repo (what we fetched);
+	// Sub selects owner/repo/SUB. The action may still reference repo-level
+	// code, a scoping caveat, surfaced as a note in Build.
+	oldRoot, newRoot := "old", "new"
+	if sp.Sub != "" {
+		for _, side := range []string{"old", "new"} {
+			if !exists(filepath.Join(tmp, side, sp.Sub)) {
+				return nil, fmt.Errorf("gha sub-path %q not present in %s tree (%s@%s); check the path", sp.Sub, side, sp.Name, map[string]string{"old": from, "new": to}[side])
+			}
+		}
+		oldRoot = filepath.Join("old", sp.Sub)
+		newRoot = filepath.Join("new", sp.Sub)
+	}
+
 	patchPath := filepath.Join(tmp, "diff.patch")
-	diffs, err := gitdiff.Diff(tmp, "old", "new", patchPath)
+	diffs, err := gitdiff.Diff(tmp, oldRoot, newRoot, patchPath)
 	if err != nil {
 		return nil, err
 	}
 
-	idx, err := surface.Parse(patchPath, "old", "new")
+	idx, err := surface.Parse(patchPath, oldRoot, newRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -391,9 +422,10 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	input := stats.Input{
 		ToolVersion:    version.Version,
 		Pkg:            stats.PkgRef{Ecosystem: string(sp.Eco), Name: sp.Name, From: from, To: to},
+		SubPath:        sp.Sub,
 		Workspace:      ws,
-		OldTree:        filepath.Join(tmp, "old"),
-		NewTree:        filepath.Join(tmp, "new"),
+		OldTree:        filepath.Join(tmp, oldRoot),
+		NewTree:        filepath.Join(tmp, newRoot),
 		Diffs:          diffs,
 		SkippedLinks:   skippedLinks,
 		HostileEntries: hostileEntries,

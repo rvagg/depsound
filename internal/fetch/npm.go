@@ -94,6 +94,9 @@ type Meta struct {
 	URL          string `json:"url"`
 	Digest       string `json:"digest"`
 	Verification string `json:"verification,omitempty"`
+	// RefKind records how a GitHub Actions ref was pinned (sha|tag|branch):
+	// the immutability tier, resolved at fetch time so it survives caching.
+	RefKind string `json:"refKind,omitempty"`
 }
 
 func MetaPath(artifactPath string) string { return artifactPath + ".meta.json" }

@@ -88,6 +88,8 @@ type Source struct {
 	// Verification distinguishes registry/sumdb-verified artifacts from
 	// TLS-trust-only ones; "tls-only" prefixed values get a note.
 	Verification string `json:"verification,omitempty"`
+	// RefKind is the GitHub Actions pin tier (sha|tag|branch).
+	RefKind string `json:"refKind,omitempty"`
 }
 
 type Runnable struct {
@@ -185,6 +187,7 @@ const minifiedLineLen = 1000
 type Input struct {
 	ToolVersion    string
 	Pkg            PkgRef
+	SubPath        string // GHA sub-path action (owner/repo/SUB); scoping caveat
 	Workspace      string
 	OldTree        string
 	NewTree        string
@@ -227,8 +230,18 @@ func Build(in Input) (*Stats, error) {
 		s.Notes = append(s.Notes, "artifact provenance incomplete (cached before sidecars existed); refetch to restore")
 	}
 	for side, src := range map[string]*Source{"from": in.SourceFrom, "to": in.SourceTo} {
-		if src != nil && strings.HasPrefix(src.Verification, "tls-only") {
+		if src != nil && strings.HasPrefix(src.Verification, "tls-only") && in.Pkg.Ecosystem != "gha" {
 			s.Notes = append(s.Notes, side+" artifact verified by TLS trust only (no registry integrity or checksum database record)")
+		}
+	}
+	// GitHub Actions pinning: a tag is a MUTABLE pointer, the supply-chain
+	// vector (tj-actions: re-pointed tags at a secret-dumping commit). Report
+	// what each ref resolves to and push toward SHA pins.
+	if in.Pkg.Ecosystem == "gha" {
+		s.Notes = append(s.Notes, ghaPinNote("from", in.Pkg.From, in.SourceFrom))
+		s.Notes = append(s.Notes, ghaPinNote("to", in.Pkg.To, in.SourceTo))
+		if in.SubPath != "" {
+			s.Notes = append(s.Notes, fmt.Sprintf("scoped to the sub-path action %q; the action may still reference repo-level code outside it (not shown)", in.SubPath))
 		}
 	}
 
@@ -366,6 +379,46 @@ func Build(in Input) (*Stats, error) {
 			n, strings.Join(s.Files.ExcludedGen, ", ")))
 	}
 	return s, nil
+}
+
+// ghaPinNote reports what a GitHub Actions ref resolves to and how strongly
+// it is pinned, escalating: sha (immutable) < tag (mutable, re-pointable,
+// the tj-actions vector) < branch (unpinned, moves on every push, worst).
+// The resolved commit rides in Source.Digest as "git-<sha>", the tier in
+// Source.RefKind.
+func ghaPinNote(side, ref string, src *Source) string {
+	sha, kind := "", ""
+	if src != nil {
+		sha = strings.TrimPrefix(src.Digest, "git-")
+		kind = src.RefKind
+	}
+	if kind == "" { // fallback for metas written before RefKind existed
+		if isHexSHA(ref) {
+			kind = "sha"
+		} else {
+			kind = "tag"
+		}
+	}
+	switch kind {
+	case "sha":
+		return fmt.Sprintf("%s: SHA pin %s (immutable, good practice)", side, ref)
+	case "branch":
+		return fmt.Sprintf("WARNING %s: BRANCH pin %q is UNPINNED (a branch moves on EVERY push, so you run whatever is there at run time; worst practice). It is %s right now, pin a tag or, better, a SHA", side, ref, sha)
+	default: // tag
+		return fmt.Sprintf("WARNING %s: TAG pin %q is MUTABLE (re-pointable, the tj-actions vector); resolves to %s today, prefer a SHA pin", side, ref, sha)
+	}
+}
+
+func isHexSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // embeddedScan reads a changed file once and reports whether it embeds
