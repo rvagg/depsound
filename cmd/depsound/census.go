@@ -17,6 +17,7 @@ import (
 	"github.com/rvagg/depsound/internal/cratepkg"
 	"github.com/rvagg/depsound/internal/extract"
 	"github.com/rvagg/depsound/internal/fetch"
+	"github.com/rvagg/depsound/internal/ghapkg"
 	"github.com/rvagg/depsound/internal/gopkg"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/osv"
@@ -182,17 +183,18 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	cen.Tree = scoped
 	cen.ByClass, cen.Bytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(scoped)
 	if sp.Eco == spec.GHA {
-		censusGHANotes(cen, art, v, sp.Sub)
+		if err := censusGHA(cen, scoped, art, v, sp.Sub); err != nil {
+			return nil, err
+		}
 	} else if err := censusManifest(sp.Eco, tree, cen); err != nil {
 		return nil, err
 	}
 	return cen, nil
 }
 
-// censusGHANotes adds the pinning (sha/tag/branch) and sub-path scoping
-// notes to a GHA census, reading the resolved commit + pin tier from the
-// artifact sidecar.
-func censusGHANotes(cen *output.Census, art, ref, sub string) {
+// censusGHA fills a GHA census: the pin (sha/tag/branch, from the sidecar),
+// the action.yml execution model (present form), and the sub-path caveat.
+func censusGHA(cen *output.Census, scoped, art, ref, sub string) error {
 	m := fetch.ReadMeta(art)
 	sha, kind := "", ""
 	if m != nil {
@@ -211,6 +213,15 @@ func censusGHANotes(cen *output.Census, art, ref, sub string) {
 	if sub != "" {
 		cen.Notes = append(cen.Notes, fmt.Sprintf("scoped to sub-path action %q; it may reference repo-level code outside it (not shown)", sub))
 	}
+	a, err := ghapkg.Load(scoped)
+	if err != nil {
+		return err
+	}
+	cen.GHAUsing = a.Using
+	cen.GHAExec = ghapkg.ExecPresent(a)
+	cen.GHANested = a.Uses
+	cen.Notes = append(cen.Notes, a.Warnings...)
+	return nil
 }
 
 func orUnknown(s string) string {

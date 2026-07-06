@@ -11,6 +11,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/classify"
 	"github.com/rvagg/depsound/internal/cratepkg"
+	"github.com/rvagg/depsound/internal/ghapkg"
 	"github.com/rvagg/depsound/internal/gitdiff"
 	"github.com/rvagg/depsound/internal/gopkg"
 	"github.com/rvagg/depsound/internal/manifest"
@@ -33,6 +34,7 @@ type Stats struct {
 	Files        FilesSection         `json:"files"`
 	Embedded     []EmbeddedMarker     `json:"embeddedMarkers,omitempty"`
 	Security     Security             `json:"security"`
+	Action       *ActionSection       `json:"action,omitempty"` // gha only
 	Workspace    string               `json:"workspace"`
 	Notes        []string             `json:"notes,omitempty"`
 	// Coverage and NextActions are the anti-false-security spine: what
@@ -184,10 +186,32 @@ const maxHeadBytes = 4096
 // reported so the agent can apply its own judgement.
 const minifiedLineLen = 1000
 
+// ActionSection is the GitHub Actions execution model + pinning: WHAT runs
+// (using node/docker/composite, pre/post hooks) and how immutably it is
+// pinned. Present only for the gha ecosystem.
+type ActionSection struct {
+	Pins      []ActionPin       `json:"pins"`
+	UsingFrom string            `json:"usingFrom,omitempty"`
+	UsingTo   string            `json:"usingTo,omitempty"`
+	Exec      []manifest.Change `json:"exec,omitempty"`   // pre/post/main/image/using deltas
+	Nested    []string          `json:"nested,omitempty"` // composite `uses:` (transitive)
+	SubPath   string            `json:"subPath,omitempty"`
+}
+
+// ActionPin is one side's pin: the ref, its immutability tier, the commit.
+type ActionPin struct {
+	Side string `json:"side"` // from | to
+	Ref  string `json:"ref"`
+	Kind string `json:"kind"` // sha | tag | branch
+	SHA  string `json:"sha"`
+}
+
 type Input struct {
 	ToolVersion    string
 	Pkg            PkgRef
-	SubPath        string // GHA sub-path action (owner/repo/SUB); scoping caveat
+	SubPath        string         // GHA sub-path action (owner/repo/SUB); scoping caveat
+	OldAction      *ghapkg.Action // gha only
+	NewAction      *ghapkg.Action
 	Workspace      string
 	OldTree        string
 	NewTree        string
@@ -238,10 +262,14 @@ func Build(in Input) (*Stats, error) {
 	// vector (tj-actions: re-pointed tags at a secret-dumping commit). Report
 	// what each ref resolves to and push toward SHA pins.
 	if in.Pkg.Ecosystem == "gha" {
-		s.Notes = append(s.Notes, ghaPinNote("from", in.Pkg.From, in.SourceFrom))
-		s.Notes = append(s.Notes, ghaPinNote("to", in.Pkg.To, in.SourceTo))
+		s.Action = buildAction(in)
 		if in.SubPath != "" {
 			s.Notes = append(s.Notes, fmt.Sprintf("scoped to the sub-path action %q; the action may still reference repo-level code outside it (not shown)", in.SubPath))
+		}
+		for _, a := range []*ghapkg.Action{in.OldAction, in.NewAction} {
+			for _, w := range actionWarnings(a) {
+				s.Notes = append(s.Notes, w)
+			}
 		}
 	}
 
@@ -381,32 +409,47 @@ func Build(in Input) (*Stats, error) {
 	return s, nil
 }
 
-// ghaPinNote reports what a GitHub Actions ref resolves to and how strongly
-// it is pinned, escalating: sha (immutable) < tag (mutable, re-pointable,
-// the tj-actions vector) < branch (unpinned, moves on every push, worst).
-// The resolved commit rides in Source.Digest as "git-<sha>", the tier in
-// Source.RefKind.
-func ghaPinNote(side, ref string, src *Source) string {
-	sha, kind := "", ""
-	if src != nil {
-		sha = strings.TrimPrefix(src.Digest, "git-")
-		kind = src.RefKind
+// buildAction assembles the GitHub Actions section: pins for both sides and,
+// when action.yml parsed on both, the execution-model delta and composite
+// nesting. Rendering (and the escalating pin warnings) live in output.
+func buildAction(in Input) *ActionSection {
+	sec := &ActionSection{
+		SubPath: in.SubPath,
+		Pins:    []ActionPin{pinOf("from", in.Pkg.From, in.SourceFrom), pinOf("to", in.Pkg.To, in.SourceTo)},
 	}
-	if kind == "" { // fallback for metas written before RefKind existed
+	if in.OldAction != nil && in.NewAction != nil {
+		sec.UsingFrom = in.OldAction.Using
+		sec.UsingTo = in.NewAction.Using
+		sec.Exec = ghapkg.ExecDelta(in.OldAction, in.NewAction)
+		sec.Nested = in.NewAction.Uses
+	}
+	return sec
+}
+
+// pinOf classifies a ref into an ActionPin. The tier rides in Source.RefKind
+// (resolved at fetch time); the ref-shape fallback covers sidecars written
+// before RefKind existed.
+func pinOf(side, ref string, src *Source) ActionPin {
+	p := ActionPin{Side: side, Ref: ref}
+	if src != nil {
+		p.SHA = strings.TrimPrefix(src.Digest, "git-")
+		p.Kind = src.RefKind
+	}
+	if p.Kind == "" {
 		if isHexSHA(ref) {
-			kind = "sha"
+			p.Kind = "sha"
 		} else {
-			kind = "tag"
+			p.Kind = "tag"
 		}
 	}
-	switch kind {
-	case "sha":
-		return fmt.Sprintf("%s: SHA pin %s (immutable, good practice)", side, ref)
-	case "branch":
-		return fmt.Sprintf("WARNING %s: BRANCH pin %q is UNPINNED (a branch moves on EVERY push, so you run whatever is there at run time; worst practice). It is %s right now, pin a tag or, better, a SHA", side, ref, sha)
-	default: // tag
-		return fmt.Sprintf("WARNING %s: TAG pin %q is MUTABLE (re-pointable, the tj-actions vector); resolves to %s today, prefer a SHA pin", side, ref, sha)
+	return p
+}
+
+func actionWarnings(a *ghapkg.Action) []string {
+	if a == nil {
+		return nil
 	}
+	return a.Warnings
 }
 
 func isHexSHA(s string) bool {

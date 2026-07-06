@@ -110,23 +110,21 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-func TestGHAPinNote(t *testing.T) {
+func TestPinOf(t *testing.T) {
 	sha := "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
-	src := func(kind string) *Source { return &Source{Digest: "git-" + sha, RefKind: kind} }
-
-	// escalating tiers: sha immutable, tag mutable, branch unpinned
-	if n := ghaPinNote("to", sha, src("sha")); strings.Contains(n, "WARNING") || !strings.Contains(n, "immutable") {
-		t.Errorf("sha pin = %q", n)
+	// the tier rides in RefKind (resolved at fetch time)
+	if p := pinOf("to", sha, &Source{Digest: "git-" + sha, RefKind: "sha"}); p.Kind != "sha" || p.SHA != sha {
+		t.Errorf("sha pin = %+v", p)
 	}
-	if n := ghaPinNote("to", "v6.1.0", src("tag")); !strings.Contains(n, "WARNING") || !strings.Contains(n, "MUTABLE") || !strings.Contains(n, sha) {
-		t.Errorf("tag pin = %q", n)
+	if p := pinOf("to", "v6.1.0", &Source{Digest: "git-" + sha, RefKind: "tag"}); p.Kind != "tag" {
+		t.Errorf("tag pin = %+v", p)
 	}
-	if n := ghaPinNote("to", "master", src("branch")); !strings.Contains(n, "WARNING") || !strings.Contains(n, "UNPINNED") {
-		t.Errorf("branch pin = %q", n)
+	if p := pinOf("to", "master", &Source{Digest: "git-" + sha, RefKind: "branch"}); p.Kind != "branch" {
+		t.Errorf("branch pin = %+v", p)
 	}
 	// fallback when the sidecar predates RefKind: infer from the ref shape
-	if n := ghaPinNote("to", "v6.1.0", &Source{Digest: "git-" + sha}); !strings.Contains(n, "WARNING") {
-		t.Errorf("fallback tag pin = %q", n)
+	if p := pinOf("to", "v6.1.0", &Source{Digest: "git-" + sha}); p.Kind != "tag" {
+		t.Errorf("fallback = %+v", p)
 	}
 	if isHexSHA("v6.1.0") || !isHexSHA(sha) {
 		t.Error("isHexSHA misclassified")

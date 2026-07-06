@@ -18,6 +18,7 @@ import (
 	"github.com/rvagg/depsound/internal/cratepkg"
 	"github.com/rvagg/depsound/internal/extract"
 	"github.com/rvagg/depsound/internal/fetch"
+	"github.com/rvagg/depsound/internal/ghapkg"
 	"github.com/rvagg/depsound/internal/gitdiff"
 	"github.com/rvagg/depsound/internal/gopkg"
 	"github.com/rvagg/depsound/internal/npmpkg"
@@ -452,6 +453,15 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 			return nil, fmt.Errorf("old tree: %w", err)
 		}
 		if input.NewCrate, err = cratepkg.Load(input.NewTree); err != nil {
+			return nil, fmt.Errorf("new tree: %w", err)
+		}
+	case spec.GHA:
+		// trees are already scoped to the action's path, so action.yml is
+		// at their root
+		if input.OldAction, err = ghapkg.Load(input.OldTree); err != nil {
+			return nil, fmt.Errorf("old tree: %w", err)
+		}
+		if input.NewAction, err = ghapkg.Load(input.NewTree); err != nil {
 			return nil, fmt.Errorf("new tree: %w", err)
 		}
 	}

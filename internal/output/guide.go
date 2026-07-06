@@ -2,6 +2,7 @@ package output
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -30,7 +31,21 @@ var coverageNotChecked = []string{
 // report. It is deliberately loud about limits: depsound is a heuristic
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
 func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
-	cov := &stats.Coverage{Checked: coverageChecked, NotChecked: coverageNotChecked}
+	checked, notChecked := coverageChecked, coverageNotChecked
+	if s.Action != nil { // gha: the execution surface we check is action.yml
+		checked = append([]string(nil), coverageChecked...)
+		for i, c := range checked {
+			if strings.HasPrefix(c, "build/install execution surface") {
+				checked[i] = "action.yml execution model (using, entrypoints, composite uses)"
+			}
+		}
+		// the real GHA risk is what the executed code REACHES, which we do
+		// not inspect yet; name it so the model does not read as covered
+		notChecked = append([]string{
+			"what the action's code REACHES: secrets, GITHUB_TOKEN, OIDC (ACTIONS_ID_TOKEN), network egress, $GITHUB_ENV/$GITHUB_OUTPUT injection",
+		}, coverageNotChecked...)
+	}
+	cov := &stats.Coverage{Checked: checked, NotChecked: notChecked}
 
 	ref := fmt.Sprintf("%s:%s %s %s", s.Package.Ecosystem, s.Package.Name, s.Package.From, s.Package.To)
 	var na []stats.NextAction

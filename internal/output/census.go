@@ -32,6 +32,11 @@ type Census struct {
 	ProcMacro bool              `json:"procMacro,omitempty"`
 	Gyp       bool              `json:"bindingGyp,omitempty"`
 
+	// GitHub Actions execution model (present form) for a gha census.
+	GHAUsing  string            `json:"ghaUsing,omitempty"`
+	GHAExec   []manifest.Change `json:"ghaExec,omitempty"`
+	GHANested []string          `json:"ghaNested,omitempty"`
+
 	Deps  []manifest.DepChange `json:"dependencies"`
 	Vulns []osv.Vuln           `json:"vulnerabilities,omitempty"`
 
@@ -99,7 +104,26 @@ func CensusText(c *Census) string {
 	}
 
 	w("")
-	if !c.hasExec() {
+	if c.Ecosystem == "gha" {
+		w("execution model (CONTEXT, not an alarm: running code is an action's job.")
+		w("  It runs on a CI runner with the runner's secrets/GITHUB_TOKEN/OIDC; the")
+		w("  load-bearing questions are the pin and what the code reaches):")
+		if c.GHAUsing != "" {
+			w("  using %s", taint(c.GHAUsing))
+		}
+		for _, e := range c.GHAExec {
+			w("  entrypoint %s: %s", taint(e.Key), taint(e.To))
+		}
+		if len(c.GHANested) > 0 {
+			w("  composite uses %d nested action(s) (TRANSITIVE supply chain, each its own pin to vet):", len(c.GHANested))
+			for _, u := range c.GHANested {
+				w("    %s", taint(u))
+			}
+		}
+		if c.GHAUsing == "" && len(c.GHAExec) == 0 {
+			w("  no action.yml found at this path")
+		}
+	} else if !c.hasExec() {
 		w("install/build execution surface: none declared (no lifecycle scripts, cgo,")
 		w("  build.rs, proc-macro, gyp). NOTE: this is install/build only; the library")
 		w("  code still runs when your code imports and calls it.")
