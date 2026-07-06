@@ -27,6 +27,22 @@ type digest struct {
 	osvIntro int
 	stillIDs string // pre-joined advisory IDs: a pointer to act on, not a count
 	introIDs string
+	genFile  string // biggest unreviewed generated/binary file, if a large delta
+	genDelta int
+}
+
+// addExec records a build-execution surface as a pointer, distinguishing
+// INTRODUCED (louder) from present-in-both (the code it executes may still
+// have changed). Absent in both versions records nothing.
+func (d *digest) addExec(name string, from, to bool) {
+	switch {
+	case !from && to:
+		d.exec = true
+		d.execWhat = append(d.execWhat, name+" INTRODUCED")
+	case from && to:
+		d.exec = true
+		d.execWhat = append(d.execWhat, name+" present (build code may have changed)")
+	}
 }
 
 // Bulk renders the aggregate: a rollup of which deps trip which signals
@@ -40,7 +56,7 @@ func Bulk(results []BulkResult) string {
 	w("this is a ROUTER: a fired signal is a POINTER to inspect, not a summary.")
 	w("drill any dep with: depsound <eco>:<name> <from> <to>  (now instant, cached)")
 
-	var failed, execHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
+	var failed, execHits, genHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
 	digests := map[string]digest{}
 	for _, r := range results {
 		if r.Stats == nil {
@@ -55,6 +71,9 @@ func Bulk(results []BulkResult) string {
 		if d.exec {
 			execHits = append(execHits, r)
 		}
+		if d.genDelta > 0 {
+			genHits = append(genHits, r)
+		}
 		if d.osvStill > 0 {
 			stillHits = append(stillHits, r)
 		}
@@ -66,15 +85,19 @@ func Bulk(results []BulkResult) string {
 		}
 		// clean = nothing notable at all, including no fixed advisories
 		// (which are called out above as their own positive signal)
-		if !d.exec && !d.compat && d.osvIntro == 0 && d.osvStill == 0 && d.osvFixed == 0 {
+		if !d.exec && d.genDelta == 0 && !d.compat && d.osvIntro == 0 && d.osvStill == 0 && d.osvFixed == 0 {
 			clean = append(clean, r)
 		}
 	}
 
 	// order by weight: new risk first, then residual, then breaking, then
 	// the positive (fixes), then the unremarkable
-	section(w, "WARNING new build/install execution surface", execHits, func(r BulkResult) string {
+	section(w, "WARNING build/install execution surface (present or introduced)", execHits, func(r BulkResult) string {
 		return strings.Join(digests[r.Ref].execWhat, ", ")
+	})
+	section(w, "WARNING large UNREVIEWED generated/binary change (payload can hide here)", genHits, func(r BulkResult) string {
+		d := digests[r.Ref]
+		return fmt.Sprintf("%s +/- %d lines (heuristic-excluded from review surface)", d.genFile, d.genDelta)
 	})
 	section(w, "WARNING CVEs INTRODUCED by the upgrade", introHits, func(r BulkResult) string {
 		d := digests[r.Ref]
@@ -129,21 +152,19 @@ func digestOf(s *stats.Stats) digest {
 		d.exec = true
 		d.execWhat = append(d.execWhat, "lifecycle "+c.Key+" "+c.Status)
 	}
-	if !r.GypFrom && r.GypTo {
-		d.exec = true
-		d.execWhat = append(d.execWhat, "binding.gyp added")
-	}
-	if !r.CgoFrom && r.CgoTo {
-		d.exec = true
-		d.execWhat = append(d.execWhat, "cgo introduced")
-	}
-	if !r.BuildRSFrom && r.BuildRSTo {
-		d.exec = true
-		d.execWhat = append(d.execWhat, "build.rs introduced")
-	}
-	if !r.ProcMacroFrom && r.ProcMacroTo {
-		d.exec = true
-		d.execWhat = append(d.execWhat, "proc-macro introduced")
+	// execution surface fires on PRESENCE, not only introduction: a build
+	// surface present in both versions (cgo true->true) still executes the
+	// code that changed, so it must not read as "no flags" in bulk the way
+	// it did before. INTRODUCED is the louder tier.
+	d.addExec("binding.gyp", r.GypFrom, r.GypTo)
+	d.addExec("cgo", r.CgoFrom, r.CgoTo)
+	d.addExec("build.rs", r.BuildRSFrom, r.BuildRSTo)
+	d.addExec("proc-macro", r.ProcMacroFrom, r.ProcMacroTo)
+	// a big generated/binary delta is unreviewed surface where a payload can
+	// hide (npm dist/, vendored C); flag it even without a build surface
+	if big := largestExcluded(s.Files.Entries); big.Added+big.Removed >= 100 {
+		d.genFile = big.Path
+		d.genDelta = big.Added + big.Removed
 	}
 	d.osvFixed = len(s.Security.FixedByUpgrade)
 	d.osvStill = len(s.Security.StillPresent)

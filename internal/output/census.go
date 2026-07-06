@@ -21,6 +21,11 @@ type Census struct {
 	Files   int              `json:"files"`
 	ByClass []stats.ClassAgg `json:"byClass"`
 
+	// BigExcluded names the largest generated/binary file, the unreviewed
+	// surface where a payload can hide (a census is often mostly dist/).
+	BigExcluded      string `json:"bigExcluded,omitempty"`
+	BigExcludedBytes int64  `json:"bigExcludedBytes,omitempty"`
+
 	Lifecycle []manifest.Change `json:"lifecycle,omitempty"` // present install/build scripts
 	BuildRS   bool              `json:"buildRs,omitempty"`
 	Cgo       bool              `json:"cgo,omitempty"`
@@ -44,6 +49,25 @@ type Census struct {
 	NextActions []stats.NextAction `json:"nextActions,omitempty"`
 }
 
+// excludedFiles counts generated + binary files (the census review-surface
+// exclusion), so the unreviewed fraction is stated, not implied.
+func excludedFiles(byClass []stats.ClassAgg) int {
+	n := 0
+	for _, cl := range byClass {
+		if cl.Class == "generated" || cl.Class == "binary" {
+			n += cl.Files
+		}
+	}
+	return n
+}
+
+func pct(n, total int) int {
+	if total == 0 {
+		return 0
+	}
+	return n * 100 / total
+}
+
 func (c *Census) hasExec() bool {
 	return len(c.Lifecycle) > 0 || c.BuildRS || c.Cgo || c.ProcMacro || c.Gyp
 }
@@ -61,6 +85,17 @@ func CensusText(c *Census) string {
 	w("artifact: %d files, %s", c.Files, bytes(c.Bytes))
 	for _, cl := range c.ByClass {
 		w("  %-10s %d files", cl.Class, cl.Files)
+	}
+	// the census equivalent of the diff's payload-highway note: name the
+	// biggest excluded file and how much of the artifact is unreviewed, so
+	// a mostly-generated package (hono is ~99% dist/) cannot read as small
+	if excl := excludedFiles(c.ByClass); excl > 0 {
+		w("  NOTE %d of %d files (%d%%) are generated/binary and UNREVIEWED by class;",
+			excl, c.Files, pct(excl, c.Files))
+		if c.BigExcluded != "" {
+			w("       biggest: %s (%s). Exclusion is reading-order, NOT safety,", taint(c.BigExcluded), bytes(c.BigExcludedBytes))
+			w("       an attacker can hide a payload in a generated-classed file.")
+		}
 	}
 
 	w("")
@@ -165,7 +200,7 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 			"the published artifact (files, size, classes)",
 			"declared execution surface (install/build scripts, cgo, proc-macro, gyp)",
 			"declared DIRECT dependencies",
-			"KNOWN CVEs for this version (OSV, backward-looking; blind to novel/injected code)",
+			"KNOWN CVEs for this version (OSV, backward-looking)",
 		},
 		NotChecked: []string{
 			"the FULL TRANSITIVE subtree you adopt (only direct deps shown here)",

@@ -164,7 +164,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		}
 	}
 	cen.Tree = tree
-	cen.ByClass, cen.Bytes, cen.Files = classifyTree(tree)
+	cen.ByClass, cen.Bytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(tree)
 	if err := censusManifest(sp.Eco, tree, cen); err != nil {
 		return nil, err
 	}
@@ -221,8 +221,11 @@ func censusManifest(eco spec.Ecosystem, tree string, cen *output.Census) error {
 }
 
 // classifyTree walks a single extracted tree and buckets files by class:
-// the census equivalent of the diff's byClass, computed without a diff.
-func classifyTree(root string) (agg []stats.ClassAgg, total int64, files int) {
+// the census equivalent of the diff's byClass, computed without a diff. It
+// also names the biggest EXCLUDED (generated/binary) file by size, so the
+// unreviewed majority a census often carries cannot hide a payload
+// anonymously (a package like hono is ~99% dist/).
+func classifyTree(root string) (agg []stats.ClassAgg, total int64, files int, bigExcl string, bigExclBytes int64) {
 	byClass := map[string]*stats.ClassAgg{}
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
@@ -243,13 +246,17 @@ func classifyTree(root string) (agg []stats.ClassAgg, total int64, files int) {
 		a.Files++
 		total += info.Size()
 		files++
+		if (res.Class == classify.Generated || isBin) && info.Size() > bigExclBytes {
+			bigExcl = filepath.ToSlash(rel)
+			bigExclBytes = info.Size()
+		}
 		return nil
 	})
 	for _, a := range byClass {
 		agg = append(agg, *a)
 	}
 	sortClassAgg(agg)
-	return agg, total, files
+	return agg, total, files, bigExcl, bigExclBytes
 }
 
 // readHead reads the first 4KB and flags binary via a NUL byte (no diff to
