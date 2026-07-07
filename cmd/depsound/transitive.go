@@ -16,11 +16,21 @@ import (
 	"github.com/rvagg/depsound/internal/output"
 )
 
-// transitiveEcos maps an ecosystem to how its resolved set is read and the
-// default lockfile name for a github: source. Go's resolved set is go.mod's
-// require block (post-1.17 pruning); Rust's is Cargo.lock's flat package
-// list. npm/pnpm (lockfile) land here too once their parser is wired.
-var transitiveEcos = map[string]string{"go": "go.mod", "crates": "Cargo.lock", "npm": "package-lock.json"}
+// transitiveEco maps a lockfile KIND (the CLI positional) to the ecosystem
+// its packages are analysed under and the default lockfile name for a
+// github: source. Kind and analysis ecosystem usually match, except pnpm,
+// which resolves npm packages, so a pnpm-lock.yaml is analysed on npm.
+type transitiveEco struct {
+	analysis string // spec ecosystem for fetch/analysis (npm/go/crates)
+	lockName string
+}
+
+var transitiveEcos = map[string]transitiveEco{
+	"go":     {"go", "go.mod"},
+	"crates": {"crates", "Cargo.lock"},
+	"npm":    {"npm", "package-lock.json"},
+	"pnpm":   {"npm", "pnpm-lock.yaml"},
+}
 
 // transitiveCmd resolves the change set a bump drags into the WHOLE tree by
 // diffing two resolved sets (a go.mod pair, a Cargo.lock pair). The changed
@@ -51,22 +61,22 @@ func transitiveCmd(args []string) error {
 		}
 	}
 	if len(pos) != 1 {
-		return fmt.Errorf("transitive: want `depsound transitive <go|crates> --old=<lockfile> --new=<lockfile>`")
+		return fmt.Errorf("transitive: want `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile>`")
 	}
-	eco := pos[0]
-	lockName, ok := transitiveEcos[eco]
+	kind := pos[0]
+	te, ok := transitiveEcos[kind]
 	if !ok {
-		return fmt.Errorf("transitive: unsupported ecosystem %q (supported: go, crates, npm)", eco)
+		return fmt.Errorf("transitive: unsupported lockfile kind %q (supported: go, crates, npm, pnpm)", kind)
 	}
 	if oldSrc == "" || newSrc == "" {
-		return fmt.Errorf("transitive %s needs --old and --new, each a %s (path, https URL, or github:owner/repo@ref[:path])", eco, lockName)
+		return fmt.Errorf("transitive %s needs --old and --new, each a %s (path, https URL, or github:owner/repo@ref[:path])", kind, te.lockName)
 	}
 
-	oldDeps, err := resolveLock(eco, oldSrc, lockName)
+	oldDeps, err := resolveLock(kind, oldSrc, te.lockName)
 	if err != nil {
 		return fmt.Errorf("--old: %w", err)
 	}
-	newDeps, err := resolveLock(eco, newSrc, lockName)
+	newDeps, err := resolveLock(kind, newSrc, te.lockName)
 	if err != nil {
 		return fmt.Errorf("--new: %w", err)
 	}
@@ -74,13 +84,14 @@ func transitiveCmd(args []string) error {
 	res := diffResolved(oldDeps, newDeps)
 	var items []bulkItem
 	for _, c := range res.changed {
-		items = append(items, bulkItem{spec: eco + ":" + c.Path, from: c.From, to: c.To})
+		items = append(items, bulkItem{spec: te.analysis + ":" + c.Path, from: c.From, to: c.To})
 	}
 	fmt.Fprintf(os.Stderr, "depsound: transitive %s: %d changed, %d added, %d removed; analysing changes\n",
-		eco, len(res.changed), len(res.added), len(res.removed))
+		kind, len(res.changed), len(res.added), len(res.removed))
 	tr := output.TransitiveResult{
-		Ecosystem:       eco,
-		Flat:            eco == "crates" || eco == "npm", // lockfile has no direct/indirect split
+		Ecosystem:       te.analysis,
+		Kind:            kind,
+		Flat:            te.analysis != "go", // only go.mod carries direct/indirect
 		Changed:         runBulk(cacheDir, items, noOSV),
 		Added:           res.added,
 		Removed:         res.removed,
@@ -105,13 +116,14 @@ type resolvedDep struct {
 	indirect      bool
 }
 
-// resolveLock reads a lockfile source and parses it into the resolved set.
-func resolveLock(eco, src, lockName string) ([]resolvedDep, error) {
+// resolveLock reads a lockfile source and parses it into the resolved set,
+// dispatching on the lockfile KIND (go|crates|npm|pnpm).
+func resolveLock(kind, src, lockName string) ([]resolvedDep, error) {
 	b, err := readSource(src, lockName)
 	if err != nil {
 		return nil, err
 	}
-	switch eco {
+	switch kind {
 	case "go":
 		m, err := gopkg.ParseBytes(src, b)
 		if err != nil {
@@ -127,23 +139,37 @@ func resolveLock(eco, src, lockName string) ([]resolvedDep, error) {
 		if err != nil {
 			return nil, err
 		}
-		var out []resolvedDep
-		for _, c := range reg {
-			out = append(out, resolvedDep{c.Name, c.Version, false})
-		}
-		return out, nil
+		return lockedToResolved(reg), nil
 	case "npm":
 		reg, _, err := npmpkg.ParsePackageLock(b)
 		if err != nil {
 			return nil, err
 		}
-		var out []resolvedDep
-		for _, d := range reg {
-			out = append(out, resolvedDep{d.Name, d.Version, false})
+		return npmLockedToResolved(reg), nil
+	case "pnpm":
+		reg, _, err := npmpkg.ParsePnpmLock(b)
+		if err != nil {
+			return nil, err
 		}
-		return out, nil
+		return npmLockedToResolved(reg), nil
 	}
-	return nil, fmt.Errorf("unsupported ecosystem %q", eco)
+	return nil, fmt.Errorf("unsupported lockfile kind %q", kind)
+}
+
+func lockedToResolved(crates []cratepkg.LockedCrate) []resolvedDep {
+	out := make([]resolvedDep, 0, len(crates))
+	for _, c := range crates {
+		out = append(out, resolvedDep{c.Name, c.Version, false})
+	}
+	return out
+}
+
+func npmLockedToResolved(deps []npmpkg.LockedDep) []resolvedDep {
+	out := make([]resolvedDep, 0, len(deps))
+	for _, d := range deps {
+		out = append(out, resolvedDep{d.Name, d.Version, false})
+	}
+	return out
 }
 
 type requireSetDiff struct {

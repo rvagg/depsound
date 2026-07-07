@@ -67,12 +67,13 @@ ROUTER: which deps tripped which signals, most-severe first, each a POINTER to
 inspect (drill with the single-pair command, instant once cached). The list is
 yours to supply, from a PR diff, a go.mod diff, etc.`,
 
-	"transitive": `depsound transitive <go|crates> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
+	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
 
 Resolves the whole subtree a bump drags in by diffing two resolved lockfiles:
   go      two go.mod        (the require block incl. // indirect IS the set)
   crates  two Cargo.lock    (the flat resolved package list)
   npm     two package-lock.json  (lockfileVersion 2/3, npm 7+; v1 unsupported)
+  pnpm    two pnpm-lock.yaml (lockfileVersion 9.x, pnpm 9+; analysed on npm)
 Changed deps run through the bulk router; added are listed (new code, census
 each); removed are noted. A name carrying multiple versions (Cargo/npm dedup)
 is handled by pairing a lone removed+added as a bump.

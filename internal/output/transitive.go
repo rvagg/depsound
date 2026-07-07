@@ -17,7 +17,10 @@ type ModuleRef struct {
 // TransitiveResult is the whole change set a bump drags in: the analysed
 // version-changes (through the bulk router) plus the added/removed modules.
 type TransitiveResult struct {
+	// Ecosystem is where packages are analysed (npm/go/crates); Kind is the
+	// lockfile the user gave (pnpm resolves npm packages, so they differ).
 	Ecosystem string       `json:"ecosystem"`
+	Kind      string       `json:"kind,omitempty"`
 	Changed   []BulkResult `json:"changed"`
 	Added     []ModuleRef  `json:"added"`
 	Removed   []ModuleRef  `json:"removed"`
@@ -37,11 +40,11 @@ func Transitive(t TransitiveResult) string {
 
 	if t.Flat {
 		w("depsound transitive %s: %d version-change(s), %d added, %d removed.",
-			t.Ecosystem, len(t.Changed), len(t.Added), len(t.Removed))
+			t.label(), len(t.Changed), len(t.Added), len(t.Removed))
 		w("  This is the WHOLE resolved set the bump moves (from the lockfile).")
 	} else {
 		w("depsound transitive %s: %d module version-change(s) (%d direct, %d indirect),",
-			t.Ecosystem, len(t.Changed), t.DirectChanged, t.IndirectChanged)
+			t.label(), len(t.Changed), t.DirectChanged, t.IndirectChanged)
 		w("  %d added, %d removed. This is the WHOLE subtree the bump moves, direct AND", len(t.Added), len(t.Removed))
 		w("  indirect (from go.mod incl. // indirect; go.sum is fuller with test-only).")
 	}
@@ -69,6 +72,16 @@ func Transitive(t TransitiveResult) string {
 		w("no version-changes to analyse (only additions/removals above).")
 	}
 	return b.String()
+}
+
+// label names the report by the lockfile the user gave, noting the analysis
+// ecosystem when it differs (pnpm -> npm), so `transitive pnpm` never reads
+// as if it ignored the pnpm argument.
+func (t TransitiveResult) label() string {
+	if t.Kind != "" && t.Kind != t.Ecosystem {
+		return t.Kind + " (" + t.Ecosystem + " packages)"
+	}
+	return t.Ecosystem
 }
 
 // tag labels a module direct/indirect, unless the lockfile is flat (Cargo),
