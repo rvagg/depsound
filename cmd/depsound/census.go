@@ -220,6 +220,7 @@ func censusGHA(cen *output.Census, scoped, art, ref, sub string) error {
 	cen.GHAUsing = a.Using
 	cen.GHAExec = ghapkg.ExecPresent(a)
 	cen.GHANested = a.Uses
+	cen.GHACaps = ghapkg.Capabilities(scoped)
 	cen.Notes = append(cen.Notes, a.Warnings...)
 	return nil
 }

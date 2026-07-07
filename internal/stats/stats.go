@@ -200,6 +200,10 @@ type ActionSection struct {
 	Exec      []manifest.Change `json:"exec,omitempty"`   // pre/post/main/image/using deltas
 	Nested    []string          `json:"nested,omitempty"` // composite `uses:` (transitive)
 	SubPath   string            `json:"subPath,omitempty"`
+	// Caps are the runner powers the code references (grep, evadable lead);
+	// CapsIntroduced is the subset NEW in this bump, the load-bearing delta.
+	Caps           []string `json:"caps,omitempty"`
+	CapsIntroduced []string `json:"capsIntroduced,omitempty"`
 }
 
 // ActionPin is one side's pin: the ref, its immutability tier, the commit.
@@ -426,6 +430,9 @@ func buildAction(in Input) *ActionSection {
 		sec.Exec = ghapkg.ExecDelta(in.OldAction, in.NewAction)
 		sec.Nested = in.NewAction.Uses
 	}
+	// what the executed code reaches (grep of the dist bundle + scripts):
+	// present references and, crucially, which are NEW in this bump
+	sec.Caps, sec.CapsIntroduced = ghapkg.CapabilityDelta(in.OldTree, in.NewTree)
 	return sec
 }
 

@@ -36,6 +36,7 @@ type Census struct {
 	GHAUsing  string            `json:"ghaUsing,omitempty"`
 	GHAExec   []manifest.Change `json:"ghaExec,omitempty"`
 	GHANested []string          `json:"ghaNested,omitempty"`
+	GHACaps   []string          `json:"ghaCaps,omitempty"`
 
 	Deps  []manifest.DepChange `json:"dependencies"`
 	Vulns []osv.Vuln           `json:"vulnerabilities,omitempty"`
@@ -119,6 +120,9 @@ func CensusText(c *Census) string {
 			for _, u := range c.GHANested {
 				w("    %s", taint(u))
 			}
+		}
+		if len(c.GHACaps) > 0 {
+			w("  capabilities the code references (grep, evadable lead): %s", strings.Join(c.GHACaps, "; "))
 		}
 		if c.GHAUsing == "" && len(c.GHAExec) == 0 {
 			w("  no action.yml found at this path")

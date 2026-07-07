@@ -51,6 +51,37 @@ func writeAction(w func(string, ...any), a *stats.ActionSection) {
 			w("    %s", taint(u))
 		}
 	}
+	writeCaps(w, a.Caps, a.CapsIntroduced)
+}
+
+// writeCaps reports the runner powers the executed code references. It is a
+// grep (evadable, a lead not proof), so present-in-both is context; an
+// INTRODUCED capability (new in this bump) is the load-bearing signal, the
+// tj-actions shape of adding a secret+network exfil path.
+func writeCaps(w func(string, ...any), present, introduced []string) {
+	if len(present) == 0 {
+		w("  capabilities referenced: none matched (grep; an obfuscated payload can hide)")
+		return
+	}
+	if len(introduced) > 0 {
+		w("  WARNING capabilities INTRODUCED by this bump (grep, evadable lead; inspect):")
+		for _, c := range introduced {
+			w("    %s", c)
+		}
+	}
+	intro := map[string]bool{}
+	for _, c := range introduced {
+		intro[c] = true
+	}
+	var both []string
+	for _, c := range present {
+		if !intro[c] {
+			both = append(both, c)
+		}
+	}
+	if len(both) > 0 {
+		w("  capabilities present in both versions (context): %s", strings.Join(both, "; "))
+	}
 }
 
 // usingClass collapses a runs.using value to its model class, so a mere

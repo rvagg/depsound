@@ -39,10 +39,10 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 				checked[i] = "action.yml execution model (using, entrypoints, composite uses)"
 			}
 		}
-		// the real GHA risk is what the executed code REACHES, which we do
-		// not inspect yet; name it so the model does not read as covered
+		checked = append(checked, "capability REFERENCES in the executed code (OIDC/secrets/network/step-injection/exec; grep of the dist bundle, evadable)")
+		// we now grep for capability references, but not for intent
 		notChecked = append([]string{
-			"what the action's code REACHES: secrets, GITHUB_TOKEN, OIDC (ACTIONS_ID_TOKEN), network egress, $GITHUB_ENV/$GITHUB_OUTPUT injection",
+			"whether the referenced capabilities are USED MALICIOUSLY (grep finds references, not intent; an obfuscated payload evades it)",
 		}, coverageNotChecked...)
 	}
 	cov := &stats.Coverage{Checked: checked, NotChecked: notChecked}
