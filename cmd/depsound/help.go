@@ -81,7 +81,10 @@ is handled by pairing a lone removed+added as a bump.
   a local PATH
   an https URL (github raw works; a github.com/blob URL is rewritten)
   github:owner/repo@ref[:path]  (API contents; private repos need GITHUB_TOKEN;
-    path defaults to go.mod / Cargo.lock for the ecosystem)`,
+    path defaults to the ecosystem lockfile name)
+No lockfile committed, or adopting a new dep? Generate one with a resolution-
+only command (runs no package code), e.g. npm install --package-lock-only
+--ignore-scripts, then diff. See depsound guide.`,
 
 	"surface": `depsound surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
 

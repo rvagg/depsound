@@ -74,6 +74,21 @@ compat: manifest constraints/exports that can break your build.
 dependencies: deps added/removed/changed, with redirects (git/path/url) flagged.
 Then the known-CVE scan, then the COVERAGE boundary with routed next-steps.
 
+== No lockfile to diff? generate one (no package code runs) ==
+transitive diffs two resolved lockfiles. If a repo commits none, or you are
+ADOPTING a new dep, generate them with a RESOLUTION-ONLY command in a temp
+dir (copy the manifest there so your tree is untouched). These resolve
+versions but run NO package lifecycle code, resolution is not installation,
+so they stay within the "never run package code" line:
+  npm    npm install --package-lock-only --ignore-scripts
+  pnpm   pnpm install --lockfile-only --ignore-scripts
+  cargo  cargo generate-lockfile
+  go     go mod tidy
+Then: depsound transitive <kind> --old=<lockA> --new=<lockB>.
+Adopting a dep: generate one lockfile as-is and one with the dep added; the
+diff is exactly the new subtree you take on (not the deps you already had).
+This uses the REAL resolver, so it is more accurate than any API estimate.
+
 == Machine consumers ==
 --format=json emits the full stats.json contract for every mode (schema in the
 "tool" field); prose framing is for humans, the JSON carries the same facts
