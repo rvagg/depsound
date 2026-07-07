@@ -50,6 +50,41 @@ func Load(dir string) (*Mod, error) {
 	return &Mod{File: f}, nil
 }
 
+// ParseBytes parses go.mod content supplied directly (a file or URL the
+// agent points at for transitive analysis), not extracted from an artifact.
+// Unparseable content is a hard error here: unlike an old published
+// artifact, a go.mod the caller named is expected to be a real one.
+func ParseBytes(name string, b []byte) (*Mod, error) {
+	f, err := modfile.Parse(name, b, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	return &Mod{File: f}, nil
+}
+
+// Require is one resolved requirement. Post-1.17 module-graph pruning puts
+// the full build-relevant set (direct AND indirect) in go.mod's require
+// block, so RequireSet over two go.mod files IS the transitive change set,
+// no lockfile or solver needed.
+type Require struct {
+	Path     string
+	Version  string
+	Indirect bool
+}
+
+// RequireSet returns the FULL require set keyed by module path (direct +
+// indirect), unlike requires() which is direct-only for the compat delta.
+func RequireSet(m *Mod) map[string]Require {
+	out := map[string]Require{}
+	if m == nil || m.File == nil {
+		return out
+	}
+	for _, r := range m.File.Require {
+		out[r.Mod.Path] = Require{Path: r.Mod.Path, Version: r.Mod.Version, Indirect: r.Indirect}
+	}
+	return out
+}
+
 // ConstraintsDelta reports forced-adjacency changes: the go directive
 // (bumps propagate into consumers' go.mod), toolchain, and tool blocks.
 func ConstraintsDelta(a, b *Mod) []manifest.Change {

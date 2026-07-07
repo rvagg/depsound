@@ -39,6 +39,9 @@ usage:
   depsound <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files] [--no-osv]
   depsound <ecosystem>:<name> [version]   [--format=stats|json] [--no-osv] [--cooldown=5d]   # census (version defaults to latest)
   depsound bulk    [--file=list] [--format=stats|json] [--no-osv]   # list on stdin
+  depsound transitive go --old=<go.mod> --new=<go.mod>   # whole subtree a bump drags in
+    --old/--new each accept: a local path, an https URL (github raw works),
+    or github:owner/repo@ref[:path] (API; private repos need GITHUB_TOKEN)
   depsound surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
   depsound show    <ecosystem>:<name> <from> <to> --file=X | --dir=Y | --symbol=Z
 
@@ -99,6 +102,8 @@ func run(args []string) error {
 			return bulkCmd(args[1:])
 		case "census":
 			return censusCmd(args[1:])
+		case "transitive":
+			return transitiveCmd(args[1:])
 		}
 	}
 	// spec alone or spec+version (1-2 positionals) is a census; spec+from+to

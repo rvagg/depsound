@@ -55,7 +55,15 @@ func Bulk(results []BulkResult) string {
 	w("depsound bulk: %d dependencies analysed (cached).", len(results))
 	w("this is a ROUTER: a fired signal is a POINTER to inspect, not a summary.")
 	w("drill any dep with: depsound <eco>:<name> <from> <to>  (now instant, cached)")
+	writeRouter(w, results, false)
+	return b.String()
+}
 
+// writeRouter renders the prioritised signal sections + coverage boundary
+// over a set of analysed deps. Shared by bulk and transitive (the transitive
+// changed-module set IS a bulk list). transitive adjusts the coverage line
+// that would otherwise (wrongly) claim the transitive graph is unchecked.
+func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) {
 	var failed, execHits, genHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
 	digests := map[string]digest{}
 	for _, r := range results {
@@ -136,11 +144,16 @@ func Bulk(results []BulkResult) string {
 	w("=== COVERAGE: heuristic triage, NOT a verdict ===")
 	w("checked: artifact diff, file classes, manifest compat, execution surface,")
 	w("  KNOWN-CVE scan (OSV, backward-looking; blind to novel/injected code).")
-	w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
-	w("  TRANSITIVE deps these bumps pull in; publish provenance. Silence != safe.")
+	if transitive {
+		w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
+		w("  ADDED modules are listed but not diffed; test-only/deeper modules beyond")
+		w("  go.mod's pruned set (go.sum has more); publish provenance. Silence != safe.")
+	} else {
+		w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
+		w("  TRANSITIVE deps these bumps pull in; publish provenance. Silence != safe.")
+	}
 	w("next: for each dep you rely on, intersect the diff with your usage ->")
 	w("  depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
-	return b.String()
 }
 
 func digestOf(s *stats.Stats) digest {
