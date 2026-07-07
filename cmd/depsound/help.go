@@ -51,13 +51,22 @@ straight off a Dependabot title; depsound normalizes them per ecosystem.
   --format=files   the changed-file table (tree-relative paths to grep)
   --no-osv         skip the known-CVE scan`,
 
-	"census": `depsound <ecosystem>:<name> [version] [--cooldown=<days>] [--format=stats|json] [--no-osv]
+	"census": `depsound <ecosystem>:<name> [version] [--transitive] [--cooldown=<days>] [--format=stats|json] [--no-osv]
 
 Vets a SINGLE version in absolute terms: what you sign up for by adopting it
 (no diff). Version defaults to latest; depsound resolves and REPORTS the
-concrete version (agents guess stale versions from weights). --cooldown=<days>
-picks the newest release at least N days old (the pnpm minimumReleaseAge
-posture, so a fresh possibly-compromised release is withheld).`,
+concrete version (agents guess stale versions from weights).
+  --transitive    resolve the FULL transitive footprint via deps.dev (npm and
+                  crates; a deps.dev estimate, not your exact install; for go,
+                  go.mod is the resolved set, use depsound transitive go)
+  --against=<lock>  subtract your current lockfile so the footprint reads as
+                  MARGINAL (new to you / different-version / already-have), not
+                  standalone. Implies --transitive; an upper bound (deps.dev
+                  resolved in isolation). For the exact delta, generate a
+                  current+newdep lockfile and diff it (see depsound guide).
+  --cooldown=<d>  pick the newest release at least d days old (the pnpm
+                  minimumReleaseAge posture; a fresh compromised release is
+                  withheld)`,
 
 	"bulk": `depsound bulk [--file=<list>] [--format=stats|json] [--no-osv]
 

@@ -15,6 +15,7 @@ import (
 	"github.com/rvagg/depsound/internal/cache"
 	"github.com/rvagg/depsound/internal/classify"
 	"github.com/rvagg/depsound/internal/cratepkg"
+	"github.com/rvagg/depsound/internal/depsdev"
 	"github.com/rvagg/depsound/internal/extract"
 	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/ghapkg"
@@ -29,8 +30,8 @@ import (
 // censusCmd vets a SINGLE version in absolute terms: "what am I signing up
 // for if I adopt this". No diff; from=none. The vet-a-virgin-dep mode.
 func censusCmd(args []string) error {
-	cacheDir, format := "", "stats"
-	noOSV := false
+	cacheDir, format, against := "", "stats", ""
+	noOSV, transitive := false, false
 	var cooldown time.Duration
 	var pos []string
 	for _, a := range args {
@@ -39,6 +40,8 @@ func censusCmd(args []string) error {
 			cacheDir = strings.TrimPrefix(a, "--cache-dir=")
 		case strings.HasPrefix(a, "--format="):
 			format = strings.TrimPrefix(a, "--format=")
+		case strings.HasPrefix(a, "--against="):
+			against = strings.TrimPrefix(a, "--against=")
 		case strings.HasPrefix(a, "--cooldown="):
 			d, err := parseCooldown(strings.TrimPrefix(a, "--cooldown="))
 			if err != nil {
@@ -47,12 +50,15 @@ func censusCmd(args []string) error {
 			cooldown = d
 		case a == "--no-osv":
 			noOSV = true
+		case a == "--transitive":
+			transitive = true
 		case strings.HasPrefix(a, "-"):
 			return fmt.Errorf("unknown flag %q", a)
 		default:
 			pos = append(pos, a)
 		}
 	}
+	transitive = transitive || against != "" // --against implies --transitive
 	// version optional: default to latest, because agents guess versions
 	// from stale weights; the tool resolving (and REPORTING) it is better.
 	if len(pos) == 1 {
@@ -71,6 +77,15 @@ func censusCmd(args []string) error {
 		c.Vulns, c.OSVFetchedAt, c.OSVQueried = osv.Present(context.Background(), &http.Client{},
 			censusCacheRoot(cacheDir), c.Ecosystem, c.Name, c.Version)
 	}
+	if transitive {
+		if err := censusResolveSubtree(c); err != nil {
+			fmt.Fprintf(os.Stderr, "depsound: transitive footprint unavailable: %v\n", err)
+		} else if against != "" {
+			if err := censusAnnotateAgainst(c, against); err != nil {
+				fmt.Fprintf(os.Stderr, "depsound: --against ignored: %v\n", err)
+			}
+		}
+	}
 	c.Coverage, c.NextActions = output.CensusGuide(c)
 
 	if format == "json" {
@@ -80,6 +95,101 @@ func censusCmd(args []string) error {
 	}
 	fmt.Print(output.CensusText(c))
 	return nil
+}
+
+// censusResolveSubtree resolves the FULL transitive footprint via deps.dev
+// (the no-lockfile adopt-a-dep case). Populated non-nil on success (even for
+// a zero-dep package) so the report distinguishes "resolved to none" from
+// "not requested".
+func censusResolveSubtree(c *output.Census) error {
+	system, ok := depsdev.System(c.Ecosystem)
+	if !ok {
+		return fmt.Errorf("deps.dev has no resolved graph for %s; go.mod IS the resolved set for go (use depsound transitive go)", c.Ecosystem)
+	}
+	nodes, err := depsdev.Dependencies(context.Background(), &http.Client{}, system, c.Name, c.Version)
+	if err != nil {
+		return err
+	}
+	c.Subtree = []output.SubtreeDep{}
+	for _, n := range nodes {
+		c.Subtree = append(c.Subtree, output.SubtreeDep{Name: n.Name, Version: n.Version, Relation: n.Relation})
+		if n.Relation == "DIRECT" {
+			c.SubtreeDirect++
+		} else {
+			c.SubtreeIndirect++
+		}
+	}
+	return nil
+}
+
+// censusAnnotateAgainst tags each resolved subtree dep against an existing
+// tree (a lockfile the user points at): have (same version) / conflict
+// (present at a different version) / new (absent), so the footprint reads as
+// MARGINAL. deps.dev resolved in isolation, so this is an upper bound.
+func censusAnnotateAgainst(c *output.Census, src string) error {
+	have, err := parseAgainstTree(c.Ecosystem, src)
+	if err != nil {
+		return err
+	}
+	c.Against = true
+	for i := range c.Subtree {
+		d := &c.Subtree[i]
+		versions, nameThere := have[d.Name]
+		switch {
+		case nameThere && versions[d.Version]:
+			d.Status = "have"
+			c.SubtreeHave++
+		case nameThere:
+			d.Status = "conflict"
+			c.SubtreeConflict++
+		default:
+			d.Status = "new"
+			c.SubtreeNew++
+		}
+	}
+	return nil
+}
+
+// parseAgainstTree reads the user's current lockfile into a name -> versions
+// set. For npm it sniffs package-lock.json (JSON) vs pnpm-lock.yaml (YAML).
+func parseAgainstTree(eco, src string) (map[string]map[string]bool, error) {
+	b, err := readSource(src, "")
+	if err != nil {
+		return nil, err
+	}
+	var deps []resolvedDep
+	switch eco {
+	case "npm":
+		if t := bytes.TrimSpace(b); len(t) > 0 && t[0] == '{' {
+			reg, _, e := npmpkg.ParsePackageLock(b)
+			if e != nil {
+				return nil, e
+			}
+			deps = npmLockedToResolved(reg)
+		} else {
+			reg, _, e := npmpkg.ParsePnpmLock(b)
+			if e != nil {
+				return nil, e
+			}
+			deps = npmLockedToResolved(reg)
+		}
+	case "crates":
+		reg, _, e := cratepkg.ParseCargoLock(b)
+		if e != nil {
+			return nil, e
+		}
+		deps = lockedToResolved(reg)
+	default:
+		return nil, fmt.Errorf("--against not supported for %s", eco)
+	}
+	set := map[string]map[string]bool{}
+	for _, d := range deps {
+		if set[d.name] == nil {
+			set[d.name] = map[string]bool{}
+		}
+		set[d.name][d.version] = true
+	}
+	return set, nil
 }
 
 func censusCacheRoot(cacheDir string) string {

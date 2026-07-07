@@ -51,6 +51,21 @@ type Census struct {
 	Resolved string `json:"resolvedFrom,omitempty"`
 	Tree     string `json:"tree,omitempty"`
 
+	// Subtree is the FULL resolved transitive footprint (deps.dev), when
+	// --transitive is requested: a theoretical resolve, the whole set you
+	// would adopt, not just the direct deps shown above.
+	Subtree         []SubtreeDep `json:"subtree,omitempty"`
+	SubtreeDirect   int          `json:"subtreeDirect,omitempty"`
+	SubtreeIndirect int          `json:"subtreeIndirect,omitempty"`
+
+	// Against, set by --against=<lockfile>, subtracts an existing tree so the
+	// footprint reads as MARGINAL (new to you) not standalone. Each subtree
+	// dep is tagged have/conflict/new.
+	Against         bool `json:"against,omitempty"`
+	SubtreeNew      int  `json:"subtreeNew,omitempty"`      // absent from your tree
+	SubtreeConflict int  `json:"subtreeConflict,omitempty"` // present at a DIFFERENT version
+	SubtreeHave     int  `json:"subtreeHave,omitempty"`     // already present, same version
+
 	Coverage    *stats.Coverage    `json:"coverage,omitempty"`
 	NextActions []stats.NextAction `json:"nextActions,omitempty"`
 }
@@ -76,6 +91,61 @@ func pct(n, total int) int {
 
 func (c *Census) hasExec() bool {
 	return len(c.Lifecycle) > 0 || c.BuildRS || c.Cgo || c.ProcMacro || c.Gyp
+}
+
+// SubtreeDep is one node of a resolved transitive footprint (deps.dev).
+// Status is set only under --against: have | conflict | new.
+type SubtreeDep struct {
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Relation string `json:"relation"`         // DIRECT | INDIRECT
+	Status   string `json:"status,omitempty"` // have | conflict | new
+}
+
+// writeSubtree renders the FULL resolved footprint (--transitive). It lists
+// the DIRECT deps (what you add) and counts the indirect (the tail the
+// direct deps drag in), with the whole set in --format=json. Framed as a
+// deps.dev estimate, not the user's exact install.
+func writeSubtree(w func(string, ...any), c *Census) {
+	if c.Subtree == nil {
+		return
+	}
+	w("")
+	if !c.Against {
+		w("transitive footprint if adopted (resolved via deps.dev, an ESTIMATE, not")
+		w("your exact install): %d deps total, %d direct + %d indirect.",
+			len(c.Subtree), c.SubtreeDirect, c.SubtreeIndirect)
+		for _, d := range c.Subtree {
+			if d.Relation == "DIRECT" {
+				w("  direct %s %s", taint(d.Name), taint(d.Version))
+			}
+		}
+		if c.SubtreeIndirect > 0 {
+			w("  (+%d indirect, the tail these pull in; --format=json for the full set)", c.SubtreeIndirect)
+		}
+		return
+	}
+
+	// MARGINAL view: what this adds BEYOND your existing tree. deps.dev
+	// resolved the dep in isolation, so this over-estimates, your install
+	// may dedup more; the exact delta is a generated-lockfile diff.
+	w("marginal footprint vs your tree (deps.dev estimate, an UPPER BOUND; your")
+	w("install may dedup more, the exact delta is a generated-lockfile diff):")
+	w("  %d NEW to your tree, %d at a DIFFERENT version (dup/conflict), %d already have",
+		c.SubtreeNew, c.SubtreeConflict, c.SubtreeHave)
+	for _, d := range c.Subtree {
+		if d.Status == "new" {
+			w("  new       %s %s", taint(d.Name), taint(d.Version))
+		}
+	}
+	for _, d := range c.Subtree {
+		if d.Status == "conflict" {
+			w("  WARNING conflict %s %s (you have a different version)", taint(d.Name), taint(d.Version))
+		}
+	}
+	if c.SubtreeHave > 0 {
+		w("  (%d already in your tree at the same version, no marginal cost)", c.SubtreeHave)
+	}
 }
 
 // CensusText renders the census: what installing this version brings.
@@ -167,6 +237,8 @@ func CensusText(c *Census) string {
 		}
 	}
 
+	writeSubtree(w, c)
+
 	w("")
 	if !c.OSVQueried {
 		w("known-CVE scan (OSV, backward-looking): not queried")
@@ -237,6 +309,12 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 			"how it was published (provenance, maintainer, anomaly)",
 		},
 	}
+	// --transitive resolved the whole subtree, so it is no longer a blind
+	// spot; note it is a deps.dev estimate, not the verified install
+	if c.Subtree != nil {
+		cov.Checked[2] = "the FULL transitive subtree (via deps.dev, an estimate)"
+		cov.NotChecked = cov.NotChecked[1:] // drop the "FULL TRANSITIVE unresolved" line
+	}
 	var na []stats.NextAction
 	if c.hasExec() {
 		// point at the persisted tree, which exists NOW, not a not-yet-built
@@ -249,6 +327,11 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 	if len(c.Vulns) > 0 {
 		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known vulnerabilit(ies) in this version; consider a patched version or an alternative", len(c.Vulns))})
 	}
-	na = append(na, stats.NextAction{Reason: "the direct deps here are the top layer only; the full transitive footprint of a not-yet-adopted dep is not resolved (no depsound pathway yet; once it is in your go.mod/lockfile, `depsound transitive` covers it)"})
+	if c.Subtree == nil {
+		na = append(na, stats.NextAction{Reason: "only the direct deps are shown; resolve the FULL transitive footprint you would adopt",
+			Command: "depsound " + c.Ecosystem + ":" + c.Name + " " + c.Version + " --transitive  (npm/crates; go uses go.mod)"})
+	} else {
+		na = append(na, stats.NextAction{Reason: fmt.Sprintf("the %d-dep subtree is a deps.dev ESTIMATE; your actual install may pin differently. To verify, resolve a real lockfile and diff it (see `depsound guide`)", len(c.Subtree))})
+	}
 	return cov, na
 }

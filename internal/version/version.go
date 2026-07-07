@@ -4,7 +4,7 @@ package version
 
 // Version is the tool version, bumped on release; it also gates workspace
 // reuse and stamps stats.json.
-const Version = "0.17.0"
+const Version = "0.19.0"
 
 // UserAgent is the sole User-Agent for all depsound HTTP requests, derived
 // from Version so it can never disagree with it.
