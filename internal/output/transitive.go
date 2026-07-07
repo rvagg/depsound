@@ -17,12 +17,15 @@ type ModuleRef struct {
 // TransitiveResult is the whole change set a bump drags in: the analysed
 // version-changes (through the bulk router) plus the added/removed modules.
 type TransitiveResult struct {
-	Ecosystem       string       `json:"ecosystem"`
-	Changed         []BulkResult `json:"changed"`
-	Added           []ModuleRef  `json:"added"`
-	Removed         []ModuleRef  `json:"removed"`
-	DirectChanged   int          `json:"directChanged"`
-	IndirectChanged int          `json:"indirectChanged"`
+	Ecosystem string       `json:"ecosystem"`
+	Changed   []BulkResult `json:"changed"`
+	Added     []ModuleRef  `json:"added"`
+	Removed   []ModuleRef  `json:"removed"`
+	// Flat marks a lockfile with no direct/indirect distinction (Cargo.lock),
+	// so the direct/indirect breakdown is suppressed rather than faked.
+	Flat            bool `json:"flat,omitempty"`
+	DirectChanged   int  `json:"directChanged"`
+	IndirectChanged int  `json:"indirectChanged"`
 }
 
 // Transitive renders the change set: the framing (this is the WHOLE subtree,
@@ -32,23 +35,29 @@ func Transitive(t TransitiveResult) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depsound transitive %s: %d module version-change(s) (%d direct, %d indirect),",
-		t.Ecosystem, len(t.Changed), t.DirectChanged, t.IndirectChanged)
-	w("  %d added, %d removed. This is the WHOLE subtree the bump moves, direct AND", len(t.Added), len(t.Removed))
-	w("  indirect (from go.mod incl. // indirect; go.sum is fuller with test-only).")
+	if t.Flat {
+		w("depsound transitive %s: %d version-change(s), %d added, %d removed.",
+			t.Ecosystem, len(t.Changed), len(t.Added), len(t.Removed))
+		w("  This is the WHOLE resolved set the bump moves (from the lockfile).")
+	} else {
+		w("depsound transitive %s: %d module version-change(s) (%d direct, %d indirect),",
+			t.Ecosystem, len(t.Changed), t.DirectChanged, t.IndirectChanged)
+		w("  %d added, %d removed. This is the WHOLE subtree the bump moves, direct AND", len(t.Added), len(t.Removed))
+		w("  indirect (from go.mod incl. // indirect; go.sum is fuller with test-only).")
+	}
 
 	if len(t.Added) > 0 {
 		w("")
 		w("ADDED to your tree (%d) - NEW code, not a diff; census each you rely on:", len(t.Added))
 		for _, m := range t.Added {
-			w("  %s %s%s   depsound %s:%s %s", taint(m.Path), taint(m.To), indirectTag(m.Indirect), t.Ecosystem, taint(m.Path), taint(m.To))
+			w("  %s %s%s   depsound %s:%s %s", taint(m.Path), taint(m.To), t.tag(m.Indirect), t.Ecosystem, taint(m.Path), taint(m.To))
 		}
 	}
 	if len(t.Removed) > 0 {
 		w("")
 		w("REMOVED from your tree (%d) - gone, nothing to fetch:", len(t.Removed))
 		for _, m := range t.Removed {
-			w("  %s %s%s", taint(m.Path), taint(m.From), indirectTag(m.Indirect))
+			w("  %s %s%s", taint(m.Path), taint(m.From), t.tag(m.Indirect))
 		}
 	}
 
@@ -62,7 +71,12 @@ func Transitive(t TransitiveResult) string {
 	return b.String()
 }
 
-func indirectTag(indirect bool) string {
+// tag labels a module direct/indirect, unless the lockfile is flat (Cargo),
+// where the distinction does not exist and would mislead.
+func (t TransitiveResult) tag(indirect bool) string {
+	if t.Flat {
+		return ""
+	}
 	if indirect {
 		return "  [indirect]"
 	}

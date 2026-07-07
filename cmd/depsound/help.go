@@ -20,7 +20,7 @@ const routingTable = `which command when:
   review a GitHub Action bump                depsound gha:owner/repo <from> <to>
   ADOPT a dependency you don't have yet      depsound <eco>:<name> [version]   (census)
   MANY bumps at once (a PR, a batch)         depsound bulk                     (list on stdin)
-  what a go.mod bump drags into your tree     depsound transitive go --old=<go.mod> --new=<go.mod>
+  what a lockfile bump drags into your tree   depsound transitive <go|crates> --old=<lock> --new=<lock>
   a big diff and you know your import paths    depsound surface <eco>:<name> <from> <to> --uses=<import,paths>
   extract ONE file/dir/symbol of a diff        depsound show <eco>:<name> <from> <to> --file=...`
 
@@ -67,16 +67,20 @@ ROUTER: which deps tripped which signals, most-severe first, each a POINTER to
 inspect (drill with the single-pair command, instant once cached). The list is
 yours to supply, from a PR diff, a go.mod diff, etc.`,
 
-	"transitive": `depsound transitive go --old=<go.mod> --new=<go.mod> [--format=stats|json] [--no-osv]
+	"transitive": `depsound transitive <go|crates> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
 
-Resolves the whole subtree a bump drags in by diffing two go.mod files. Post-
-1.17 pruning means go.mod's require block (incl. // indirect) IS the resolved
-set, so no lockfile or solver is needed for Go. Changed modules run through the
-bulk router; added modules are listed (new code, census each); removed are noted.
+Resolves the whole subtree a bump drags in by diffing two resolved lockfiles:
+  go      two go.mod        (the require block incl. // indirect IS the set)
+  crates  two Cargo.lock    (the flat resolved package list)
+  npm     two package-lock.json  (lockfileVersion 2/3, npm 7+; v1 unsupported)
+Changed deps run through the bulk router; added are listed (new code, census
+each); removed are noted. A name carrying multiple versions (Cargo/npm dedup)
+is handled by pairing a lone removed+added as a bump.
 --old/--new each accept:
   a local PATH
   an https URL (github raw works; a github.com/blob URL is rewritten)
-  github:owner/repo@ref[:path]  (API contents; private repos need GITHUB_TOKEN)`,
+  github:owner/repo@ref[:path]  (API contents; private repos need GITHUB_TOKEN;
+    path defaults to go.mod / Cargo.lock for the ecosystem)`,
 
 	"surface": `depsound surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
 

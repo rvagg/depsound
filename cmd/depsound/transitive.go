@@ -9,16 +9,24 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rvagg/depsound/internal/cratepkg"
 	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/gopkg"
+	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/output"
 )
 
-// transitiveCmd resolves the change set a dependency bump drags into the
-// whole tree by diffing two go.mod files. Post-1.17 pruning means go.mod's
-// require block (incl. // indirect) IS the build-relevant resolved set, so
-// no lockfile parser, solver or deps.dev is needed for Go, and the changed
-// modules run through the same bulk router as a hand-supplied list.
+// transitiveEcos maps an ecosystem to how its resolved set is read and the
+// default lockfile name for a github: source. Go's resolved set is go.mod's
+// require block (post-1.17 pruning); Rust's is Cargo.lock's flat package
+// list. npm/pnpm (lockfile) land here too once their parser is wired.
+var transitiveEcos = map[string]string{"go": "go.mod", "crates": "Cargo.lock", "npm": "package-lock.json"}
+
+// transitiveCmd resolves the change set a bump drags into the WHOLE tree by
+// diffing two resolved sets (a go.mod pair, a Cargo.lock pair). The changed
+// deps run through the same bulk router as a hand-supplied list; the shared
+// diff handles multiple versions of one name (npm/Cargo dedup) by pairing a
+// lone removed+added as a bump.
 func transitiveCmd(args []string) error {
 	cacheDir, format := "", "stats"
 	noOSV := false
@@ -42,32 +50,37 @@ func transitiveCmd(args []string) error {
 			pos = append(pos, a)
 		}
 	}
-	if len(pos) != 1 || pos[0] != "go" {
-		return fmt.Errorf("transitive: want `depsound transitive go --old=<go.mod> --new=<go.mod>` (only go supported so far)")
+	if len(pos) != 1 {
+		return fmt.Errorf("transitive: want `depsound transitive <go|crates> --old=<lockfile> --new=<lockfile>`")
+	}
+	eco := pos[0]
+	lockName, ok := transitiveEcos[eco]
+	if !ok {
+		return fmt.Errorf("transitive: unsupported ecosystem %q (supported: go, crates, npm)", eco)
 	}
 	if oldSrc == "" || newSrc == "" {
-		return fmt.Errorf("transitive go needs --old and --new, each a go.mod path or URL")
+		return fmt.Errorf("transitive %s needs --old and --new, each a %s (path, https URL, or github:owner/repo@ref[:path])", eco, lockName)
 	}
 
-	oldMod, err := loadGoMod(oldSrc)
+	oldDeps, err := resolveLock(eco, oldSrc, lockName)
 	if err != nil {
 		return fmt.Errorf("--old: %w", err)
 	}
-	newMod, err := loadGoMod(newSrc)
+	newDeps, err := resolveLock(eco, newSrc, lockName)
 	if err != nil {
 		return fmt.Errorf("--new: %w", err)
 	}
 
-	res := diffRequireSets(gopkg.RequireSet(oldMod), gopkg.RequireSet(newMod))
-
+	res := diffResolved(oldDeps, newDeps)
 	var items []bulkItem
 	for _, c := range res.changed {
-		items = append(items, bulkItem{spec: "go:" + c.Path, from: c.From, to: c.To})
+		items = append(items, bulkItem{spec: eco + ":" + c.Path, from: c.From, to: c.To})
 	}
-	fmt.Fprintf(os.Stderr, "depsound: transitive go: %d changed, %d added, %d removed; analysing changes\n",
-		len(res.changed), len(res.added), len(res.removed))
+	fmt.Fprintf(os.Stderr, "depsound: transitive %s: %d changed, %d added, %d removed; analysing changes\n",
+		eco, len(res.changed), len(res.added), len(res.removed))
 	tr := output.TransitiveResult{
-		Ecosystem:       "go",
+		Ecosystem:       eco,
+		Flat:            eco == "crates" || eco == "npm", // lockfile has no direct/indirect split
 		Changed:         runBulk(cacheDir, items, noOSV),
 		Added:           res.added,
 		Removed:         res.removed,
@@ -84,57 +97,131 @@ func transitiveCmd(args []string) error {
 	return nil
 }
 
+// resolvedDep is one resolved dependency from a lockfile: name + exact
+// version, and whether it is indirect/transitive (Go's // indirect; npm's
+// dev/optional later). Ecosystem-neutral so one diff serves all lockfiles.
+type resolvedDep struct {
+	name, version string
+	indirect      bool
+}
+
+// resolveLock reads a lockfile source and parses it into the resolved set.
+func resolveLock(eco, src, lockName string) ([]resolvedDep, error) {
+	b, err := readSource(src, lockName)
+	if err != nil {
+		return nil, err
+	}
+	switch eco {
+	case "go":
+		m, err := gopkg.ParseBytes(src, b)
+		if err != nil {
+			return nil, err
+		}
+		var out []resolvedDep
+		for _, r := range gopkg.RequireSet(m) {
+			out = append(out, resolvedDep{r.Path, r.Version, r.Indirect})
+		}
+		return out, nil
+	case "crates":
+		reg, _, err := cratepkg.ParseCargoLock(b)
+		if err != nil {
+			return nil, err
+		}
+		var out []resolvedDep
+		for _, c := range reg {
+			out = append(out, resolvedDep{c.Name, c.Version, false})
+		}
+		return out, nil
+	case "npm":
+		reg, _, err := npmpkg.ParsePackageLock(b)
+		if err != nil {
+			return nil, err
+		}
+		var out []resolvedDep
+		for _, d := range reg {
+			out = append(out, resolvedDep{d.Name, d.Version, false})
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("unsupported ecosystem %q", eco)
+}
+
 type requireSetDiff struct {
 	changed                        []output.ModuleRef
 	added, removed                 []output.ModuleRef
 	directChanged, indirectChanged int
 }
 
-// diffRequireSets computes the module-level change set between two resolved
-// require sets: version-changes (analysable), additions (new to the tree)
-// and removals. Output is sorted so runs are deterministic.
-func diffRequireSets(old, niu map[string]gopkg.Require) requireSetDiff {
+// diffResolved computes the module-level change set between two resolved
+// sets. A name may carry MULTIPLE versions (Cargo/npm dedup), so it diffs
+// per-name version SETS: a lone removed+added is a clean bump (analysable),
+// otherwise the extra versions are listed as added/removed. Deterministic.
+func diffResolved(old, niu []resolvedDep) requireSetDiff {
+	oldV, newV := versionsByName(old), versionsByName(niu)
+	names := map[string]bool{}
+	for n := range oldV {
+		names[n] = true
+	}
+	for n := range newV {
+		names[n] = true
+	}
+	sortedNames := make([]string, 0, len(names))
+	for n := range names {
+		sortedNames = append(sortedNames, n)
+	}
+	sort.Strings(sortedNames)
+
 	var d requireSetDiff
-	for path, n := range niu {
-		o, existed := old[path]
+	for _, name := range sortedNames {
+		added := missing(newV[name], oldV[name]) // versions in new, not old
+		removed := missing(oldV[name], newV[name])
 		switch {
-		case !existed:
-			d.added = append(d.added, output.ModuleRef{Path: path, To: n.Version, Indirect: n.Indirect})
-		case o.Version != n.Version:
-			d.changed = append(d.changed, output.ModuleRef{Path: path, From: o.Version, To: n.Version, Indirect: n.Indirect})
-			if n.Indirect {
+		case len(added) == 0 && len(removed) == 0:
+			// unchanged
+		case len(added) == 1 && len(removed) == 1:
+			dep := newV[name][added[0]]
+			d.changed = append(d.changed, output.ModuleRef{Path: name, From: removed[0], To: added[0], Indirect: dep.indirect})
+			if dep.indirect {
 				d.indirectChanged++
 			} else {
 				d.directChanged++
 			}
+		default:
+			for _, v := range added {
+				d.added = append(d.added, output.ModuleRef{Path: name, To: v, Indirect: newV[name][v].indirect})
+			}
+			for _, v := range removed {
+				d.removed = append(d.removed, output.ModuleRef{Path: name, From: v, Indirect: oldV[name][v].indirect})
+			}
 		}
 	}
-	for path, o := range old {
-		if _, ok := niu[path]; !ok {
-			d.removed = append(d.removed, output.ModuleRef{Path: path, From: o.Version, Indirect: o.Indirect})
-		}
-	}
-	byPath := func(s []output.ModuleRef) { sort.Slice(s, func(i, j int) bool { return s[i].Path < s[j].Path }) }
-	byPath(d.changed)
-	byPath(d.added)
-	byPath(d.removed)
 	return d
 }
 
-// loadGoMod reads a go.mod the agent points at, in any of three forms so it
-// need not have the files locally: a local PATH, an https URL (github raw
-// works; a github.com/blob URL is rewritten), or github:owner/repo@ref[:path]
-// (the API contents endpoint, which also works for private repos with a
-// GITHUB_TOKEN). go.mod defaults for the github: path.
-func loadGoMod(src string) (*gopkg.Mod, error) {
-	b, err := readSource(src)
-	if err != nil {
-		return nil, err
+func versionsByName(deps []resolvedDep) map[string]map[string]resolvedDep {
+	out := map[string]map[string]resolvedDep{}
+	for _, d := range deps {
+		if out[d.name] == nil {
+			out[d.name] = map[string]resolvedDep{}
+		}
+		out[d.name][d.version] = d
 	}
-	return gopkg.ParseBytes(src, b)
+	return out
 }
 
-func readSource(src string) ([]byte, error) {
+// missing returns the versions present in a but not b, sorted.
+func missing(a, b map[string]resolvedDep) []string {
+	var out []string
+	for v := range a {
+		if _, ok := b[v]; !ok {
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func readSource(src, defaultFile string) ([]byte, error) {
 	ctx := context.Background()
 	client := &http.Client{}
 	switch {
@@ -142,6 +229,9 @@ func readSource(src string) ([]byte, error) {
 		name, ref, path, err := parseGitHubSpec(strings.TrimPrefix(src, "github:"))
 		if err != nil {
 			return nil, err
+		}
+		if path == "" {
+			path = defaultFile
 		}
 		return fetch.GitHubContents(ctx, client, name, ref, path)
 	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
@@ -151,7 +241,7 @@ func readSource(src string) ([]byte, error) {
 	}
 }
 
-// parseGitHubSpec parses owner/repo@ref[:path] (path defaults to go.mod).
+// parseGitHubSpec parses owner/repo@ref[:path] (path defaulted by caller).
 func parseGitHubSpec(s string) (name, ref, path string, err error) {
 	name, rest, ok := strings.Cut(s, "@")
 	if !ok || name == "" {
