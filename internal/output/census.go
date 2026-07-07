@@ -245,6 +245,6 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 	if len(c.Vulns) > 0 {
 		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known vulnerabilit(ies) in this version; consider a patched version or an alternative", len(c.Vulns))})
 	}
-	na = append(na, stats.NextAction{Reason: "the direct deps here are only the top layer; the transitive footprint is unresolved, expect more"})
+	na = append(na, stats.NextAction{Reason: "the direct deps here are the top layer only; the full transitive footprint of a not-yet-adopted dep is not resolved (no depsound pathway yet; once it is in your go.mod/lockfile, `depsound transitive` covers it)"})
 	return cov, na
 }

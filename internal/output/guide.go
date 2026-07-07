@@ -70,6 +70,13 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		add("compatibility constraints changed; check your usage against the compat section", "")
 	}
 
+	// route the transitive NOT-checked line to a real command (Go only for
+	// now): a bump moves the whole subtree, and we can show it.
+	if s.Package.Ecosystem == "go" {
+		add("this bump moves your whole transitive subtree, not just this module; diff the go.mod pair",
+			"depsound transitive go --old=<base go.mod> --new=<PR go.mod>")
+	}
+
 	// Always last, and always present: reachability is the tool's blind
 	// spot, so the standing next-step is to intersect the diff with actual
 	// usage. This is the anti-closure nudge on an otherwise-quiet result.

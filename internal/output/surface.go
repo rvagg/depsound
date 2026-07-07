@@ -119,13 +119,14 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	// so a small or empty match is not mistaken for low impact.
 	outside := unmatchedCount(results, idx)
 	w("")
-	w("LIMITATIONS (read before trusting a small result):")
+	w("=== COVERAGE: matches by PATH, not reachability; NOT a verdict ===")
+	w("NOT checked (a match is where to LOOK, not proof of impact):")
 	for _, l := range SurfaceLimitations(s.Package.Ecosystem) {
-		w("- %s", l)
+		w("  - %s", l)
 	}
 	if outside > 0 {
-		w("- %d of %d changed files fall outside your units; a small match is", outside, len(idx.Files))
-		w("  not low impact. Review the full diff: depsound %s:%s %s %s",
+		w("  - %d of %d changed files fall outside your units; a small match is", outside, len(idx.Files))
+		w("    not low impact. review the full diff: depsound %s:%s %s %s",
 			s.Package.Ecosystem, taint(s.Package.Name), s.Package.From, s.Package.To)
 	}
 	w("")

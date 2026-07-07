@@ -3,7 +3,6 @@ package stats
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/rvagg/depsound/internal/gitdiff"
@@ -105,8 +104,17 @@ func TestBuild(t *testing.T) {
 	if len(st.Files.ExcludedGen) != 2 {
 		t.Errorf("excluded generated = %v", st.Files.ExcludedGen)
 	}
-	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0], "heuristic classified generated") {
-		t.Errorf("expected the review-surface heuristic disclaimer, got: %v", st.Notes)
+	// the two strongly-generated files carry the Excluded flag (the single
+	// source of truth the "biggest excluded" callout renders from); the
+	// disclaimer is now render-time, not a Note.
+	excl := 0
+	for _, e := range st.Files.Entries {
+		if e.Excluded {
+			excl++
+		}
+	}
+	if excl != 2 {
+		t.Errorf("Excluded entries = %d, want 2 (gen.pb.go + vendor.h)", excl)
 	}
 }
 

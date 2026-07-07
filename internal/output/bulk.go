@@ -175,7 +175,7 @@ func digestOf(s *stats.Stats) digest {
 	d.addExec("proc-macro", r.ProcMacroFrom, r.ProcMacroTo)
 	// a big generated/binary delta is unreviewed surface where a payload can
 	// hide (npm dist/, vendored C); flag it even without a build surface
-	if big := largestExcluded(s.Files.Entries); big.Added+big.Removed >= 100 {
+	if big := largestGenerated(s.Files.Entries); big.Added+big.Removed >= 100 {
 		d.genFile = big.Path
 		d.genDelta = big.Added + big.Removed
 	}

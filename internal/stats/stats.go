@@ -152,10 +152,14 @@ type ClassAgg struct {
 }
 
 type FileEntry struct {
-	Path     string `json:"path"`
-	OldPath  string `json:"oldPath,omitempty"`
-	Status   string `json:"status"`
-	Class    string `json:"class"`
+	Path    string `json:"path"`
+	OldPath string `json:"oldPath,omitempty"`
+	Status  string `json:"status"`
+	Class   string `json:"class"`
+	// Excluded is the SINGLE source of truth for review-surface exclusion
+	// (binary or strongly-classified generated), so every "excluded" claim
+	// in output uses the same definition ReviewFiles counted by.
+	Excluded bool   `json:"excluded,omitempty"`
 	Evidence string `json:"evidence,omitempty"`
 	Added    int    `json:"added"`
 	Removed  int    `json:"removed"`
@@ -342,9 +346,16 @@ func Build(in Input) (*Stats, error) {
 			}
 		}
 
+		// Review surface: exclude only CONFIDENTLY-generated (marker or
+		// suffix) and binary files. Path-only "generated" files stay in,
+		// because a hand-edit or hidden payload under dist/ must not be
+		// silently dropped from the number a reviewer trusts.
+		strongGen := res.Class == classify.Generated && res.Basis.Strong()
+		excluded := d.Binary || strongGen
+
 		e := FileEntry{
 			Path: d.Path, OldPath: d.OldPath, Status: d.Status,
-			Class: string(res.Class), Added: d.Added, Removed: d.Removed,
+			Class: string(res.Class), Excluded: excluded, Added: d.Added, Removed: d.Removed,
 		}
 		// empty only for source, the default class when no rule matches
 		e.Evidence = res.Evidence
@@ -356,12 +367,8 @@ func Build(in Input) (*Stats, error) {
 			s.Files.TrivialChurn++
 		}
 
-		// Review surface: exclude only CONFIDENTLY-generated (marker or
-		// suffix) and binary files. Path-only "generated" files stay in,
-		// because a hand-edit or hidden payload under dist/ must not be
-		// silently dropped from the number a reviewer trusts.
-		if d.Binary || (res.Class == classify.Generated && res.Basis.Strong()) {
-			if res.Class == classify.Generated && res.Basis.Strong() {
+		if excluded {
+			if strongGen {
 				s.Files.ExcludedGen = append(s.Files.ExcludedGen, d.Path)
 			}
 		} else {
@@ -398,14 +405,10 @@ func Build(in Input) (*Stats, error) {
 		return s.Files.ByClass[i].Files > s.Files.ByClass[j].Files
 	})
 
-	// Always disclose the heuristic when the review-surface number leans on
-	// it: a file only APPEARS generated to our classifier, and markers are
-	// attacker-writable. This note rides into agent context (JSON notes).
-	if n := len(s.Files.ExcludedGen); n > 0 {
-		s.Notes = append(s.Notes, fmt.Sprintf(
-			"review surface excludes %d file(s) our heuristic classified generated; this is a GUESS (markers are attacker-writable), inspect them if the change's intent is unclear: %s",
-			n, strings.Join(s.Files.ExcludedGen, ", ")))
-	}
+	// The excluded-file callout (heuristic disclosure, "attacker-writable
+	// GUESS") is rendered once, in the files header, from FileEntry.Excluded,
+	// the same definition ReviewFiles counted by. ExcludedGen stays in JSON
+	// as the structured list; it is not re-narrated here.
 	return s, nil
 }
 
