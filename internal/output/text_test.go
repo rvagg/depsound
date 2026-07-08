@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -64,5 +65,32 @@ func TestTaint(t *testing.T) {
 	got := taint(long)
 	if !strings.HasSuffix(got, "...[truncated]") || strings.ContainsRune(got, '�') {
 		t.Errorf("rune-boundary truncation broken: %q", got)
+	}
+}
+
+func TestESMImportOnly(t *testing.T) {
+	// commander shape: require flips cjs->esm (require breaks), import remains
+	commander := []manifest.ExportChange{
+		{Subpath: ".", Condition: "require", From: "./index.js (cjs)", To: "./index.js (esm)"},
+		{Subpath: ".", Condition: "import", From: "./esm.mjs (esm)", To: "./index.js (esm)"},
+	}
+	if !esmImportOnly(commander) {
+		t.Error("commander cjs->esm require flip should be ESM import-only")
+	}
+	// require removed entirely, import remains
+	removed := []manifest.ExportChange{
+		{Subpath: ".", Condition: "require", From: "./index.js (cjs)", To: ""},
+		{Subpath: ".", Condition: "import", From: "", To: "./index.mjs (esm)"},
+	}
+	if !esmImportOnly(removed) {
+		t.Error("require removed should be ESM import-only")
+	}
+	// dual package (require still resolves to CJS) is NOT import-only
+	dual := []manifest.ExportChange{
+		{Subpath: ".", Condition: "require", From: "./index.cjs (cjs)", To: "./index.cjs (cjs)"},
+		{Subpath: ".", Condition: "import", From: "./index.mjs (esm)", To: "./index.mjs (esm)"},
+	}
+	if esmImportOnly(dual) {
+		t.Error("dual package must not read as ESM import-only")
 	}
 }

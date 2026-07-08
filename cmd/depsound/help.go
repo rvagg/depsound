@@ -52,6 +52,8 @@ var usage = identity + `
 
 ecosystems: npm, go, crates, gha    <lang> for transitive: go, crates, npm, pnpm
 global flags: --format=json  --no-osv  --cache-dir=DIR
+transitive --old/--new (and census --against) take a path, https URL, OR
+  github:owner/repo@ref, so you rarely need to download files yourself.
 per-command detail: ` + "`depsound help <command>`" + `
   <command>: diff, census, bulk, transitive, surface, show, gha
 
@@ -99,6 +101,13 @@ yours to supply, from a PR diff, a go.mod diff, etc.`,
 
 	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
 
+--old/--new take a local PATH, an https URL, OR github:owner/repo@ref, so you
+usually need NOT download the files yourself. Review a PR in one command:
+  depsound transitive go --old=github:OWNER/REPO@BASE_SHA --new=github:OWNER/REPO@HEAD_SHA
+(github: uses the API contents endpoint; the ref path defaults to the
+ecosystem lockfile name; private repos need GITHUB_TOKEN; a github.com/blob or
+raw URL also works.)
+
 Resolves the whole subtree a bump drags in by diffing two resolved lockfiles:
   go      two go.mod        (the require block incl. // indirect IS the set)
   crates  two Cargo.lock    (the flat resolved package list)
@@ -107,11 +116,7 @@ Resolves the whole subtree a bump drags in by diffing two resolved lockfiles:
 Changed deps run through the bulk router; added are listed (new code, census
 each); removed are noted. A name carrying multiple versions (Cargo/npm dedup)
 is handled by pairing a lone removed+added as a bump.
---old/--new each accept:
-  a local PATH
-  an https URL (github raw works; a github.com/blob URL is rewritten)
-  github:owner/repo@ref[:path]  (API contents; private repos need GITHUB_TOKEN;
-    path defaults to the ecosystem lockfile name)
+
 No lockfile committed, or adopting a new dep? Generate one with a resolution-
 only command (runs no package code), e.g. npm install --package-lock-only
 --ignore-scripts, then diff. See depsound guide.`,

@@ -34,6 +34,11 @@ func Text(s *stats.Stats) string {
 			w("    biggest excluded: %s (%s) +%d/-%d; a GUESS (markers are attacker-writable),",
 				taint(big.Path), big.Class, big.Added, big.Removed)
 			w("    inspect if intent is unclear, exclusion is reading-order, not safety")
+			// for npm, dist/ is not incidental output: it IS the published
+			// runtime, the code that runs on import, so it is the thing to read
+			if s.Package.Ecosystem == "npm" && strings.Contains(big.Path, "dist/") {
+				w("    NOTE for npm this dist/ file is the PUBLISHED RUNTIME (runs on import); read it")
+			}
 		}
 	}
 	for _, c := range s.Files.ByClass {
@@ -249,6 +254,12 @@ func compat(s *stats.Stats) []string {
 	for _, c := range s.Compat.Constraints {
 		out = append(out, fmt.Sprintf("%s: %s", taint(c.Key), changeDetail(c)))
 	}
+	// lead the raw exports rows with the plain-language consequence when a
+	// package drops its CJS entry: "ESM import-only" is faster to grasp than
+	// reading a require-condition-goes-blank row.
+	if esmImportOnly(s.Compat.Exports) {
+		out = append(out, "WARNING package is now ESM import-only: require() no longer resolves for \".\" (breaking for CJS consumers)")
+	}
 	for _, e := range s.Compat.Exports {
 		line := fmt.Sprintf("exports %q %s: %s -> %s", taint(e.Subpath), e.Condition, blank(taint(e.From)), blank(taint(e.To)))
 		if e.Note != "" {
@@ -257,6 +268,28 @@ func compat(s *stats.Stats) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// esmImportOnly reports whether require() stopped working for the "." entry
+// while an import still resolves: the CJS entrypoint either vanished or now
+// serves an ESM file (which require() cannot load). This is the single most
+// consumer-breaking exports change, and "ESM import-only" states it plainly.
+// From/To carry a "(cjs)"/"(esm)" format tag from the exports resolver.
+func esmImportOnly(exports []manifest.ExportChange) bool {
+	requireBroken, importPresent := false, false
+	for _, e := range exports {
+		if e.Subpath != "." {
+			continue
+		}
+		if e.Condition == "require" && strings.Contains(e.From, "(cjs)") &&
+			(e.To == "" || strings.Contains(e.To, "(esm)")) {
+			requireBroken = true
+		}
+		if e.Condition == "import" && e.To != "" {
+			importPresent = true
+		}
+	}
+	return requireBroken && importPresent
 }
 
 // Files renders the changed-file table: path, status, class, line delta,

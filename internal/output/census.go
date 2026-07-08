@@ -206,6 +206,9 @@ func CensusText(c *Census) string {
 		if c.BigExcluded != "" {
 			w("       biggest: %s (%s). Exclusion is reading-order, NOT safety,", taint(c.BigExcluded), bytes(c.BigExcludedBytes))
 			w("       an attacker can hide a payload in a generated-classed file.")
+			if c.Ecosystem == "npm" && strings.Contains(c.BigExcluded, "dist/") {
+				w("       for npm this dist/ file is the PUBLISHED RUNTIME (runs on import); read it")
+			}
 		}
 	}
 

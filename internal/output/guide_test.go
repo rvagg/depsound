@@ -16,9 +16,16 @@ func TestGuideCoverageAlwaysPresent(t *testing.T) {
 		t.Fatal("coverage boundary must always be present")
 	}
 	// even a totally quiet report gets the standing surface next-step, so
-	// silence never reads as an all-clear
-	if len(next) != 1 || !strings.Contains(next[0].Command, "surface") {
-		t.Errorf("quiet report next-steps = %+v", next)
+	// silence never reads as an all-clear (a lockfile ecosystem also routes
+	// to transitive, so surface need not be the only step, just present)
+	hasSurface := false
+	for _, a := range next {
+		if strings.Contains(a.Command, "surface") {
+			hasSurface = true
+		}
+	}
+	if !hasSurface {
+		t.Errorf("quiet report must always route to surface: %+v", next)
 	}
 	// reachability must be named in what we do NOT check
 	joined := strings.Join(cov.NotChecked, " ")

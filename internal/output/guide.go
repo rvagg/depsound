@@ -27,6 +27,10 @@ var coverageNotChecked = []string{
 	"how the release was published (provenance, anomaly vs history)",
 }
 
+// transitiveLock names the lockfile each ecosystem's transitive mode diffs,
+// so a single-pair diff can point at it (pnpm shares npm's analysis).
+var transitiveLock = map[string]string{"go": "go.mod", "npm": "package-lock.json", "crates": "Cargo.lock"}
+
 // Guide computes the coverage boundary and directed next-steps for a
 // report. It is deliberately loud about limits: depsound is a heuristic
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
@@ -70,11 +74,12 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		add("compatibility constraints changed; check your usage against the compat section", "")
 	}
 
-	// route the transitive NOT-checked line to a real command (Go only for
-	// now): a bump moves the whole subtree, and we can show it.
-	if s.Package.Ecosystem == "go" {
-		add("this bump moves your whole transitive subtree, not just this module; diff the go.mod pair",
-			"depsound transitive go --old=<base go.mod> --new=<PR go.mod>")
+	// route the transitive NOT-checked line to a real command for every
+	// ecosystem that has a lockfile transitive mode, so a single-pair diff
+	// never leaves the agent thinking the subtree is unreachable.
+	if lock := transitiveLock[s.Package.Ecosystem]; lock != "" {
+		add("this bump moves your whole transitive subtree, not just this dep; diff the lockfile pair (pass github:owner/repo@sha, no download)",
+			fmt.Sprintf("depsound transitive %s --old=<base %s> --new=<PR %s>", s.Package.Ecosystem, lock, lock))
 	}
 
 	// Always last, and always present: reachability is the tool's blind
