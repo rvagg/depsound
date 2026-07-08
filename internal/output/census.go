@@ -66,6 +66,10 @@ type Census struct {
 	SubtreeConflict int  `json:"subtreeConflict,omitempty"` // present at a DIFFERENT version
 	SubtreeHave     int  `json:"subtreeHave,omitempty"`     // already present, same version
 
+	// SubtreeOSVQueried reports whether the batch advisory scan ran across
+	// the subtree (advisories ride on each SubtreeDep).
+	SubtreeOSVQueried bool `json:"subtreeOsvQueried,omitempty"`
+
 	Coverage    *stats.Coverage    `json:"coverage,omitempty"`
 	NextActions []stats.NextAction `json:"nextActions,omitempty"`
 }
@@ -94,12 +98,14 @@ func (c *Census) hasExec() bool {
 }
 
 // SubtreeDep is one node of a resolved transitive footprint (deps.dev).
-// Status is set only under --against: have | conflict | new.
+// Status is set only under --against: have | conflict | new. Advisories are
+// the OSV IDs affecting this node (from a batch scan), if any.
 type SubtreeDep struct {
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Relation string `json:"relation"`         // DIRECT | INDIRECT
-	Status   string `json:"status,omitempty"` // have | conflict | new
+	Name       string   `json:"name"`
+	Version    string   `json:"version"`
+	Relation   string   `json:"relation"`             // DIRECT | INDIRECT
+	Status     string   `json:"status,omitempty"`     // have | conflict | new
+	Advisories []string `json:"advisories,omitempty"` // OSV IDs affecting this dep
 }
 
 // writeSubtree renders the FULL resolved footprint (--transitive). It lists
@@ -145,6 +151,35 @@ func writeSubtree(w func(string, ...any), c *Census) {
 	}
 	if c.SubtreeHave > 0 {
 		w("  (%d already in your tree at the same version, no marginal cost)", c.SubtreeHave)
+	}
+}
+
+// writeSubtreeOSV reports which subtree deps carry known advisories (a batch
+// OSV scan). Backward-looking like all OSV; the signal is the affected set,
+// silence is not safety.
+func writeSubtreeOSV(w func(string, ...any), c *Census) {
+	if c.Subtree == nil || !c.SubtreeOSVQueried {
+		return
+	}
+	var affected []SubtreeDep
+	for _, d := range c.Subtree {
+		if len(d.Advisories) > 0 {
+			affected = append(affected, d)
+		}
+	}
+	w("")
+	if len(affected) == 0 {
+		w("known-CVE scan across the subtree (OSV, backward-looking): none of the %d", len(c.Subtree))
+		w("  deps carry known advisories (says NOTHING about novel/injected code)")
+		return
+	}
+	w("WARNING known advisories across the subtree (OSV): %d of %d deps affected:", len(affected), len(c.Subtree))
+	for _, d := range affected {
+		tag := ""
+		if d.Status == "new" {
+			tag = " [NEW to you]"
+		}
+		w("  %s %s%s: %s", taint(d.Name), taint(d.Version), tag, taint(strings.Join(d.Advisories, ", ")))
 	}
 }
 
@@ -238,6 +273,7 @@ func CensusText(c *Census) string {
 	}
 
 	writeSubtree(w, c)
+	writeSubtreeOSV(w, c)
 
 	w("")
 	if !c.OSVQueried {
@@ -331,7 +367,24 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 		na = append(na, stats.NextAction{Reason: "only the direct deps are shown; resolve the FULL transitive footprint you would adopt",
 			Command: "depsound " + c.Ecosystem + ":" + c.Name + " " + c.Version + " --transitive  (npm/crates; go uses go.mod)"})
 	} else {
-		na = append(na, stats.NextAction{Reason: fmt.Sprintf("the %d-dep subtree is a deps.dev ESTIMATE; your actual install may pin differently. To verify, resolve a real lockfile and diff it (see `depsound guide`)", len(c.Subtree))})
+		// the footprint is resolved but not inspected: point the way to deep-
+		// diving each dep, the flagged ones first, and to looping the set
+		var affected []SubtreeDep
+		for _, d := range c.Subtree {
+			if len(d.Advisories) > 0 {
+				affected = append(affected, d)
+			}
+		}
+		if len(affected) > 0 {
+			na = append(na, stats.NextAction{
+				Reason:  fmt.Sprintf("%d of the %d deps carry known advisories; vet those FIRST (is the flaw reachable from your usage?)", len(affected), len(c.Subtree)),
+				Command: fmt.Sprintf("depsound %s:%s %s   (census each flagged dep; it persists a grepable tree)", c.Ecosystem, affected[0].Name, affected[0].Version)})
+		}
+		na = append(na, stats.NextAction{
+			Reason:  "to inspect ANY dep in the footprint, census it (a grepable tree + its own OSV); the resolve here does not download or diff them",
+			Command: fmt.Sprintf("depsound %s:<name> <version>   (--format=json lists the full set to loop)", c.Ecosystem)})
+		na = append(na, stats.NextAction{
+			Reason: fmt.Sprintf("the %d-dep subtree is a deps.dev ESTIMATE; your install may pin differently. For the exact footprint, generate a real lockfile and diff it (see `depsound guide`)", len(c.Subtree))})
 	}
 	return cov, na
 }

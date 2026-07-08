@@ -97,3 +97,29 @@ func TestOSVVersion(t *testing.T) {
 		t.Error("npm version unchanged")
 	}
 }
+
+func TestBatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// results are aligned with the input queries, in order
+		w.Write([]byte(`{"results":[{"vulns":[{"id":"GHSA-a"}]},{},{"vulns":[{"id":"CVE-1"},{"id":"CVE-2"}]}]}`))
+	}))
+	defer srv.Close()
+	old := batchURL
+	batchURL = srv.URL
+	defer func() { batchURL = old }()
+
+	ids, ok := Batch(context.Background(), srv.Client(), "npm",
+		[]BatchQuery{{"a", "1"}, {"b", "2"}, {"c", "3"}})
+	if !ok {
+		t.Fatal("batch should have queried")
+	}
+	if len(ids) != 3 || len(ids[0]) != 1 || ids[0][0] != "GHSA-a" || len(ids[1]) != 0 || len(ids[2]) != 2 {
+		t.Errorf("ids = %v", ids)
+	}
+}
+
+func TestBatchUnmappedEco(t *testing.T) {
+	if _, ok := Batch(context.Background(), nil, "gha", []BatchQuery{{"a", "1"}}); ok {
+		t.Error("unmapped ecosystem should not query")
+	}
+}

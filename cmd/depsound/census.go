@@ -80,9 +80,14 @@ func censusCmd(args []string) error {
 	if transitive {
 		if err := censusResolveSubtree(c); err != nil {
 			fmt.Fprintf(os.Stderr, "depsound: transitive footprint unavailable: %v\n", err)
-		} else if against != "" {
-			if err := censusAnnotateAgainst(c, against); err != nil {
-				fmt.Fprintf(os.Stderr, "depsound: --against ignored: %v\n", err)
+		} else {
+			if against != "" {
+				if err := censusAnnotateAgainst(c, against); err != nil {
+					fmt.Fprintf(os.Stderr, "depsound: --against ignored: %v\n", err)
+				}
+			}
+			if !noOSV {
+				censusOSVSubtree(c)
 			}
 		}
 	}
@@ -190,6 +195,29 @@ func parseAgainstTree(eco, src string) (map[string]map[string]bool, error) {
 		set[d.name][d.version] = true
 	}
 	return set, nil
+}
+
+// censusOSVSubtree batch-scans the resolved subtree for known advisories
+// (one OSV querybatch call) and annotates each dep. The whole-set cheap
+// security signal on the footprint you would adopt.
+func censusOSVSubtree(c *output.Census) {
+	if len(c.Subtree) == 0 {
+		return
+	}
+	queries := make([]osv.BatchQuery, len(c.Subtree))
+	for i, d := range c.Subtree {
+		queries[i] = osv.BatchQuery{Name: d.Name, Version: d.Version}
+	}
+	ids, ok := osv.Batch(context.Background(), &http.Client{}, c.Ecosystem, queries)
+	if !ok {
+		return
+	}
+	c.SubtreeOSVQueried = true
+	for i := range c.Subtree {
+		if i < len(ids) {
+			c.Subtree[i].Advisories = ids[i]
+		}
+	}
 }
 
 func censusCacheRoot(cacheDir string) string {

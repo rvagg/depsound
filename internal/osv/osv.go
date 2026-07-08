@@ -19,6 +19,8 @@ import (
 
 var apiURL = "https://api.osv.dev/v1/query"
 
+var batchURL = "https://api.osv.dev/v1/querybatch"
+
 const userAgent = version.UserAgent
 
 // cacheTTL bounds staleness: OSV is time-varying (advisories land after a
@@ -135,6 +137,94 @@ func Present(ctx context.Context, client *http.Client, cacheRoot, eco, name, ver
 	}
 	sortVulns(vulns)
 	return vulns, ts.UTC().Format(time.RFC3339), true
+}
+
+// BatchQuery is one package to check in a batch.
+type BatchQuery struct {
+	Name    string
+	Version string
+}
+
+// Batch checks MANY packages in one request (the querybatch endpoint), for
+// scanning a whole transitive subtree cheaply. It returns the advisory IDs
+// per input package (aligned with queries order) and whether the lookup ran.
+// querybatch returns only IDs (not summaries), which is enough to flag which
+// deps carry known advisories. Any failure or unmapped ecosystem degrades to
+// (nil,false): a security lookup must never block a review. Not cached (one
+// call), unlike the per-package query.
+func Batch(ctx context.Context, client *http.Client, eco string, queries []BatchQuery) (ids [][]string, queried bool) {
+	osvEco, ok := Ecosystem(eco)
+	if !ok || len(queries) == 0 {
+		return nil, false
+	}
+	ids = make([][]string, len(queries))
+	const chunk = 1000 // OSV's per-request query limit
+	for start := 0; start < len(queries); start += chunk {
+		end := min(start+chunk, len(queries))
+		got, err := batchOnce(ctx, client, osvEco, queries[start:end])
+		if err != nil {
+			return nil, false
+		}
+		copy(ids[start:end], got)
+	}
+	return ids, true
+}
+
+func batchOnce(ctx context.Context, client *http.Client, osvEco string, queries []BatchQuery) ([][]string, error) {
+	type q struct {
+		Package map[string]string `json:"package"`
+		Version string            `json:"version"`
+	}
+	var reqBody struct {
+		Queries []q `json:"queries"`
+	}
+	for _, x := range queries {
+		reqBody.Queries = append(reqBody.Queries, q{
+			Package: map[string]string{"name": x.Name, "ecosystem": osvEco},
+			Version: osvVersion(osvEco, x.Version),
+		})
+	}
+	body, _ := json.Marshal(reqBody)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, batchURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("OSV querybatch: %s", resp.Status)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Results []struct {
+			Vulns []struct {
+				ID string `json:"id"`
+			} `json:"vulns"`
+		} `json:"results"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return nil, fmt.Errorf("OSV querybatch: malformed response")
+	}
+	ids := make([][]string, len(queries))
+	for i, r := range out.Results {
+		if i >= len(ids) {
+			break
+		}
+		for _, v := range r.Vulns {
+			ids[i] = append(ids[i], v.ID)
+		}
+	}
+	return ids, nil
 }
 
 // index keys vulns by a canonical id that collapses aliases (an advisory

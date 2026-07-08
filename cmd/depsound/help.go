@@ -9,30 +9,51 @@ import (
 // help and guide so the gateway framing never drifts.
 const identity = `depsound: sound the depths of a dependency change. It fetches the published
 artifact, diffs two versions, and lays the evidence out for you to inspect.
-A GATEWAY to review, never a verdict: it surfaces mechanical facts and points
+A gateway to review, never a verdict: it surfaces mechanical facts and points
 you deeper; the judgement is yours. "No flags" is a starting point, never an
 all-clear.`
 
-// routingTable answers the highest-leverage question, which command when.
-// It is the one piece of education a reader most needs before any report.
-const routingTable = `which command when:
-  review a version BUMP you already have    depsound <eco>:<name> <from> <to>
-  review a GitHub Action bump                depsound gha:owner/repo <from> <to>
-  ADOPT a dependency you don't have yet      depsound <eco>:<name> [version]   (census)
-  MANY bumps at once (a PR, a batch)         depsound bulk                     (list on stdin)
-  what a lockfile bump drags into your tree   depsound transitive <go|crates> --old=<lock> --new=<lock>
-  a big diff and you know your import paths    depsound surface <eco>:<name> <from> <to> --uses=<import,paths>
-  extract ONE file/dir/symbol of a diff        depsound show <eco>:<name> <from> <to> --file=...`
+// routingTable answers the highest-leverage question, which command when. It
+// is generated (not hand-spaced) so the command column stays aligned, and
+// uses <spec> = <ecosystem>:<name> to keep the long rows inside 80 columns.
+// Sentence case: this is orientation, not warning; caps do not earn a place.
+var routingTable = buildRouting()
+
+func buildRouting() string {
+	rows := []struct{ when, cmd string }{
+		{"a version bump you have", "depsound <spec> <from> <to>"},
+		{"a GitHub Action bump", "depsound gha:owner/repo <from> <to>"},
+		{"adopting a new dependency", "depsound <spec> [version]  (census)"},
+		{"many bumps at once (a PR)", "depsound bulk  (list on stdin)"},
+		{"a lockfile bump's subtree", "depsound transitive <lang> --old --new"},
+		{"a big diff vs your imports", "depsound surface <spec> <from> <to> --uses"},
+		{"one file/dir of a diff", "depsound show <spec> <from> <to> --file"},
+	}
+	w := 0
+	for _, r := range rows {
+		if len(r.when) > w {
+			w = len(r.when)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("which command when  (<spec> = <ecosystem>:<name>, e.g. npm:commander):\n")
+	for _, r := range rows {
+		fmt.Fprintf(&b, "  %-*s  %s\n", w, r.when, r.cmd)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
 
 // usage is the short top-level help: identity, routing, one line per
 // pathway, and pointers OUT to per-command help and the session guide. The
 // detail lives in help <cmd> and guide, not here.
-const usage = identity + `
+var usage = identity + `
 
 ` + routingTable + `
 
-ecosystems: npm, go, crates, gha     global: --format=json  --no-osv  --cache-dir=DIR
-per-command detail: ` + "`depsound help <command>`" + ` (diff, census, bulk, transitive, surface, show, gha)
+ecosystems: npm, go, crates, gha    <lang> for transitive: go, crates, npm, pnpm
+global flags: --format=json  --no-osv  --cache-dir=DIR
+per-command detail: ` + "`depsound help <command>`" + `
+  <command>: diff, census, bulk, transitive, surface, show, gha
 
 Run ` + "`depsound guide`" + ` once per session: the threat model, how to read the
 output, and the two lenses (security vs compatibility) every review needs.`
