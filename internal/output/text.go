@@ -42,7 +42,7 @@ func Text(s *stats.Stats) string {
 		}
 	}
 	for _, c := range s.Files.ByClass {
-		w("  %-10s %3d files  +%d/-%d", c.Class, c.Files, c.Added, c.Removed)
+		w("  %-10s %3d %-5s  +%d/-%d", c.Class, c.Files, plu(c.Files), c.Added, c.Removed)
 	}
 	if s.Files.TrivialChurn > 0 {
 		w("  trivial churn: %d files with <=2 line deltas", s.Files.TrivialChurn)
@@ -84,9 +84,8 @@ func Text(s *stats.Stats) string {
 	r := s.Runnable
 	if len(r.Lifecycle) == 0 && !r.GypFrom && !r.GypTo && len(r.Bin) == 0 && !r.CgoFrom && !r.CgoTo &&
 		!r.BuildRSFrom && !r.BuildRSTo && !r.ProcMacroFrom && !r.ProcMacroTo {
-		w("execution surface: none (no install/build scripts, cgo, build.rs,")
-		w("  proc-macro, gyp or bin changes). Install/build only; imported")
-		w("  library code still runs when your code calls it.")
+		w("execution surface: none (no lifecycle scripts, cgo, build.rs, proc-macro,")
+		w("  gyp or bin changes). Install/build only; imported code still runs when called.")
 	} else {
 		w("execution surface:")
 		for _, c := range r.Lifecycle {
@@ -168,6 +167,7 @@ func Text(s *stats.Stats) string {
 	for _, n := range s.Notes {
 		w("note: %s", taint(n))
 	}
+	writeProvenance(w, s.Provenance, s.Package.Ecosystem)
 
 	writeGuidance(w, s)
 	writeWorkspaceAndNotice(w, s)
@@ -198,7 +198,7 @@ func writeGuidance(w func(string, ...any), s *stats.Stats) {
 	for _, c := range cov.Checked {
 		w("  + %s", c)
 	}
-	w("NOT checked (so 'no flags' is a STARTING POINT, not an all-clear):")
+	w("NOT checked ('no flags' is a STARTING POINT, not an all-clear):")
 	for _, c := range cov.NotChecked {
 		w("  - %s", c)
 	}
@@ -249,7 +249,7 @@ func largestBy(entries []stats.FileEntry, keep func(stats.FileEntry) bool) stats
 func compat(s *stats.Stats) []string {
 	var out []string
 	if s.Compat.TypeFrom != s.Compat.TypeTo && (s.Compat.TypeFrom != "" || s.Compat.TypeTo != "") {
-		out = append(out, fmt.Sprintf("WARNING type: %s -> %s (module format flip)", taint(s.Compat.TypeFrom), taint(s.Compat.TypeTo)))
+		out = append(out, fmt.Sprintf("WARNING type: %s -> %s", taint(s.Compat.TypeFrom), taint(s.Compat.TypeTo)))
 	}
 	for _, c := range s.Compat.Constraints {
 		out = append(out, fmt.Sprintf("%s: %s", taint(c.Key), changeDetail(c)))
@@ -258,7 +258,7 @@ func compat(s *stats.Stats) []string {
 	// package drops its CJS entry: "ESM import-only" is faster to grasp than
 	// reading a require-condition-goes-blank row.
 	if esmImportOnly(s.Compat.Exports) {
-		out = append(out, "WARNING package is now ESM import-only: require() no longer resolves for \".\" (breaking for CJS consumers)")
+		out = append(out, "WARNING package now ESM import-only: require() no longer resolves \".\" (breaks CJS consumers)")
 	}
 	for _, e := range s.Compat.Exports {
 		line := fmt.Sprintf("exports %q %s: %s -> %s", taint(e.Subpath), e.Condition, blank(taint(e.From)), blank(taint(e.To)))
@@ -268,6 +268,14 @@ func compat(s *stats.Stats) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// plu picks the plural for a file count ("1 file", "2 files").
+func plu(n int) string {
+	if n == 1 {
+		return "file"
+	}
+	return "files"
 }
 
 // esmImportOnly reports whether require() stopped working for the "." entry
@@ -326,15 +334,15 @@ func writeSecurity(w func(string, ...any), sec osv.Assessment) {
 		// the false-security hotspot: an empty result must not read green.
 		// OSV is backward-looking, so "no advisories" is silent on exactly
 		// the novel/injected-code case an attacker relies on
-		w("%s, as of %s: no advisories match either version", cveScanLabel, sec.FetchedAt)
-		w("  (KNOWN CVEs only; says NOTHING about novel or injected malicious code)")
+		w("%s, %s: none for either version", cveScanLabel, sec.FetchedAt)
+		w("  (KNOWN CVEs only; says NOTHING about novel or injected code)")
 		return
 	}
-	w("%s, as of %s:", cveScanLabel, sec.FetchedAt)
+	w("%s, %s:", cveScanLabel, sec.FetchedAt)
 	writeVulns(w, "FIXED by this upgrade", sec.FixedByUpgrade)
 	writeVulns(w, "WARNING still present after upgrade", sec.StillPresent)
 	writeVulns(w, "WARNING introduced by this upgrade", sec.Introduced)
-	w("  (advisory leads, not a gate; confirm relevance to your usage and code paths)")
+	w("  (leads, not a gate; confirm relevance to your usage)")
 }
 
 func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {
@@ -368,12 +376,12 @@ func changeDetail(c manifest.Change) string {
 // cveScanLabel names the OSV lookup for what it is: a backward-looking
 // scan of a KNOWN-vulnerability database. Never "security", which reads as
 // a verdict and goes green exactly when a novel/injected attack lands.
-const cveScanLabel = "known-CVE scan (OSV, backward-looking)"
+const cveScanLabel = "OSV known-CVE scan (backward-looking)"
 
 // bothPresentNote fires when a build-time execution surface is present in
 // BOTH versions: the flag did not flip, but the CODE it executes may still
 // have changed, so it must not read as "static/unchanged".
-const bothPresentNote = "  [present in both versions; the code it executes at build time may still have CHANGED, inspect the diff]"
+const bothPresentNote = "  [present in both; the build-time code it runs may still have CHANGED, inspect the diff]"
 
 // maxTaintedLen bounds attacker-influenced strings in human output;
 // stats.json keeps full fidelity behind JSON's structural escaping.

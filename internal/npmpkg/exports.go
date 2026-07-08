@@ -57,14 +57,13 @@ func ExportsDelta(a, b *Package) ([]ExportChange, error) {
 func note(cond, from, to string) string {
 	switch {
 	case from != "" && to == "" && cond == "require":
-		return "require() no longer resolves: breaking for CJS consumers"
-	case from != "" && to == "" && cond == "import":
-		return "import no longer resolves"
+		return "require() no longer resolves (breaks CJS consumers)"
 	case from == "" && to != "":
 		return "newly exported"
 	case samePathDifferentFormat(from, to):
-		return "module format changed under the same path"
+		return "same path, format flipped"
 	}
+	// import-condition removal needs no note: the value already reads "(unresolvable)"
 	return ""
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/provenance"
 )
 
 // SchemaVersion 2: the npm-specific compat.engines field became the
@@ -35,6 +36,7 @@ type Stats struct {
 	Embedded     []EmbeddedMarker     `json:"embeddedMarkers,omitempty"`
 	Security     Security             `json:"security"`
 	Action       *ActionSection       `json:"action,omitempty"` // gha only
+	Provenance   *provenance.Result   `json:"provenance,omitempty"`
 	Workspace    string               `json:"workspace"`
 	Notes        []string             `json:"notes,omitempty"`
 	// Coverage and NextActions are the anti-false-security spine: what

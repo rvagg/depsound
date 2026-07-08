@@ -8,10 +8,9 @@ import (
 // identity is the one-paragraph statement of what depsound is, reused by
 // help and guide so the gateway framing never drifts.
 const identity = `depsound: sound the depths of a dependency change. It fetches the published
-artifact, diffs two versions, and lays the evidence out for you to inspect.
-A gateway to review, never a verdict: it surfaces mechanical facts and points
-you deeper; the judgement is yours. "No flags" is a starting point, never an
-all-clear.`
+artifact, diffs two versions, and lays out the evidence.
+A gateway to review, never a verdict: it surfaces mechanical facts; the
+judgement is yours. "No flags" is a starting point, never an all-clear.`
 
 // routingTable answers the highest-leverage question, which command when. It
 // is generated (not hand-spaced) so the command column stays aligned, and
@@ -36,7 +35,7 @@ func buildRouting() string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString("which command when  (<spec> = <ecosystem>:<name>, e.g. npm:commander):\n")
+	b.WriteString("which command when (<spec> = <ecosystem>:<name>, e.g. npm:commander):\n")
 	for _, r := range rows {
 		fmt.Fprintf(&b, "  %-*s  %s\n", w, r.when, r.cmd)
 	}
@@ -52,18 +51,18 @@ var usage = identity + `
 
 ecosystems: npm, go, crates, gha    <lang> for transitive: go, crates, npm, pnpm
 global flags: --format=json  --no-osv  --cache-dir=DIR
-transitive --old/--new (and census --against) take a path, https URL, OR
-  github:owner/repo@ref, so you rarely need to download files yourself.
+transitive --old/--new (and census --against) take a path, https URL, or
+  github:owner/repo@ref; downloads are usually unnecessary.
 per-command detail: ` + "`depsound help <command>`" + `
   <command>: diff, census, bulk, transitive, surface, show, gha
 
-Run ` + "`depsound guide`" + ` once per session: the threat model, how to read the
-output, and the two lenses (security vs compatibility) every review needs.`
+Run ` + "`depsound guide`" + ` once per session: threat model, how to read the
+output, and the two lenses (security vs compatibility).`
 
 // cmdHelp holds per-command detail, reached via help <command>, so the top-
 // level help stays a routing table rather than a wall.
 var cmdHelp = map[string]string{
-	"diff": `depsound <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files] [--no-osv]
+	"diff": `depsound <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files] [--no-osv] [--no-provenance]
 
 Diffs two PUBLISHED versions (what installs, not the repo) and reports the
 file diff, execution surface, manifest compatibility, and OSV. Versions come
@@ -78,7 +77,8 @@ straight off a Dependabot title; depsound normalizes them per ecosystem.
 
 Vets a SINGLE version in absolute terms: what you sign up for by adopting it
 (no diff). Version defaults to latest; depsound resolves and REPORTS the
-concrete version (agents guess stale versions from weights).
+concrete version (agents guess stale versions from weights). Publish/anomaly
+provenance runs by default (deps.dev + registry); --no-provenance skips it.
   --transitive    resolve the FULL transitive footprint via deps.dev (npm and
                   crates; a deps.dev estimate, not your exact install; for go,
                   go.mod is the resolved set, use depsound transitive go)

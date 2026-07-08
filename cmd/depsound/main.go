@@ -24,6 +24,7 @@ import (
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/spec"
 	"github.com/rvagg/depsound/internal/stats"
 	"github.com/rvagg/depsound/internal/surface"
@@ -172,13 +173,15 @@ func analyze(cacheDir, specStr, fromArg, toArg string) (*resolved, error) {
 
 func diffCmd(args []string) error {
 	format := "stats"
-	noOSV := false
+	noOSV, noProv := false, false
 	r, _, err := resolveWorkspace(args, func(a string) (bool, error) {
 		switch {
 		case strings.HasPrefix(a, "--format="):
 			format = strings.TrimPrefix(a, "--format=")
 		case a == "--no-osv":
 			noOSV = true
+		case a == "--no-provenance":
+			noProv = true
 		default:
 			return false, nil
 		}
@@ -195,6 +198,12 @@ func diffCmd(args []string) error {
 		client := &http.Client{}
 		r.st.Security = osv.Assess(context.Background(), client, r.cacheRoot,
 			r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.From, r.st.Package.To)
+	}
+	// provenance measures deltas across the bump (to vs from); advisory and
+	// live like OSV, so same report-time-only gating
+	if !noProv && (format == "stats" || format == "json") {
+		r.st.Provenance = provenance.Assess(context.Background(),
+			r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.To, r.st.Package.From)
 	}
 	// coverage + next-steps depend on the merged OSV, so compute here (not
 	// in the deterministic workspace build) and attach for text and JSON

@@ -23,6 +23,7 @@ import (
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/spec"
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -31,7 +32,7 @@ import (
 // for if I adopt this". No diff; from=none. The vet-a-virgin-dep mode.
 func censusCmd(args []string) error {
 	cacheDir, format, against := "", "stats", ""
-	noOSV, transitive := false, false
+	noOSV, transitive, prov := false, false, true // provenance on by default
 	var cooldown time.Duration
 	var pos []string
 	for _, a := range args {
@@ -52,6 +53,10 @@ func censusCmd(args []string) error {
 			noOSV = true
 		case a == "--transitive":
 			transitive = true
+		case a == "--provenance": // accepted; provenance is on by default
+			prov = true
+		case a == "--no-provenance":
+			prov = false
 		case strings.HasPrefix(a, "-"):
 			return fmt.Errorf("unknown flag %q", a)
 		default:
@@ -72,6 +77,9 @@ func censusCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	if cooldown > 0 {
+		c.CooldownDays = int(cooldown.Hours() / 24)
+	}
 
 	if !noOSV {
 		c.Vulns, c.OSVFetchedAt, c.OSVQueried = osv.Present(context.Background(), &http.Client{},
@@ -90,6 +98,9 @@ func censusCmd(args []string) error {
 				censusOSVSubtree(c)
 			}
 		}
+	}
+	if prov {
+		c.Provenance = provenance.Assess(context.Background(), c.Ecosystem, c.Name, c.Version, "")
 	}
 	c.Coverage, c.NextActions = output.CensusGuide(c)
 

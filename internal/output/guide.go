@@ -15,7 +15,7 @@ var coverageChecked = []string{
 	"the published-artifact diff (what installs, not the repo)",
 	"file classification (source vs generated/test/docs, heuristic)",
 	"manifest compatibility: constraints, exports, dependency deltas",
-	"build/install execution surface (lifecycle scripts, build.rs, cgo, gyp, proc-macro)",
+	"execution surface (lifecycle scripts, cgo, build.rs, proc-macro, gyp)",
 	"KNOWN CVEs via OSV (backward-looking)",
 }
 
@@ -48,6 +48,19 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		notChecked = append([]string{
 			"whether the referenced capabilities are USED MALICIOUSLY (grep finds references, not intent; an obfuscated payload evades it)",
 		}, coverageNotChecked...)
+	}
+	// provenance runs by default; when it answered, flip its blind-spot line
+	// to checked (copying, never mutating the shared slices)
+	if s.Provenance != nil && s.Provenance.Queried {
+		nc := make([]string, 0, len(notChecked))
+		for _, x := range notChecked {
+			if !strings.HasPrefix(x, "how the release was published") {
+				nc = append(nc, x)
+			}
+		}
+		notChecked = nc
+		checked = append(append([]string(nil), checked...),
+			"provenance deltas (shallow, history-only, NOT a pass)")
 	}
 	cov := &stats.Coverage{Checked: checked, NotChecked: notChecked}
 

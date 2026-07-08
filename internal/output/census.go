@@ -6,6 +6,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -58,6 +59,10 @@ type Census struct {
 	SubtreeDirect   int          `json:"subtreeDirect,omitempty"`
 	SubtreeIndirect int          `json:"subtreeIndirect,omitempty"`
 
+	// CooldownDays records a --cooldown that was applied to THIS version, so
+	// the subtree render can flag that deps.dev did NOT cooldown the subtree.
+	CooldownDays int `json:"cooldownDays,omitempty"`
+
 	// Against, set by --against=<lockfile>, subtracts an existing tree so the
 	// footprint reads as MARGINAL (new to you) not standalone. Each subtree
 	// dep is tagged have/conflict/new.
@@ -69,6 +74,10 @@ type Census struct {
 	// SubtreeOSVQueried reports whether the batch advisory scan ran across
 	// the subtree (advisories ride on each SubtreeDep).
 	SubtreeOSVQueried bool `json:"subtreeOsvQueried,omitempty"`
+
+	// Provenance is the publish/anomaly panel (deps.dev + registry), when
+	// --provenance is requested: the account-takeover security lens.
+	Provenance *provenance.Result `json:"provenance,omitempty"`
 
 	Coverage    *stats.Coverage    `json:"coverage,omitempty"`
 	NextActions []stats.NextAction `json:"nextActions,omitempty"`
@@ -118,39 +127,133 @@ func writeSubtree(w func(string, ...any), c *Census) {
 	}
 	w("")
 	if !c.Against {
-		w("transitive footprint if adopted (resolved via deps.dev, an ESTIMATE, not")
-		w("your exact install): %d deps total, %d direct + %d indirect.",
+		// direct deps are already enumerated above (with declared ranges and
+		// redirect flags); here just size the whole tree, no re-listing
+		w("transitive footprint (deps.dev estimate, not exact install):")
+		w("  %d deps: %d direct (above) + %d indirect; --format=json shows the full resolved set.",
 			len(c.Subtree), c.SubtreeDirect, c.SubtreeIndirect)
+	} else {
+		// MARGINAL view: what this adds BEYOND your existing tree. deps.dev
+		// resolved the dep in isolation, so this over-estimates, your install
+		// may dedup more; the exact delta is a generated-lockfile diff.
+		w("marginal footprint vs your tree (deps.dev estimate, UPPER BOUND; your install")
+		w("may dedup more, exact delta = a generated-lockfile diff):")
+		w("  %d NEW, %d at a DIFFERENT version (dup/conflict), %d already have",
+			c.SubtreeNew, c.SubtreeConflict, c.SubtreeHave)
 		for _, d := range c.Subtree {
-			if d.Relation == "DIRECT" {
-				w("  direct %s %s", taint(d.Name), taint(d.Version))
+			if d.Status == "new" {
+				w("  new       %s %s", taint(d.Name), taint(d.Version))
 			}
 		}
-		if c.SubtreeIndirect > 0 {
-			w("  (+%d indirect, the tail these pull in; --format=json for the full set)", c.SubtreeIndirect)
+		for _, d := range c.Subtree {
+			if d.Status == "conflict" {
+				w("  WARNING conflict %s %s (you have a different version)", taint(d.Name), taint(d.Version))
+			}
 		}
-		return
+		if c.SubtreeHave > 0 {
+			w("  (%d already in your tree at the same version, no marginal cost)", c.SubtreeHave)
+		}
 	}
 
-	// MARGINAL view: what this adds BEYOND your existing tree. deps.dev
-	// resolved the dep in isolation, so this over-estimates, your install
-	// may dedup more; the exact delta is a generated-lockfile diff.
-	w("marginal footprint vs your tree (deps.dev estimate, an UPPER BOUND; your")
-	w("install may dedup more, the exact delta is a generated-lockfile diff):")
-	w("  %d NEW to your tree, %d at a DIFFERENT version (dup/conflict), %d already have",
-		c.SubtreeNew, c.SubtreeConflict, c.SubtreeHave)
-	for _, d := range c.Subtree {
-		if d.Status == "new" {
-			w("  new       %s %s", taint(d.Name), taint(d.Version))
+	// cooldown does NOT reach the deps.dev resolve: say so, or the withheld-
+	// fresh-release posture reads as covering a tree it does not touch
+	if c.CooldownDays > 0 {
+		w("  NOTE cooldown (%dd) covers THIS version only; the subtree is latest-matching", c.CooldownDays)
+		w("  (deps.dev), NOT cooldown-filtered. Cooldown the whole tree via the resolver")
+		w("  (npm --before, pnpm minimumReleaseAge), then transitive it. See guide.")
+	}
+}
+
+// writeProvenance renders the publish panel for the account-takeover lens.
+// WARNING is reserved for true republish DELTAS (publisher changed, provenance
+// dropped, repo mismatch, yanked); weaker signals are notes; the rest is
+// context. The panel is history-only and shallow, so a clean panel is
+// explicitly NOT a pass.
+func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
+	if p == nil || !p.Queried {
+		return
+	}
+	w("")
+
+	// true deltas a compromise disturbs: worth a WARNING
+	var warn []string
+	if len(p.InstallScriptsAdded) > 0 {
+		warn = append(warn, fmt.Sprintf("install script ADDED since %s: %s (runs on npm install; read it)", p.PrevVersion, strings.Join(p.InstallScriptsAdded, ", ")))
+	}
+	if len(p.InstallScriptsChanged) > 0 {
+		warn = append(warn, fmt.Sprintf("install script CHANGED since %s: %s (re-read it)", p.PrevVersion, strings.Join(p.InstallScriptsChanged, ", ")))
+	}
+	if p.MaintainerChanged {
+		warn = append(warn, fmt.Sprintf("publisher CHANGED to %s (not %s's); the takeover tell", p.Publisher, p.PrevVersion))
+	}
+	if p.AttestationDropped {
+		warn = append(warn, fmt.Sprintf("attestation DROPPED (%s had one); published off the trusted pipeline?", p.PrevVersion))
+	}
+	if p.RepoMismatch {
+		warn = append(warn, fmt.Sprintf("repo MISMATCH: claims %s, deps.dev source %s", p.ClaimedRepo, p.SourceRepo))
+	}
+	if p.Yanked {
+		warn = append(warn, "YANKED from the registry")
+	}
+
+	// weaker/ambiguous signals: a note, not an alarm (size churns, dormancy
+	// and deprecation are usually benign; state the fact, not a verdict)
+	var note []string
+	switch p.Freshness {
+	case "under-day":
+		note = append(note, "published <24h ago, the hottest window for a malicious republish; prefer --cooldown")
+	case "fresh":
+		note = append(note, fmt.Sprintf("published %dd ago, still fresh (the catch/yank window); --cooldown enforces a min age", p.AgeDays))
+	}
+	if p.SizeJump {
+		note = append(note, fmt.Sprintf("size %s, up from %s at %s (%.1fx), usually a restructure; skim the files if unexpected", bytes(p.Size), bytes(p.PrevSize), p.PrevVersion, float64(p.Size)/float64(p.PrevSize)))
+	}
+	if p.DormancyBreak {
+		note = append(note, fmt.Sprintf("first release in %dd (long-dormant); a takeover vector but also normal maintenance, confirm who/why", p.GapDays))
+	}
+	if p.Deprecated {
+		note = append(note, "DEPRECATED by the registry (maintenance signal, not compromise)")
+	}
+
+	w("provenance (deltas vs history; not a verdict):")
+	for _, a := range warn {
+		w("  WARNING %s", taint(a))
+	}
+	for _, n := range note {
+		w("  note: %s", taint(n))
+	}
+	if len(warn) == 0 {
+		w("  no deltas tripped; shallow history-only checks: NOT a pass, read the code.")
+	}
+
+	// context facts, always
+	if p.PublishedAt != "" {
+		who := ""
+		if p.Publisher != "" {
+			who = " by " + taint(p.Publisher)
+			if strings.Contains(p.Publisher, "GitHub Actions") {
+				who += " (CI)"
+			} else if !p.MaintainerChanged && p.PrevVersion != "" {
+				who += " (same as prior)"
+			}
+		}
+		w("  published %s (%dd ago)%s", p.PublishedAt, p.AgeDays, who)
+	}
+	if eco == "npm" {
+		if p.Attestation {
+			w("  npm provenance: attestation PRESENT (build traced to source)")
+		} else {
+			w("  npm provenance: none (common; not a signal alone)")
 		}
 	}
-	for _, d := range c.Subtree {
-		if d.Status == "conflict" {
-			w("  WARNING conflict %s %s (you have a different version)", taint(d.Name), taint(d.Version))
-		}
+	if p.SourceRepo != "" && !p.RepoMismatch {
+		w("  source repo: %s", taint(p.SourceRepo))
 	}
-	if c.SubtreeHave > 0 {
-		w("  (%d already in your tree at the same version, no marginal cost)", c.SubtreeHave)
+	if p.Scorecard > 0 {
+		w("  OpenSSF scorecard %.1f/10 (release hygiene, not trust)", p.Scorecard)
+	}
+	if p.Note != "" {
+		w("  note: %s", p.Note)
 	}
 }
 
@@ -169,11 +272,11 @@ func writeSubtreeOSV(w func(string, ...any), c *Census) {
 	}
 	w("")
 	if len(affected) == 0 {
-		w("known-CVE scan across the subtree (OSV, backward-looking): none of the %d", len(c.Subtree))
-		w("  deps carry known advisories (says NOTHING about novel/injected code)")
+		w("OSV across the subtree (backward-looking): 0 of %d deps affected", len(c.Subtree))
+		w("  (KNOWN CVEs only; says NOTHING about novel/injected code)")
 		return
 	}
-	w("WARNING known advisories across the subtree (OSV): %d of %d deps affected:", len(affected), len(c.Subtree))
+	w("WARNING OSV subtree scan: %d of %d deps carry known advisories:", len(affected), len(c.Subtree))
 	for _, d := range affected {
 		tag := ""
 		if d.Status == "new" {
@@ -188,14 +291,14 @@ func CensusText(c *Census) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depsound census %s:%s %s  (footprint if you adopt it; not a diff)", c.Ecosystem, taint(c.Name), taint(c.Version))
+	w("depsound census %s:%s %s  (adoption footprint; not a diff)", c.Ecosystem, taint(c.Name), taint(c.Version))
 	if c.Resolved != "" {
 		w("resolved: %s", taint(c.Resolved))
 	}
 	w("")
 	w("artifact: %d files, %s", c.Files, bytes(c.Bytes))
 	for _, cl := range c.ByClass {
-		w("  %-10s %d files", cl.Class, cl.Files)
+		w("  %-10s %d %s", cl.Class, cl.Files, plu(cl.Files))
 	}
 	// the census equivalent of the diff's payload-highway note: name the
 	// biggest excluded file and how much of the artifact is unreviewed, so
@@ -236,9 +339,8 @@ func CensusText(c *Census) string {
 			w("  no action.yml found at this path")
 		}
 	} else if !c.hasExec() {
-		w("install/build execution surface: none declared (no lifecycle scripts, cgo,")
-		w("  build.rs, proc-macro, gyp). NOTE: this is install/build only; the library")
-		w("  code still runs when your code imports and calls it.")
+		w("execution surface: none declared (no lifecycle scripts, cgo, build.rs,")
+		w("  proc-macro, gyp). Install/build only; imported code still runs when called.")
 	} else {
 		w("WARNING execution surface (runs code on install/build):")
 		for _, l := range c.Lifecycle {
@@ -262,9 +364,15 @@ func CensusText(c *Census) string {
 	if len(c.Deps) == 0 {
 		w("direct dependencies: none")
 	} else {
-		w("direct dependencies (%d) you would also pull in:", len(c.Deps))
+		w("direct dependencies (%d):", len(c.Deps))
 		for _, d := range c.Deps {
-			line := fmt.Sprintf("  %s %s", d.Section, taint(d.Name))
+			// the header already says "dependencies"; only the exceptional
+			// sections (peer/optional/replace) earn a per-line label
+			tag := ""
+			if d.Section != "dependencies" && d.Section != "require" {
+				tag = strings.TrimSuffix(d.Section, "Dependencies") + " "
+			}
+			line := fmt.Sprintf("  %s%s", tag, taint(d.Name))
 			if d.To != "" {
 				line += " " + taint(d.To)
 			}
@@ -277,15 +385,16 @@ func CensusText(c *Census) string {
 
 	writeSubtree(w, c)
 	writeSubtreeOSV(w, c)
+	writeProvenance(w, c.Provenance, c.Ecosystem)
 
 	w("")
 	if !c.OSVQueried {
-		w("known-CVE scan (OSV, backward-looking): not queried")
+		w("OSV known-CVE scan (backward-looking): not queried")
 	} else if len(c.Vulns) == 0 {
-		w("known-CVE scan (OSV, backward-looking), as of %s: no advisories for this version", c.OSVFetchedAt)
-		w("  (KNOWN CVEs only; says NOTHING about novel or injected malicious code)")
+		w("OSV known-CVE scan (backward-looking), %s: none for this version", c.OSVFetchedAt)
+		w("  (KNOWN CVEs only; says NOTHING about novel or injected code)")
 	} else {
-		w("WARNING known-CVE scan (OSV, backward-looking), as of %s: %d advisor(ies) for this version:", c.OSVFetchedAt, len(c.Vulns))
+		w("WARNING OSV known-CVE scan (backward-looking), %s: %d for this version:", c.OSVFetchedAt, len(c.Vulns))
 		for _, v := range c.Vulns {
 			line := "  " + taint(v.ID)
 			if len(v.Aliases) > 0 {
@@ -308,7 +417,7 @@ func CensusText(c *Census) string {
 		for _, x := range c.Coverage.Checked {
 			w("  + %s", x)
 		}
-		w("NOT checked (adopting a dep is a judgement this does not make for you):")
+		w("NOT checked (your judgement, not the tool's):")
 		for _, x := range c.Coverage.NotChecked {
 			w("  - %s", x)
 		}
@@ -337,23 +446,28 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 	cov := &stats.Coverage{
 		Checked: []string{
 			"the published artifact (files, size, classes)",
-			"declared execution surface (install/build scripts, cgo, proc-macro, gyp)",
+			"execution surface (lifecycle scripts, cgo, build.rs, proc-macro, gyp)",
 			"declared DIRECT dependencies",
-			"KNOWN CVEs for this version (OSV, backward-looking)",
-		},
-		NotChecked: []string{
-			"the FULL TRANSITIVE subtree you adopt (only direct deps shown here)",
-			"whether you actually NEED this dependency, or a lighter alternative exists",
-			"what the code DOES (behaviour, quality, maintenance)",
-			"how it was published (provenance, maintainer, anomaly)",
+			"KNOWN CVEs via OSV (backward-looking)",
 		},
 	}
 	// --transitive resolved the whole subtree, so it is no longer a blind
 	// spot; note it is a deps.dev estimate, not the verified install
 	if c.Subtree != nil {
-		cov.Checked[2] = "the FULL transitive subtree (via deps.dev, an estimate)"
-		cov.NotChecked = cov.NotChecked[1:] // drop the "FULL TRANSITIVE unresolved" line
+		cov.Checked[2] = "FULL transitive subtree (via deps.dev estimate)"
+	} else {
+		cov.NotChecked = append(cov.NotChecked, "the FULL TRANSITIVE subtree you adopt (only direct deps shown here)")
 	}
+	// provenance runs by default; when it answered, its blind spot flips
+	if c.Provenance != nil && c.Provenance.Queried {
+		cov.Checked = append(cov.Checked, "provenance deltas (shallow, history-only, NOT a pass)")
+	} else {
+		cov.NotChecked = append(cov.NotChecked, "how it was published (provenance, maintainer, anomaly)")
+	}
+	cov.NotChecked = append(cov.NotChecked,
+		"whether you NEED this dependency or a lighter alternative exists",
+		"what the code DOES (behaviour, quality, maintenance)",
+	)
 	var na []stats.NextAction
 	if c.hasExec() {
 		// point at the persisted tree, which exists NOW, not a not-yet-built
@@ -364,7 +478,7 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 			Command: "read the scripts/build files they invoke in the package tree: " + c.Tree})
 	}
 	if len(c.Vulns) > 0 {
-		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known vulnerabilit(ies) in this version; consider a patched version or an alternative", len(c.Vulns))})
+		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known CVEs in this version; consider a patched version or alternative", len(c.Vulns))})
 	}
 	if c.Subtree == nil {
 		na = append(na, stats.NextAction{Reason: "only the direct deps are shown; resolve the FULL transitive footprint you would adopt",
@@ -380,14 +494,14 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 		}
 		if len(affected) > 0 {
 			na = append(na, stats.NextAction{
-				Reason:  fmt.Sprintf("%d of the %d deps carry known advisories; vet those FIRST (is the flaw reachable from your usage?)", len(affected), len(c.Subtree)),
-				Command: fmt.Sprintf("depsound %s:%s %s   (census each flagged dep; it persists a grepable tree)", c.Ecosystem, affected[0].Name, affected[0].Version)})
+				Reason:  fmt.Sprintf("%d of %d deps carry known advisories; vet those FIRST (reachable from your usage?)", len(affected), len(c.Subtree)),
+				Command: fmt.Sprintf("depsound %s:%s %s   (censuses to a grepable tree)", c.Ecosystem, affected[0].Name, affected[0].Version)})
 		}
 		na = append(na, stats.NextAction{
-			Reason:  "to inspect ANY dep in the footprint, census it (a grepable tree + its own OSV); the resolve here does not download or diff them",
-			Command: fmt.Sprintf("depsound %s:<name> <version>   (--format=json lists the full set to loop)", c.Ecosystem)})
+			Reason:  "inspect any dep: census it (grepable tree + OSV); resolving here downloads nothing",
+			Command: fmt.Sprintf("depsound %s:<name> <version>   (--format=json for the full list)", c.Ecosystem)})
 		na = append(na, stats.NextAction{
-			Reason: fmt.Sprintf("the %d-dep subtree is a deps.dev ESTIMATE; your install may pin differently. For the exact footprint, generate a real lockfile and diff it (see `depsound guide`)", len(c.Subtree))})
+			Reason: fmt.Sprintf("the %d-dep subtree is a deps.dev ESTIMATE; for the exact set, generate a lockfile and diff it (see `depsound guide`)", len(c.Subtree))})
 	}
 	return cov, na
 }
