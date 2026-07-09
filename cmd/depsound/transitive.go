@@ -91,8 +91,8 @@ func transitiveCmd(args []string) error {
 	tr := output.TransitiveResult{
 		Ecosystem:       te.analysis,
 		Kind:            kind,
-		Flat:            te.analysis != "go", // only go.mod carries direct/indirect
-		Changed:         runBulk(cacheDir, items, noOSV),
+		Flat:            te.analysis != "go",                // only go.mod carries direct/indirect
+		Changed:         runBulk(cacheDir, items, noOSV, 0), // lockfile versions are already resolved
 		Added:           res.added,
 		Removed:         res.removed,
 		DirectChanged:   res.directChanged,

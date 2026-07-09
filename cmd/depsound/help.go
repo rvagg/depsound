@@ -98,13 +98,14 @@ guess stale versions from weights). Publish/anomaly provenance runs by default
                   minimumReleaseAge posture; a fresh compromised release is
                   withheld)`,
 
-	"bulk": `depsound bulk [--file=<list>] [--format=stats|json] [--no-osv]
+	"bulk": `depsound bulk [--file=<list>] [--cooldown=<days>] [--format=stats|json] [--no-osv]
 
 Runs the per-pair analysis over a LIST of bumps (one "<eco>:<name> <from> <to>"
 per line, or a JSON array) from stdin or --file, and renders a prioritized
 ROUTER: which deps tripped which signals, most-severe first, each a POINTER to
 inspect (drill with the single-pair command, instant once cached). The list is
-yours to supply, from a PR diff, a go.mod diff, etc.`,
+yours to supply, from a PR diff, a go.mod diff, etc. A from/to may be a semver
+range; --cooldown applies to the whole list (see help diff).`,
 
 	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
 

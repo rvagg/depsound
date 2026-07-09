@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
@@ -25,6 +26,7 @@ const bulkConcurrency = 4
 func bulkCmd(args []string) error {
 	cacheDir, format, inputFile := "", "stats", ""
 	noOSV := false
+	var cooldown time.Duration
 	var pos []string
 	for _, a := range args {
 		switch {
@@ -34,6 +36,12 @@ func bulkCmd(args []string) error {
 			format = strings.TrimPrefix(a, "--format=")
 		case strings.HasPrefix(a, "--file="):
 			inputFile = strings.TrimPrefix(a, "--file=")
+		case strings.HasPrefix(a, "--cooldown="):
+			d, err := parseCooldown(strings.TrimPrefix(a, "--cooldown="))
+			if err != nil {
+				return err
+			}
+			cooldown = d
 		case a == "--no-osv":
 			noOSV = true
 		case strings.HasPrefix(a, "-"):
@@ -51,7 +59,7 @@ func bulkCmd(args []string) error {
 		return fmt.Errorf("bulk needs `<eco>:<name> <from> <to>` lines (or a JSON array) on stdin or --file=")
 	}
 
-	results := runBulk(cacheDir, items, noOSV)
+	results := runBulk(cacheDir, items, noOSV, cooldown)
 
 	if format == "json" {
 		enc := json.NewEncoder(os.Stdout)
@@ -134,7 +142,7 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 
 // runBulk fans analyze()+OSV over the list, bounded-parallel, preserving
 // input order in the results.
-func runBulk(cacheDir string, items []bulkItem, noOSV bool) []output.BulkResult {
+func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Duration) []output.BulkResult {
 	results := make([]output.BulkResult, len(items))
 	sem := make(chan struct{}, bulkConcurrency)
 	var wg sync.WaitGroup
@@ -145,7 +153,7 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool) []output.BulkResult 
 			defer wg.Done()
 			defer func() { <-sem }()
 			ref := it.spec + " " + it.from + " -> " + it.to
-			r, err := analyze(cacheDir, it.spec, it.from, it.to, 0)
+			r, err := analyze(cacheDir, it.spec, it.from, it.to, cooldown)
 			if err != nil {
 				results[i] = output.BulkResult{Ref: ref, Err: err.Error()}
 				return
