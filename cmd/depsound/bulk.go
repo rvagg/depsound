@@ -145,7 +145,7 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool) []output.BulkResult 
 			defer wg.Done()
 			defer func() { <-sem }()
 			ref := it.spec + " " + it.from + " -> " + it.to
-			r, err := analyze(cacheDir, it.spec, it.from, it.to)
+			r, err := analyze(cacheDir, it.spec, it.from, it.to, 0)
 			if err != nil {
 				results[i] = output.BulkResult{Ref: ref, Err: err.Error()}
 				return

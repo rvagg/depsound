@@ -25,6 +25,16 @@ import (
 // bump, per the evolution rule).
 const SchemaVersion = 2
 
+// Resolution records how a semver-range or "latest" version ARG became the
+// concrete version reviewed, and, for the to side, the satisfying versions
+// newer than it, which a consumer with a shorter or no cooldown installs
+// instead and which this review did not cover.
+type Resolution struct {
+	FromSpec string   `json:"fromSpec,omitempty"` // raw from arg, if it was a range/latest
+	ToSpec   string   `json:"toSpec,omitempty"`   // raw to arg, if it was a range/latest
+	ToNewer  []string `json:"toNewer,omitempty"`  // satisfying versions newer than the resolved to
+}
+
 type Stats struct {
 	Tool         Tool                 `json:"tool"`
 	Package      PkgRef               `json:"package"`
@@ -37,6 +47,7 @@ type Stats struct {
 	Security     Security             `json:"security"`
 	Action       *ActionSection       `json:"action,omitempty"` // gha only
 	Provenance   *provenance.Result   `json:"provenance,omitempty"`
+	Resolution   *Resolution          `json:"resolution,omitempty"`
 	Workspace    string               `json:"workspace"`
 	Notes        []string             `json:"notes,omitempty"`
 	// Coverage and NextActions are the anti-false-security spine: what

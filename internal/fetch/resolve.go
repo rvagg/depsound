@@ -15,11 +15,16 @@ import (
 
 // Resolved is a concrete version resolution with its publish time (zero if
 // the registry did not give one) and a note if a cooldown skipped newer
-// versions.
+// versions. When the request was a semver RANGE, Range holds it and Newer is
+// the set of satisfying versions newer than Version, which a consumer with a
+// shorter or no cooldown would install instead and which this review did not
+// cover.
 type Resolved struct {
 	Version   string
 	Published time.Time
 	Note      string
+	Range     string
+	Newer     []string
 }
 
 // ResolveVersion turns "latest" or "" into a concrete version. With
@@ -29,21 +34,29 @@ type Resolved struct {
 // version fresh enough to be an uncaught compromise). Concrete inputs pass
 // through unchanged so caching keys on a real version, never "latest".
 func ResolveVersion(ctx context.Context, client *http.Client, eco, name, req string, cooldown time.Duration) (Resolved, error) {
-	if req != "" && req != "latest" {
+	if req != "" && req != "latest" && !isRange(req) {
 		return Resolved{Version: req}, nil
+	}
+	if isRange(req) {
+		if eco == "go" {
+			return Resolved{}, fmt.Errorf("go uses exact versions (MVS), not a range like %q", req)
+		}
+		if !rangeResolvable(req) {
+			return Resolved{}, fmt.Errorf("range %q is too complex to resolve; pass an exact version", req)
+		}
 	}
 	switch eco {
 	case "npm":
-		return resolveNPM(ctx, client, name, cooldown)
+		return resolveNPM(ctx, client, name, req, cooldown)
 	case "go":
 		return resolveGo(ctx, client, name, cooldown)
 	case "crates":
-		return resolveCrate(ctx, client, name, cooldown)
+		return resolveCrate(ctx, client, name, req, cooldown)
 	}
 	return Resolved{}, fmt.Errorf("latest resolution unsupported for ecosystem %q", eco)
 }
 
-func resolveNPM(ctx context.Context, client *http.Client, name string, cooldown time.Duration) (Resolved, error) {
+func resolveNPM(ctx context.Context, client *http.Client, name, req string, cooldown time.Duration) (Resolved, error) {
 	var doc struct {
 		DistTags map[string]string          `json:"dist-tags"`
 		Time     map[string]string          `json:"time"`
@@ -51,6 +64,13 @@ func resolveNPM(ctx context.Context, client *http.Client, name string, cooldown 
 	}
 	if err := getJSON(ctx, client, npmRegistry+"/"+url.PathEscape(name), &doc); err != nil {
 		return Resolved{}, fmt.Errorf("npm:%s resolve: %w", name, err)
+	}
+	if isRange(req) {
+		cand := make([]candidate, 0, len(doc.Versions))
+		for v := range doc.Versions {
+			cand = append(cand, candidate{v, parseTime(doc.Time[v])})
+		}
+		return pickRange(cand, req, cooldown)
 	}
 	if cooldown == 0 {
 		v := doc.DistTags["latest"]
@@ -103,7 +123,7 @@ func resolveGo(ctx context.Context, client *http.Client, mod string, cooldown ti
 	return pickCooldown(cand, cooldown)
 }
 
-func resolveCrate(ctx context.Context, client *http.Client, name string, cooldown time.Duration) (Resolved, error) {
+func resolveCrate(ctx context.Context, client *http.Client, name, req string, cooldown time.Duration) (Resolved, error) {
 	var doc struct {
 		Crate struct {
 			MaxStable string `json:"max_stable_version"`
@@ -116,6 +136,15 @@ func resolveCrate(ctx context.Context, client *http.Client, name string, cooldow
 	}
 	if err := getJSON(ctx, client, "https://crates.io/api/v1/crates/"+url.PathEscape(name), &doc); err != nil {
 		return Resolved{}, fmt.Errorf("crates:%s resolve: %w", name, err)
+	}
+	if isRange(req) {
+		var cand []candidate
+		for _, v := range doc.Versions {
+			if !v.Yanked {
+				cand = append(cand, candidate{v.Num, v.CreatedAt})
+			}
+		}
+		return pickRange(cand, req, cooldown)
 	}
 	if cooldown == 0 {
 		if doc.Crate.MaxStable == "" {
@@ -174,6 +203,43 @@ func pickCooldown(cand []candidate, cooldown time.Duration) (Resolved, error) {
 		note = fmt.Sprintf("cooldown (%s) withheld %d newer version(s)", cooldown, skipped)
 	}
 	return Resolved{Version: best.version, Published: best.published, Note: note}, nil
+}
+
+// pickRange resolves a semver range to one concrete version: the highest
+// satisfying version, or (with a cooldown) the highest satisfying version old
+// enough. Newer records the satisfying versions above the pick, the set a
+// less-cooled-down consumer would install instead.
+func pickRange(cand []candidate, rng string, cooldown time.Duration) (Resolved, error) {
+	sat := make([]candidate, 0, len(cand))
+	all := make([]string, 0, len(cand))
+	for _, c := range cand {
+		if satisfies(c.version, rng) {
+			sat = append(sat, c)
+			all = append(all, c.version)
+		}
+	}
+	if len(sat) == 0 {
+		return Resolved{}, fmt.Errorf("no published version satisfies %q", rng)
+	}
+	cutoff := time.Now().Add(-cooldown)
+	var pick candidate
+	for _, c := range sat {
+		if cooldown > 0 && (c.published.IsZero() || c.published.After(cutoff)) {
+			continue
+		}
+		if pick.version == "" || semverGreater(c.version, pick.version) {
+			pick = c
+		}
+	}
+	if pick.version == "" {
+		return Resolved{}, fmt.Errorf("no version satisfying %q is older than the %s cooldown", rng, cooldown)
+	}
+	return Resolved{
+		Version:   pick.version,
+		Published: pick.published,
+		Range:     rng,
+		Newer:     newerSatisfying(all, rng, pick.version),
+	}, nil
 }
 
 func semverGreater(a, b string) bool {

@@ -74,6 +74,15 @@ compat: manifest constraints/exports that can break your build.
 dependencies: deps added/removed/changed, with redirects (git/path/url) flagged.
 Then the known-CVE scan, then the COVERAGE boundary with routed next-steps.
 
+== Version args accept a semver range ==
+A diff from/to or a census version may be a semver range ('^9.3.0', npm/
+crates), resolved to the install target (the highest satisfying published
+version). A range admits MORE than one version: with --cooldown depsound
+reviews the newest satisfying version N days old and NAMES the newer ones an
+uncooled consumer installs instead, unreviewed. Note Dependabot cooldown gates
+when PRs OPEN; only an install cooldown (npm/pnpm minimumReleaseAge) gates what
+INSTALLS, so "latest" is still latest for a consumer configured without one.
+
 == No lockfile? generate one (no package code runs) ==
 transitive diffs two resolved lockfiles. If a repo commits none, or you are
 ADOPTING a new dep, generate them with a RESOLUTION-ONLY command in a temp

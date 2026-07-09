@@ -17,6 +17,7 @@ func Text(s *stats.Stats) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
 	w("depsound %s:%s %s -> %s", s.Package.Ecosystem, taint(s.Package.Name), taint(s.Package.From), taint(s.Package.To))
+	writeResolution(w, s)
 	w("")
 
 	w("files: %d changed (+%d/-%d), %d -> %d files, %s -> %s",
@@ -268,6 +269,32 @@ func compat(s *stats.Stats) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// writeResolution shows how a range/latest from-or-to arg became the concrete
+// versions in the header, and flags the to side's newer-satisfying set: the
+// versions a consumer with a shorter or no cooldown installs instead, not
+// reviewed here.
+func writeResolution(w func(string, ...any), s *stats.Stats) {
+	r := s.Resolution
+	if r == nil {
+		return
+	}
+	var parts []string
+	if r.FromSpec != "" {
+		parts = append(parts, fmt.Sprintf("from %q -> %s", taint(r.FromSpec), taint(s.Package.From)))
+	}
+	if r.ToSpec != "" {
+		parts = append(parts, fmt.Sprintf("to %q -> %s", taint(r.ToSpec), taint(s.Package.To)))
+	}
+	if len(parts) > 0 {
+		w("resolved: %s", strings.Join(parts, ", "))
+	}
+	if len(r.ToNewer) > 0 {
+		w("  NOTE %s also admits %d newer, unreviewed version(s) (%s); a shorter or no",
+			taint(r.ToSpec), len(r.ToNewer), taint(strings.Join(r.ToNewer, ", ")))
+		w("  cooldown installs one of those, review those targets too if policy differs")
+	}
 }
 
 // plu picks the plural for a file count ("1 file", "2 files").

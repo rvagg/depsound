@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rvagg/depsound/internal/cache"
 	"github.com/rvagg/depsound/internal/cratepkg"
@@ -101,11 +102,18 @@ type resolved struct {
 // command-specific flags, called per unrecognized --flag.
 func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*resolved, []string, error) {
 	cacheDir := ""
+	var cooldown time.Duration
 	var pos []string
 	for _, a := range args {
 		switch {
 		case strings.HasPrefix(a, "--cache-dir="):
 			cacheDir = strings.TrimPrefix(a, "--cache-dir=")
+		case strings.HasPrefix(a, "--cooldown="):
+			d, err := parseCooldown(strings.TrimPrefix(a, "--cooldown="))
+			if err != nil {
+				return nil, nil, err
+			}
+			cooldown = d
 		case strings.HasPrefix(a, "-"):
 			if extraFlags != nil {
 				handled, err := extraFlags(a)
@@ -125,7 +133,7 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 		return nil, nil, fmt.Errorf("want <ecosystem>:<name> <from> <to> (run `depsound help`)")
 	}
 
-	r, err := analyze(cacheDir, pos[0], pos[1], pos[2])
+	r, err := analyze(cacheDir, pos[0], pos[1], pos[2], cooldown)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -133,19 +141,39 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 }
 
 // analyze resolves one (spec, from, to) to a materialized workspace: the
-// reusable core shared by the single-pair commands and bulk mode.
-func analyze(cacheDir, specStr, fromArg, toArg string) (*resolved, error) {
+// reusable core shared by the single-pair commands and bulk mode. A from/to
+// arg may be a semver RANGE or "latest"; it is resolved to a concrete version
+// (cooldown-aware) before the artifact is fetched, and how it resolved is
+// recorded on the Stats. GHA refs (tags/shas) are used verbatim.
+func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (*resolved, error) {
 	sp, err := spec.Parse(specStr)
 	if err != nil {
 		return nil, err
 	}
-	from, err := spec.NormalizeVersion(sp.Eco, fromArg)
+	fromRes := fetch.Resolved{Version: fromArg}
+	toRes := fetch.Resolved{Version: toArg}
+	if sp.Eco != spec.GHA {
+		ctx, client := context.Background(), &http.Client{}
+		if fromRes, err = fetch.ResolveVersion(ctx, client, string(sp.Eco), sp.Name, fromArg, cooldown); err != nil {
+			return nil, fmt.Errorf("resolve from %q: %w", fromArg, err)
+		}
+		if toRes, err = fetch.ResolveVersion(ctx, client, string(sp.Eco), sp.Name, toArg, cooldown); err != nil {
+			return nil, fmt.Errorf("resolve to %q: %w", toArg, err)
+		}
+	}
+	from, err := spec.NormalizeVersion(sp.Eco, fromRes.Version)
 	if err != nil {
 		return nil, err
 	}
-	to, err := spec.NormalizeVersion(sp.Eco, toArg)
+	to, err := spec.NormalizeVersion(sp.Eco, toRes.Version)
 	if err != nil {
 		return nil, err
+	}
+	if from == to {
+		if fromRes.Range != "" || toRes.Range != "" {
+			return nil, fmt.Errorf("%q and %q both resolve to %s; nothing to diff", fromArg, toArg, from)
+		}
+		return nil, fmt.Errorf("from and to are the same version (%s); nothing to diff", from)
 	}
 	c, err := cache.Open(cacheDir)
 	if err != nil {
@@ -168,7 +196,29 @@ func analyze(cacheDir, specStr, fromArg, toArg string) (*resolved, error) {
 	if err != nil {
 		return nil, err
 	}
+	// how from/to resolved is report-time metadata, not baked into the cached
+	// workspace: attach after load/materialize
+	st.Resolution = buildResolution(fromArg, fromRes, toArg, toRes)
 	return &resolved{ws: ws, cacheRoot: c.Root, sp: sp, st: st, idx: idx}, nil
+}
+
+// buildResolution records a from/to arg that was a range or "latest" (not an
+// exact version), plus the to side's newer-satisfying ambiguity set. Returns
+// nil when both args were exact, so an ordinary diff carries no resolution
+// noise.
+func buildResolution(fromArg string, fromRes fetch.Resolved, toArg string, toRes fetch.Resolved) *stats.Resolution {
+	derived := func(arg string, r fetch.Resolved) bool { return r.Range != "" || arg == "latest" }
+	if !derived(fromArg, fromRes) && !derived(toArg, toRes) {
+		return nil
+	}
+	res := &stats.Resolution{ToNewer: toRes.Newer}
+	if derived(fromArg, fromRes) {
+		res.FromSpec = fromArg
+	}
+	if derived(toArg, toRes) {
+		res.ToSpec = toArg
+	}
+	return res
 }
 
 func diffCmd(args []string) error {

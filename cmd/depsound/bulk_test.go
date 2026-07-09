@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/rvagg/depsound/internal/fetch"
 )
 
 func TestParseBulkLines(t *testing.T) {
@@ -78,5 +80,18 @@ func TestParseCooldown(t *testing.T) {
 	}
 	if _, err := parseCooldown("nonsense"); err == nil {
 		t.Error("nonsense cooldown should error")
+	}
+}
+
+func TestBuildResolution(t *testing.T) {
+	// exact args -> no resolution noise on an ordinary diff
+	if r := buildResolution("1.2.3", fetch.Resolved{Version: "1.2.3"}, "1.3.0", fetch.Resolved{Version: "1.3.0"}); r != nil {
+		t.Errorf("exact args should yield nil resolution, got %+v", r)
+	}
+	// range to side, with an ambiguity set
+	r := buildResolution("1.2.3", fetch.Resolved{Version: "1.2.3"},
+		"^2.0.0", fetch.Resolved{Version: "2.1.0", Range: "^2.0.0", Newer: []string{"2.1.1", "2.2.0"}})
+	if r == nil || r.FromSpec != "" || r.ToSpec != "^2.0.0" || len(r.ToNewer) != 2 {
+		t.Errorf("range-to resolution = %+v", r)
 	}
 }

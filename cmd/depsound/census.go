@@ -267,7 +267,15 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		return nil, err
 	}
 	cen := &output.Census{Ecosystem: string(sp.Eco), Name: sp.Name, Version: v}
-	if versionReq == "" || versionReq == "latest" {
+	if res.Range != "" {
+		cen.Resolved = fmt.Sprintf("range %q -> %s", res.Range, v)
+		if !res.Published.IsZero() {
+			cen.Resolved += " (published " + res.Published.UTC().Format("2006-01-02") + ")"
+		}
+		if len(res.Newer) > 0 {
+			cen.Notes = append(cen.Notes, fmt.Sprintf("range %q also admits %d newer, unreviewed version(s) (%s); a consumer with a shorter or no cooldown installs one of those, review those targets too if install policy differs", res.Range, len(res.Newer), strings.Join(res.Newer, ", ")))
+		}
+	} else if versionReq == "" || versionReq == "latest" {
 		cen.Resolved = "latest -> " + v
 		if !res.Published.IsZero() {
 			cen.Resolved += " (published " + res.Published.UTC().Format("2006-01-02") + ")"

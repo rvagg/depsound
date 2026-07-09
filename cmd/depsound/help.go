@@ -62,11 +62,17 @@ output, and the two lenses (security vs compatibility).`
 // cmdHelp holds per-command detail, reached via help <command>, so the top-
 // level help stays a routing table rather than a wall.
 var cmdHelp = map[string]string{
-	"diff": `depsound <ecosystem>:<name> <from> <to> [--format=stats|json|patch|files] [--no-osv] [--no-provenance]
+	"diff": `depsound <ecosystem>:<name> <from> <to> [--cooldown=<days>] [--format=stats|json|patch|files] [--no-osv] [--no-provenance]
 
 Diffs two PUBLISHED versions (what installs, not the repo) and reports the
 file diff, execution surface, manifest compatibility, and OSV. Versions come
 straight off a Dependabot title; depsound normalizes them per ecosystem.
+A from/to arg may be a semver RANGE (e.g. '^9.3.0', npm/crates): depsound
+resolves it to the install target (highest satisfying published version) and
+reports the resolution. --cooldown=<days> resolves instead to the newest
+satisfying version at least N days old (the install-cooldown posture), and
+flags the newer satisfying versions a consumer WITHOUT that cooldown installs
+instead, which this review did not cover.
   --format=stats   human report (default)
   --format=json    the full stats.json contract for machine consumers
   --format=patch   the raw diff.patch on stdout
@@ -76,9 +82,10 @@ straight off a Dependabot title; depsound normalizes them per ecosystem.
 	"census": `depsound <ecosystem>:<name> [version] [--transitive] [--cooldown=<days>] [--format=stats|json] [--no-osv]
 
 Vets a SINGLE version in absolute terms: what you sign up for by adopting it
-(no diff). Version defaults to latest; depsound resolves and REPORTS the
-concrete version (agents guess stale versions from weights). Publish/anomaly
-provenance runs by default (deps.dev + registry); --no-provenance skips it.
+(no diff). Version may be exact, a semver RANGE ('^10.2.0', npm/crates), or
+omitted for latest; depsound resolves and REPORTS the concrete version (agents
+guess stale versions from weights). Publish/anomaly provenance runs by default
+(deps.dev + registry); --no-provenance skips it.
   --transitive    resolve the FULL transitive footprint via deps.dev (npm and
                   crates; a deps.dev estimate, not your exact install; for go,
                   go.mod is the resolved set, use depsound transitive go)
