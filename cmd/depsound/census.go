@@ -419,6 +419,7 @@ func censusManifest(eco spec.Ecosystem, tree string, cen *output.Census) error {
 		cen.Lifecycle = npmpkg.LifecyclePresent(p)
 		cen.Deps = npmpkg.DepsPresent(p)
 		cen.Gyp = exists(filepath.Join(tree, "binding.gyp"))
+		cen.Entrypoints = npmpkg.Entrypoints(p)
 		cen.Notes = append(cen.Notes, p.Warnings...)
 	case spec.Go:
 		m, err := gopkg.Load(tree)

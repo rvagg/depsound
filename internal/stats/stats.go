@@ -42,14 +42,17 @@ type Stats struct {
 	Runnable     Runnable             `json:"runnable"`
 	Compat       Compat               `json:"compat"`
 	Dependencies []manifest.DepChange `json:"dependencies"`
-	Files        FilesSection         `json:"files"`
-	Embedded     []EmbeddedMarker     `json:"embeddedMarkers,omitempty"`
-	Security     Security             `json:"security"`
-	Action       *ActionSection       `json:"action,omitempty"` // gha only
-	Provenance   *provenance.Result   `json:"provenance,omitempty"`
-	Resolution   *Resolution          `json:"resolution,omitempty"`
-	Workspace    string               `json:"workspace"`
-	Notes        []string             `json:"notes,omitempty"`
+	// Entrypoints are the new version's npm runtime payload files (resolved
+	// exports/main/bin): the code that runs on import, to read first.
+	Entrypoints []string           `json:"entrypoints,omitempty"`
+	Files       FilesSection       `json:"files"`
+	Embedded    []EmbeddedMarker   `json:"embeddedMarkers,omitempty"`
+	Security    Security           `json:"security"`
+	Action      *ActionSection     `json:"action,omitempty"` // gha only
+	Provenance  *provenance.Result `json:"provenance,omitempty"`
+	Resolution  *Resolution        `json:"resolution,omitempty"`
+	Workspace   string             `json:"workspace"`
+	Notes       []string           `json:"notes,omitempty"`
 	// Coverage and NextActions are the anti-false-security spine: what
 	// the tool did and did NOT check, and where to point judgement next.
 	// Populated at report time (they depend on the live OSV merge), so a
@@ -316,6 +319,7 @@ func Build(in Input) (*Stats, error) {
 			s.Notes = append(s.Notes, "exports resolution failed: "+err.Error())
 		}
 		s.Dependencies = npmpkg.DepsDelta(in.OldPkg, in.NewPkg)
+		s.Entrypoints = npmpkg.Entrypoints(in.NewPkg)
 
 	case in.OldMod != nil && in.NewMod != nil:
 		for _, w := range in.OldMod.Warnings {

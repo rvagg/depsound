@@ -48,6 +48,7 @@ func Text(s *stats.Stats) string {
 	if s.Files.TrivialChurn > 0 {
 		w("  trivial churn: %d files with <=2 line deltas", s.Files.TrivialChurn)
 	}
+	writeEntrypoints(w, s.Entrypoints)
 	if s.Artifact.SourceTo != nil {
 		writeIntegrity(w, s.Artifact.SourceTo.Verification)
 	}

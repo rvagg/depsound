@@ -54,6 +54,9 @@ type Census struct {
 	// Integrity is the artifact's fetch-time verification level (fetch's
 	// Verify* value): the checksum anchor, or a weak TLS-only fallback.
 	Integrity string `json:"integrity,omitempty"`
+	// Entrypoints are the npm runtime payload files (resolved exports/main/
+	// bin): the code that runs on import, to read first.
+	Entrypoints []string `json:"entrypoints,omitempty"`
 
 	// Subtree is the FULL resolved transitive footprint (deps.dev), when
 	// --transitive is requested: a theoretical resolve, the whole set you
@@ -185,6 +188,16 @@ func integrityText(v string) (text string, weak bool) {
 		return "TLS + sha1 only", true
 	}
 	return "", false
+}
+
+// writeEntrypoints leads with the npm runtime payload: the files reached by
+// exports/main/bin, the code that executes on import. Named first so review
+// order matches the threat model, even when the file is classed "generated".
+func writeEntrypoints(w func(string, ...any), eps []string) {
+	if len(eps) == 0 {
+		return
+	}
+	w("runtime payload (read first, runs on import): %s", taint(strings.Join(eps, ", ")))
 }
 
 // writeIntegrity shows how the fetched artifact was verified: Go's sumdb
@@ -346,6 +359,7 @@ func CensusText(c *Census) string {
 	for _, cl := range c.ByClass {
 		w("  %-10s %d %s", cl.Class, cl.Files, plu(cl.Files))
 	}
+	writeEntrypoints(w, c.Entrypoints)
 	writeIntegrity(w, c.Integrity)
 	// the census equivalent of the diff's payload-highway note: name the
 	// biggest excluded file and how much of the artifact is unreviewed, so

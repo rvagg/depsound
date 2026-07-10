@@ -13,6 +13,46 @@ import (
 // export subpath under each standard condition set, run the specified Node
 // resolution algorithm against both versions and diff the outcomes.
 
+// Entrypoints lists the package's runtime payload files: the resolved "."
+// export (require and import conditions), or main/index.js when there is no
+// exports map, plus any bin scripts. These are the files that execute when the
+// package is imported or its command is invoked, so they are what to read
+// first, even when classed "generated".
+func Entrypoints(p *Package) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(f string) {
+		f, _, ok := splitOutcome(f) // drop any " (format)" tag
+		if !ok {
+			return
+		}
+		f = strings.TrimPrefix(f, "./")
+		if f == "" || strings.Contains(f, "*") {
+			return // unresolvable, or a wildcard subpath, not a concrete file
+		}
+		f = path.Clean(f)
+		if !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	if table, err := resolutionTable(p); err == nil {
+		for _, c := range []string{"require", "import"} {
+			add(table["."+"\x00"+c])
+		}
+	}
+	bins := binMap(p)
+	keys := make([]string, 0, len(bins))
+	for k := range bins {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		add(bins[k])
+	}
+	return out
+}
+
 func ExportsDelta(a, b *Package) ([]ExportChange, error) {
 	oldT, err := resolutionTable(a)
 	if err != nil {

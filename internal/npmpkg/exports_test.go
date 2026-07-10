@@ -189,3 +189,24 @@ func TestPresentHelpers(t *testing.T) {
 		t.Errorf("DepsPresent = %+v", deps)
 	}
 }
+
+func TestEntrypoints(t *testing.T) {
+	// exports map: resolve "." (require + import), dedup
+	p := &Package{Name: "x", Exports: []byte(`{".":{"require":"./dist/index.cjs","import":"./dist/index.mjs"}}`)}
+	got := Entrypoints(p)
+	if len(got) != 2 || got[0] != "dist/index.cjs" || got[1] != "dist/index.mjs" {
+		t.Errorf("exports entrypoints = %v", got)
+	}
+	// no exports: fall back to main
+	if got := Entrypoints(&Package{Name: "x", Main: "./lib/main.js"}); len(got) != 1 || got[0] != "lib/main.js" {
+		t.Errorf("main entrypoint = %v", got)
+	}
+	// no exports, no main: index.js default
+	if got := Entrypoints(&Package{Name: "x"}); len(got) != 1 || got[0] != "index.js" {
+		t.Errorf("default entrypoint = %v", got)
+	}
+	// bin scripts are entrypoints too
+	if got := Entrypoints(&Package{Name: "x", Main: "./index.js", Bin: []byte(`{"tool":"./cli.js"}`)}); len(got) != 2 || got[1] != "cli.js" {
+		t.Errorf("bin entrypoint = %v", got)
+	}
+}
