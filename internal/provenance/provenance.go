@@ -8,6 +8,7 @@ package provenance
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,12 +42,20 @@ type Result struct {
 
 	Attestation        bool `json:"attestation,omitempty"`        // npm provenance present
 	AttestationDropped bool `json:"attestationDropped,omitempty"` // prior version had one, this does not
+	// AttestedSource is the repo the (npm-validated) provenance attestation
+	// says the build ran from; AttestedMismatch flags it differing from the
+	// package's own claimed repository, valid provenance from the wrong repo.
+	AttestedSource   string `json:"attestedSource,omitempty"`
+	AttestedMismatch bool   `json:"attestedMismatch,omitempty"`
 
 	// install-script DELTA vs the prior version: a script that runs on `npm
 	// install` APPEARING (or changing) is the event-stream/xz mechanism, the
 	// highest-value shape signal.
 	InstallScriptsAdded   []string `json:"installScriptsAdded,omitempty"`
 	InstallScriptsChanged []string `json:"installScriptsChanged,omitempty"`
+	// BinAdded lists CLI commands the package now installs on PATH that a
+	// prior version did not (a bin runs only when invoked, not on install).
+	BinAdded []string `json:"binAdded,omitempty"`
 
 	ClaimedRepo  string `json:"claimedRepo,omitempty"`  // the package's own repository field
 	SourceRepo   string `json:"sourceRepo,omitempty"`   // deps.dev's view
@@ -132,6 +141,7 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 		} `json:"_npmUser"`
 		Deprecated json.RawMessage   `json:"deprecated"`
 		Scripts    map[string]string `json:"scripts"`
+		Bin        json.RawMessage   `json:"bin"`
 		Dist       struct {
 			UnpackedSize int64           `json:"unpackedSize"`
 			Attestations json.RawMessage `json:"attestations"`
@@ -143,6 +153,13 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 		r.Size = cur.Dist.UnpackedSize
 		r.Attestation = len(cur.Dist.Attestations) > 0
 		r.Deprecated = r.Deprecated || len(cur.Deprecated) > 0
+		if r.Attestation {
+			// read the npm-VALIDATED predicate (no crypto: npm already checked
+			// the signature at publish) for its attested source, and flag it
+			// differing from the package's own claim
+			r.AttestedSource = attestedSource(ctx, client, cur.Dist.Attestations)
+			r.AttestedMismatch = r.AttestedSource != "" && r.ClaimedRepo != "" && r.AttestedSource != r.ClaimedRepo
+		}
 	}
 	// dormancy is a property of THIS release vs its immediate predecessor, not
 	// of the diff baseline (which may skip intermediate releases), so measure
@@ -171,6 +188,7 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 			}
 			if cur != nil {
 				r.InstallScriptsAdded, r.InstallScriptsChanged = installScriptDelta(pv.Scripts, cur.Scripts)
+				r.BinAdded = addedBins(binNames(pv.Bin, name), binNames(cur.Bin, name))
 			}
 		}
 	}
@@ -262,6 +280,114 @@ func freshnessTier(ageDays int, hasDate bool) string {
 // installHooks are the npm lifecycle scripts that run on `npm install <pkg>`,
 // so a new one is code newly executing on every consumer's machine.
 var installHooks = []string{"preinstall", "install", "postinstall"}
+
+// attestedSource reads the source repo from a version's npm provenance
+// attestation. The signature is already verified by npm at publish, so this
+// only DECODES the validated predicate (base64 DSSE payload -> in-toto
+// statement -> SLSA buildDefinition) to surface where it was built from. Empty
+// on any failure, so a parse hiccup degrades to "attestation present".
+func attestedSource(ctx context.Context, client *http.Client, distAtt json.RawMessage) string {
+	var info struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal(distAtt, &info) != nil || info.URL == "" {
+		return ""
+	}
+	var resp struct {
+		Attestations []struct {
+			PredicateType string `json:"predicateType"`
+			Bundle        struct {
+				DsseEnvelope struct {
+					Payload string `json:"payload"`
+				} `json:"dsseEnvelope"`
+			} `json:"bundle"`
+		} `json:"attestations"`
+	}
+	if err := getJSON(ctx, client, info.URL, &resp); err != nil {
+		return ""
+	}
+	for _, a := range resp.Attestations {
+		if !strings.Contains(a.PredicateType, "slsa.dev/provenance") {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(a.Bundle.DsseEnvelope.Payload)
+		if err != nil {
+			continue
+		}
+		var st struct {
+			Predicate struct {
+				BuildDefinition struct {
+					ExternalParameters struct {
+						Workflow struct {
+							Repository string `json:"repository"`
+						} `json:"workflow"`
+					} `json:"externalParameters"`
+					ResolvedDependencies []struct {
+						URI string `json:"uri"`
+					} `json:"resolvedDependencies"`
+				} `json:"buildDefinition"`
+			} `json:"predicate"`
+		}
+		if json.Unmarshal(raw, &st) != nil {
+			continue
+		}
+		repo := st.Predicate.BuildDefinition.ExternalParameters.Workflow.Repository
+		if repo == "" && len(st.Predicate.BuildDefinition.ResolvedDependencies) > 0 {
+			repo = st.Predicate.BuildDefinition.ResolvedDependencies[0].URI
+		}
+		if repo == "" {
+			continue
+		}
+		repo = trimRepo(repo)
+		if i := strings.Index(repo, "@"); i >= 0 {
+			repo = repo[:i] // drop a trailing @ref
+		}
+		return repo
+	}
+	return ""
+}
+
+// binNames reads the package's bin field (a string installs one command named
+// after the package; an object maps command names to paths) into the set of
+// command names it puts on PATH.
+func binNames(raw json.RawMessage, pkgName string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var obj map[string]string
+	if json.Unmarshal(raw, &obj) == nil {
+		names := make([]string, 0, len(obj))
+		for k := range obj {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		return names
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil && s != "" {
+		n := pkgName
+		if i := strings.LastIndex(n, "/"); i >= 0 {
+			n = n[i+1:] // a string bin is named after the package, sans scope
+		}
+		return []string{n}
+	}
+	return nil
+}
+
+// addedBins returns the command names present now that were absent before.
+func addedBins(prev, cur []string) []string {
+	was := make(map[string]bool, len(prev))
+	for _, b := range prev {
+		was[b] = true
+	}
+	var out []string
+	for _, b := range cur {
+		if !was[b] {
+			out = append(out, b)
+		}
+	}
+	return out
+}
 
 // installScriptDelta reports install hooks that APPEARED (present now, absent
 // before) or CHANGED command, comparing the prior version to this one.

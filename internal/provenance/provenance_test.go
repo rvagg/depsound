@@ -98,3 +98,19 @@ func TestInstallScriptDelta(t *testing.T) {
 		t.Errorf("stable install hooks should not fire: added=%v changed=%v", added, changed)
 	}
 }
+
+func TestBinNamesAndDelta(t *testing.T) {
+	// object bin -> command names
+	got := binNames([]byte(`{"foo":"./f.js","bar":"./b.js"}`), "pkg")
+	if len(got) != 2 || got[0] != "bar" || got[1] != "foo" {
+		t.Errorf("object bin names = %v", got)
+	}
+	// string bin -> one command named after the package, scope stripped
+	if got := binNames([]byte(`"./cli.js"`), "@scope/tool"); len(got) != 1 || got[0] != "tool" {
+		t.Errorf("string bin name = %v", got)
+	}
+	// delta: only the newly-appearing command
+	if got := addedBins([]string{"foo"}, []string{"foo", "bar"}); len(got) != 1 || got[0] != "bar" {
+		t.Errorf("addedBins = %v", got)
+	}
+}

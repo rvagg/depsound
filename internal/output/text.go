@@ -48,6 +48,9 @@ func Text(s *stats.Stats) string {
 	if s.Files.TrivialChurn > 0 {
 		w("  trivial churn: %d files with <=2 line deltas", s.Files.TrivialChurn)
 	}
+	if s.Artifact.SourceTo != nil {
+		writeIntegrity(w, s.Artifact.SourceTo.Verification)
+	}
 	for _, e := range s.Embedded {
 		// a lead, not a verdict: the upstream identity this vendored blob
 		// embeds moved, pointing at the real change to read. The value is

@@ -51,6 +51,9 @@ type Census struct {
 	// package the agent can grep.
 	Resolved string `json:"resolvedFrom,omitempty"`
 	Tree     string `json:"tree,omitempty"`
+	// Integrity is the artifact's fetch-time verification level (fetch's
+	// Verify* value): the checksum anchor, or a weak TLS-only fallback.
+	Integrity string `json:"integrity,omitempty"`
 
 	// Subtree is the FULL resolved transitive footprint (deps.dev), when
 	// --transitive is requested: a theoretical resolve, the whole set you
@@ -164,6 +167,40 @@ func writeSubtree(w func(string, ...any), c *Census) {
 	}
 }
 
+// integrityText maps a fetch verification level (fetch's Verify* string
+// values) to a human line and whether it is WEAK: the strong checksum anchor
+// (Go's sumdb, the registry hash) was unavailable and only TLS/sha1 covered
+// the download.
+func integrityText(v string) (text string, weak bool) {
+	switch v {
+	case "sumdb-lookup":
+		return "Go checksum db verified (sum.golang.org)", false
+	case "registry-sha512":
+		return "registry sha512 verified", false
+	case "registry-sha256":
+		return "registry sha256 verified", false
+	case "tls-only":
+		return "TLS only, checksum db unavailable", true
+	case "tls-only-sha1":
+		return "TLS + sha1 only", true
+	}
+	return "", false
+}
+
+// writeIntegrity shows how the fetched artifact was verified: Go's sumdb
+// anchor, the registry hash, or a WEAK TLS-only fallback worth flagging.
+func writeIntegrity(w func(string, ...any), verification string) {
+	text, weak := integrityText(verification)
+	if text == "" {
+		return
+	}
+	if weak {
+		w("WARNING integrity: %s (the strong checksum anchor was unavailable)", text)
+	} else {
+		w("integrity: %s", text)
+	}
+}
+
 // writeProvenance renders the publish panel for the account-takeover lens.
 // WARNING is reserved for true republish DELTAS (publisher changed, provenance
 // dropped, repo mismatch, yanked); weaker signals are notes; the rest is
@@ -192,6 +229,9 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 	if p.RepoMismatch {
 		warn = append(warn, fmt.Sprintf("repo MISMATCH: claims %s, deps.dev source %s", p.ClaimedRepo, p.SourceRepo))
 	}
+	if p.AttestedMismatch {
+		warn = append(warn, fmt.Sprintf("attestation attests build from %s, but the package claims %s (source mismatch)", p.AttestedSource, p.ClaimedRepo))
+	}
 	if p.Yanked {
 		warn = append(warn, "YANKED from the registry")
 	}
@@ -210,6 +250,9 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 	}
 	if p.DormancyBreak {
 		note = append(note, fmt.Sprintf("first release in %dd (long-dormant); a takeover vector but also normal maintenance, confirm who/why", p.GapDays))
+	}
+	if len(p.BinAdded) > 0 {
+		note = append(note, fmt.Sprintf("new CLI command(s) on PATH since %s: %s (a bin runs when invoked, not on install)", p.PrevVersion, strings.Join(p.BinAdded, ", ")))
 	}
 	if p.Deprecated {
 		note = append(note, "DEPRECATED by the registry (maintenance signal, not compromise)")
@@ -240,9 +283,12 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 		w("  published %s (%dd ago)%s", p.PublishedAt, p.AgeDays, who)
 	}
 	if eco == "npm" {
-		if p.Attestation {
+		switch {
+		case p.Attestation && p.AttestedSource != "":
+			w("  npm provenance: attestation PRESENT, built from %s", taint(p.AttestedSource))
+		case p.Attestation:
 			w("  npm provenance: attestation PRESENT (build traced to source)")
-		} else {
+		default:
 			w("  npm provenance: none (common; not a signal alone)")
 		}
 	}
@@ -300,6 +346,7 @@ func CensusText(c *Census) string {
 	for _, cl := range c.ByClass {
 		w("  %-10s %d %s", cl.Class, cl.Files, plu(cl.Files))
 	}
+	writeIntegrity(w, c.Integrity)
 	// the census equivalent of the diff's payload-highway note: name the
 	// biggest excluded file and how much of the artifact is unreviewed, so
 	// a mostly-generated package (hono is ~99% dist/) cannot read as small

@@ -303,6 +303,9 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	if err != nil {
 		return nil, err
 	}
+	if m := fetch.ReadMeta(art); m != nil {
+		cen.Integrity = m.Verification
+	}
 
 	// persist the tree so the agent can search it; re-extract only if the
 	// cached tree is missing (the artifact is immutable)
