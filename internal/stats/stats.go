@@ -291,9 +291,7 @@ func Build(in Input) (*Stats, error) {
 			s.Notes = append(s.Notes, fmt.Sprintf("scoped to the sub-path action %q; the action may still reference repo-level code outside it (not shown)", in.SubPath))
 		}
 		for _, a := range []*ghapkg.Action{in.OldAction, in.NewAction} {
-			for _, w := range actionWarnings(a) {
-				s.Notes = append(s.Notes, w)
-			}
+			s.Notes = append(s.Notes, actionWarnings(a)...)
 		}
 	}
 

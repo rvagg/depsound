@@ -1,5 +1,10 @@
 package output
 
+// The tests below embed raw control and bidi bytes in string literals on
+// purpose, to prove taint() escapes them in output; ST1018 (which suggests
+// \u escapes) is exactly the thing under test, so silence it for this file.
+//lint:file-ignore ST1018 intentional raw control/bidi bytes in trojan-source fixtures
+
 import (
 	"strings"
 	"testing"
