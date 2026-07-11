@@ -3,7 +3,7 @@
 Self-contained skills that teach an agent to use `depsound` for a task. Each is a single Markdown file with YAML frontmatter (`name`, `description`): load it into a skill-aware agent, or just curl and read it.
 
 ```
-curl -s https://raw.githubusercontent.com/rvagg/depsound/main/skills/review-dependency-change/SKILL.md
+curl -s https://raw.githubusercontent.com/rvagg/depsound/master/skills/review-dependency-change/SKILL.md
 ```
 
 ## Available
