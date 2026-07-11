@@ -38,7 +38,7 @@ func Text(s *stats.Stats) string {
 			// for npm, dist/ is not incidental output: it IS the published
 			// runtime, the code that runs on import, so it is the thing to read
 			if s.Package.Ecosystem == "npm" && strings.Contains(big.Path, "dist/") {
-				w("    NOTE for npm this dist/ file is the PUBLISHED RUNTIME (runs on import); read it")
+				w("    NOTE for npm, dist/ runs at import (entrypoint named above); read this file too")
 			}
 		}
 	}
@@ -373,7 +373,7 @@ func writeSecurity(w func(string, ...any), sec osv.Assessment) {
 	writeVulns(w, "FIXED by this upgrade", sec.FixedByUpgrade)
 	writeVulns(w, "WARNING still present after upgrade", sec.StillPresent)
 	writeVulns(w, "WARNING introduced by this upgrade", sec.Introduced)
-	w("  (leads, not a gate; confirm relevance to your usage)")
+	w("  (leads, not a gate; confirm relevance to your usage. KNOWN CVEs only, silent on novel/injected code)")
 }
 
 func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {

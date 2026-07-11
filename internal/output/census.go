@@ -177,15 +177,17 @@ func writeSubtree(w func(string, ...any), c *Census) {
 func integrityText(v string) (text string, weak bool) {
 	switch v {
 	case "sumdb-lookup":
-		return "Go checksum db verified (sum.golang.org)", false
+		// an independent, append-only, globally-witnessed log: a real anchor
+		return "Go sumdb verified (sum.golang.org, independent transparency log)", false
 	case "registry-sha512":
-		return "registry sha512 verified", false
+		// the registry supplies both the artifact AND the hash: self-attested
+		return "registry sha512 (artifact integrity, self-attested; not an independent anchor)", false
 	case "registry-sha256":
-		return "registry sha256 verified", false
+		return "registry sha256 (artifact integrity, self-attested; not an independent anchor)", false
 	case "tls-only":
-		return "TLS only, checksum db unavailable", true
+		return "TLS transport only, no integrity hash (Go sumdb lookup failed)", true
 	case "tls-only-sha1":
-		return "TLS + sha1 only", true
+		return "TLS + weak sha1 hash only", true
 	}
 	return "", false
 }
@@ -197,7 +199,7 @@ func writeEntrypoints(w func(string, ...any), eps []string) {
 	if len(eps) == 0 {
 		return
 	}
-	w("runtime payload (read first, runs on import): %s", taint(strings.Join(eps, ", ")))
+	w("runtime entrypoint(s) (review first; the one for your import mode runs): %s", taint(strings.Join(eps, ", ")))
 }
 
 // writeIntegrity shows how the fetched artifact was verified: Go's sumdb
@@ -208,7 +210,7 @@ func writeIntegrity(w func(string, ...any), verification string) {
 		return
 	}
 	if weak {
-		w("WARNING integrity: %s (the strong checksum anchor was unavailable)", text)
+		w("WARNING integrity: %s", text)
 	} else {
 		w("integrity: %s", text)
 	}
@@ -265,7 +267,7 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 		note = append(note, fmt.Sprintf("first release in %dd (long-dormant); a takeover vector but also normal maintenance, confirm who/why", p.GapDays))
 	}
 	if len(p.BinAdded) > 0 {
-		note = append(note, fmt.Sprintf("new CLI command(s) on PATH since %s: %s (a bin runs when invoked, not on install)", p.PrevVersion, strings.Join(p.BinAdded, ", ")))
+		note = append(note, fmt.Sprintf("new bin/CLI command(s) since %s: %s (installs an executable; runs when invoked, not on install)", p.PrevVersion, strings.Join(p.BinAdded, ", ")))
 	}
 	if p.Deprecated {
 		note = append(note, "DEPRECATED by the registry (maintenance signal, not compromise)")
@@ -298,14 +300,15 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 	if eco == "npm" {
 		switch {
 		case p.Attestation && p.AttestedSource != "":
-			w("  npm provenance: attestation PRESENT, built from %s", taint(p.AttestedSource))
+			w("  npm provenance: attestation PRESENT, attests build from %s (npm-validated predicate)", taint(p.AttestedSource))
 		case p.Attestation:
-			w("  npm provenance: attestation PRESENT (build traced to source)")
+			w("  npm provenance: attestation PRESENT (npm reports the build traced to source)")
 		default:
 			w("  npm provenance: none (common; not a signal alone)")
 		}
 	}
-	if p.SourceRepo != "" && !p.RepoMismatch {
+	// skip the source-repo line when the attestation line already named it
+	if p.SourceRepo != "" && !p.RepoMismatch && !(p.Attestation && p.AttestedSource == p.SourceRepo) {
 		w("  source repo: %s", taint(p.SourceRepo))
 	}
 	if p.Scorecard > 0 {
@@ -345,6 +348,32 @@ func writeSubtreeOSV(w func(string, ...any), c *Census) {
 	}
 }
 
+// writeRootOSV renders the known-CVE scan for THIS version. Rendered high in
+// the report (above the dependency inventory) so a WARNING is never buried
+// below a long dep list.
+func writeRootOSV(w func(string, ...any), c *Census) {
+	w("")
+	if !c.OSVQueried {
+		w("OSV known-CVE scan (backward-looking): not queried")
+	} else if len(c.Vulns) == 0 {
+		w("OSV known-CVE scan (backward-looking), %s: none for this version", c.OSVFetchedAt)
+		w("  (KNOWN CVEs only; says NOTHING about novel or injected code)")
+	} else {
+		w("WARNING OSV known-CVE scan (backward-looking), %s: %d for this version:", c.OSVFetchedAt, len(c.Vulns))
+		for _, v := range c.Vulns {
+			line := "  " + taint(v.ID)
+			if len(v.Aliases) > 0 {
+				line += " (" + taint(strings.Join(v.Aliases, ", ")) + ")"
+			}
+			if v.Summary != "" {
+				line += ": " + taint(v.Summary)
+			}
+			w("%s", line)
+		}
+		w("  (KNOWN CVEs only; the scan says NOTHING about novel or injected code)")
+	}
+}
+
 // CensusText renders the census: what installing this version brings.
 func CensusText(c *Census) string {
 	var b strings.Builder
@@ -365,13 +394,18 @@ func CensusText(c *Census) string {
 	// biggest excluded file and how much of the artifact is unreviewed, so
 	// a mostly-generated package (hono is ~99% dist/) cannot read as small
 	if excl := excludedFiles(c.ByClass); excl > 0 {
-		w("  NOTE %d of %d files (%d%%) are generated/binary and UNREVIEWED by class;",
-			excl, c.Files, pct(excl, c.Files))
+		// never let a rounded-down 0% mask a real exclusion ("1 of 120 (0%)")
+		pctStr := fmt.Sprintf("%d%%", pct(excl, c.Files))
+		if pct(excl, c.Files) == 0 {
+			pctStr = "<1%"
+		}
+		w("  NOTE %d of %d files (%s) are generated/binary and UNREVIEWED by class;",
+			excl, c.Files, pctStr)
 		if c.BigExcluded != "" {
 			w("       biggest: %s (%s). Exclusion is reading-order, NOT safety,", taint(c.BigExcluded), bytes(c.BigExcludedBytes))
 			w("       an attacker can hide a payload in a generated-classed file.")
 			if c.Ecosystem == "npm" && strings.Contains(c.BigExcluded, "dist/") {
-				w("       for npm this dist/ file is the PUBLISHED RUNTIME (runs on import); read it")
+				w("       for npm, dist/ runs at import (entrypoint named above); read this file too")
 			}
 		}
 	}
@@ -421,6 +455,12 @@ func CensusText(c *Census) string {
 		}
 	}
 
+	// security findings ABOVE the dependency inventory, so a WARNING (a CVE, a
+	// provenance anomaly) is never buried below a long dep list
+	writeRootOSV(w, c)
+	writeProvenance(w, c.Provenance, c.Ecosystem)
+
+	// the dependency inventory, and the transitive footprint it pulls in
 	w("")
 	if len(c.Deps) == 0 {
 		w("direct dependencies: none")
@@ -443,30 +483,9 @@ func CensusText(c *Census) string {
 			w("%s", line)
 		}
 	}
-
 	writeSubtree(w, c)
 	writeSubtreeOSV(w, c)
-	writeProvenance(w, c.Provenance, c.Ecosystem)
 
-	w("")
-	if !c.OSVQueried {
-		w("OSV known-CVE scan (backward-looking): not queried")
-	} else if len(c.Vulns) == 0 {
-		w("OSV known-CVE scan (backward-looking), %s: none for this version", c.OSVFetchedAt)
-		w("  (KNOWN CVEs only; says NOTHING about novel or injected code)")
-	} else {
-		w("WARNING OSV known-CVE scan (backward-looking), %s: %d for this version:", c.OSVFetchedAt, len(c.Vulns))
-		for _, v := range c.Vulns {
-			line := "  " + taint(v.ID)
-			if len(v.Aliases) > 0 {
-				line += " (" + taint(strings.Join(v.Aliases, ", ")) + ")"
-			}
-			if v.Summary != "" {
-				line += ": " + taint(v.Summary)
-			}
-			w("%s", line)
-		}
-	}
 	for _, n := range c.Notes {
 		w("note: %s", taint(n))
 	}
