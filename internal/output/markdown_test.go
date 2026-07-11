@@ -51,6 +51,25 @@ func TestMarkdownHeadlineTiers(t *testing.T) {
 	}
 }
 
+// A large generated/bundled delta (the npm dist/ case) is review-worthy but
+// must NOT dominate the headline the way an introduced CVE does.
+func TestMarkdownGeneratedDeltaWeighs(t *testing.T) {
+	s := cleanStats()
+	s.Files.Entries = []stats.FileEntry{
+		{Path: "dist/bundle.js", Status: "M", Class: "generated", Added: 150, Removed: 60},
+	}
+	out := Markdown([]BulkResult{{Ref: "npm:pkg 1.0.0 -> 1.1.0", Stats: s}})
+	if strings.Contains(out, "look at now") {
+		t.Errorf("generated-delta alone must not read 'look at now':\n%s", out)
+	}
+	if !strings.Contains(out, "to weigh") {
+		t.Errorf("generated-delta should weigh:\n%s", out)
+	}
+	if !strings.Contains(out, "dist/bundle.js") {
+		t.Errorf("should name the generated file:\n%s", out)
+	}
+}
+
 // A hostile package name or error must not inject HTML or Markdown into the
 // ACTIVE region of the comment (headline + bullets + coverage). The full
 // report is embedded inside a code fence, where such bytes are inert, so this

@@ -139,7 +139,11 @@ func commentSignals(s *stats.Stats) (tier, []string) {
 		}
 	}
 	if d.genDelta > 0 {
-		add(tierLook, fmt.Sprintf("large unreviewed change in %s (±%d lines, a payload can hide here)", mdTaint(d.genFile), d.genDelta))
+		// a generated/bundled change (an npm dist/, a vendored blob) is
+		// review-worthy but not new-risk-introduced, so it weighs rather than
+		// taking the loud tier; otherwise every routine dist bump dominates
+		// the headline. Introduced CVEs and new execution surface stay loud.
+		add(tierWeigh, fmt.Sprintf("generated code changed (%s, ±%d lines): outside the review surface, read it", mdTaint(d.genFile), d.genDelta))
 	}
 	if d.osvStill > 0 {
 		add(tierWeigh, fmt.Sprintf("%d known CVE(s) still present after the bump: %s", d.osvStill, mdTaint(d.stillIDs)))
