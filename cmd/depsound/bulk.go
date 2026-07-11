@@ -66,6 +66,10 @@ func bulkCmd(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(results)
 	}
+	if format == "markdown" {
+		fmt.Print(output.Markdown(results))
+		return nil
+	}
 	fmt.Print(output.Bulk(results))
 	return nil
 }
