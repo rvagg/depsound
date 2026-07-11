@@ -1,0 +1,44 @@
+version: 2
+
+builds:
+  - main: ./cmd/depsound
+    binary: depsound
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+universal_binaries:
+  - replace: true
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+      - goos: darwin
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  # the unified Releaser already created the GitHub Release and its notes;
+  # goreleaser only uploads the binaries to it
+  mode: keep-existing
+
+changelog:
+  disable: true

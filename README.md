@@ -23,11 +23,13 @@ The flow it's tuned for: the agent clears the easy **YES** upgrades, lays out th
 
 ## Install
 
+Grab a prebuilt binary for your platform from the [releases page](https://github.com/rvagg/depsound/releases), or build from source with Go:
+
 ```
 go install github.com/rvagg/depsound/cmd/depsound@latest
 ```
 
-Requires Go. Covers **npm, Go, crates (Rust), and GitHub Actions**.
+Covers **npm, Go, crates (Rust), and GitHub Actions**.
 
 ## Quick start
 
