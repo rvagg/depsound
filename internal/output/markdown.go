@@ -20,12 +20,13 @@ const (
 
 // commentRow is one dependency's rendered signals.
 type commentRow struct {
-	ref     string
-	tier    tier
-	phrases []string
-	isNew   bool // a newly-added dependency (census), not a bump
-	failed  bool
-	errMsg  string
+	ref      string
+	tier     tier
+	phrases  []string
+	isNew    bool   // a newly-added dependency (census), not a bump
+	redirect string // non-empty: this dep is redirected to this target
+	failed   bool
+	errMsg   string
 }
 
 // Markdown renders bulk results as a GitHub-Flavored Markdown report shaped
@@ -43,6 +44,13 @@ func Markdown(results []BulkResult) string {
 	var nClean int
 	worst := tierClean
 	for _, r := range results {
+		if r.Redirect != "" {
+			// a trusted name served from a non-registry source is FACT-grade
+			// security, the loudest signal; no fetch, so no phrases to compute
+			worst = tierLook
+			shown = append(shown, commentRow{ref: r.Ref, tier: tierLook, redirect: r.Redirect})
+			continue
+		}
 		if r.Census != nil {
 			t, phrases := censusSignals(r.Census)
 			if t > worst {
@@ -91,6 +99,10 @@ func Markdown(results []BulkResult) string {
 		for _, r := range shown {
 			if r.failed {
 				w("- **%s** could not be analysed: %s", refArrow(r.ref), mdTaint(r.errMsg))
+				continue
+			}
+			if r.redirect != "" {
+				w("- **%s → %s** (redirect) — served from a non-registry source (fork/git/local); a trusted name pointed elsewhere is the trust-laundering vector, verify the source", mdTaint(r.ref), mdTaint(r.redirect))
 				continue
 			}
 			if r.isNew {

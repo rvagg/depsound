@@ -107,6 +107,25 @@ func TestMarkdownNewDependency(t *testing.T) {
 	}
 }
 
+// A redirect (a trusted name served off the registry) is the loud tier, names
+// its target, and escapes an attacker-controlled target.
+func TestMarkdownRedirect(t *testing.T) {
+	out := Markdown([]BulkResult{{Ref: "go:github.com/trusted/x", Redirect: "github.com/attacker/x@v1.2.0"}})
+	if !strings.Contains(out, "look at now") {
+		t.Errorf("a redirect is the loud tier:\n%s", out)
+	}
+	if !strings.Contains(out, "redirect") || !strings.Contains(out, "github.com/attacker/x") {
+		t.Errorf("should label the redirect and name the target:\n%s", out)
+	}
+	if strings.Contains(out, "no signals tripped") {
+		t.Errorf("a redirect must never read as clean:\n%s", out)
+	}
+	out = Markdown([]BulkResult{{Ref: "go:x", Redirect: "evil <img src=x>"}})
+	if strings.Contains(out, "<img") {
+		t.Errorf("redirect target not escaped:\n%s", out)
+	}
+}
+
 // A hostile package name or error must not inject HTML or Markdown. The whole
 // comment is active Markdown now (no embedded report), so check all of it.
 func TestMarkdownEscapesHostileValues(t *testing.T) {

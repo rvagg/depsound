@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/rvagg/depsound/internal/gopkg"
 )
 
 // detectManifests maps an authoritative resolution file's base name to the
@@ -79,8 +81,14 @@ func detectCmd(args []string) error {
 		for _, c := range res.Added {
 			fmt.Printf("%s:%s %s\n", c.Eco, c.Name, c.To)
 		}
+		for _, r := range res.Redirects {
+			fmt.Printf("redirect %s:%s %s\n", r.Eco, r.Name, r.Target)
+		}
 		if len(res.Added) > 0 {
 			fmt.Fprintf(os.Stderr, "depsound: detect: %d new dependency(ies) in the list (census-shaped)\n", len(res.Added))
+		}
+		if len(res.Redirects) > 0 {
+			fmt.Fprintf(os.Stderr, "depsound: detect: %d redirect(s) to a non-registry source\n", len(res.Redirects))
 		}
 		for _, n := range res.Notes {
 			fmt.Fprintf(os.Stderr, "depsound: detect: note: %s\n", n)
@@ -107,10 +115,21 @@ type detectChange struct {
 	Files    []string `json:"files"`
 }
 
+// detectRedirect is a dependency pointed at a non-registry source by a
+// replace/patch/override introduced or changed in the PR: a fork, git URL, or
+// local path. FACT-grade and needs no fetch; the redirect itself is the signal.
+type detectRedirect struct {
+	Eco    string   `json:"ecosystem"`
+	Name   string   `json:"name"`   // the module being redirected
+	Target string   `json:"target"` // where it now points
+	Files  []string `json:"files"`
+}
+
 type detectResult struct {
-	Changed []detectChange `json:"changed"` // bumps (from and to)
-	Added   []detectChange `json:"added"`   // new deps (census-shaped)
-	Notes   []string       `json:"notes,omitempty"`
+	Changed   []detectChange   `json:"changed"`   // bumps (from and to)
+	Added     []detectChange   `json:"added"`     // new deps (census-shaped)
+	Redirects []detectRedirect `json:"redirects"` // non-registry source flags
+	Notes     []string         `json:"notes,omitempty"`
 }
 
 // detectChanges parses each pair's two versions, diffs them, and aggregates
@@ -120,7 +139,7 @@ type detectResult struct {
 // are dropped (a dep leaving is a compat note at most, never a review target).
 func detectChanges(pairs []detectPair) detectResult {
 	var res detectResult
-	changedIdx, addedIdx := map[string]int{}, map[string]int{}
+	changedIdx, addedIdx, redirectIdx := map[string]int{}, map[string]int{}, map[string]int{}
 	skipped := map[string]bool{}
 	for _, p := range pairs {
 		base := path.Base(p.path)
@@ -150,10 +169,85 @@ func detectChanges(pairs []detectPair) detectResult {
 		for _, c := range d.added {
 			mergeDetect(&res.Added, addedIdx, te.analysis, c.Path, "", c.To, c.Indirect, p.path)
 		}
+		// redirects: a replace/patch/override pointing a dependency off the
+		// registry. go's replace directive is directly nameable; the lockfile
+		// ecosystems' non-registry sets are a follow-on.
+		if kind == "go" {
+			for _, rd := range goRedirectDelta(p.old, p.new) {
+				mergeRedirect(&res.Redirects, redirectIdx, te.analysis, rd, p.path)
+			}
+		}
 	}
 	sortDetect(res.Changed)
 	sortDetect(res.Added)
+	sortRedirects(res.Redirects)
 	return res
+}
+
+// goRedirectDelta returns the replace directives added or retargeted between
+// two go.mod versions. In the main module (a consumer's own go.mod, what
+// detect inspects) a replace is live, so a new or changed one redirects that
+// module off the registry. Keyed by the replaced module path; a parse failure
+// yields nothing here (the version pass already notes it).
+func goRedirectDelta(oldSrc, newSrc string) []detectRedirect {
+	oldR, newR := goReplaces(oldSrc), goReplaces(newSrc)
+	keys := make([]string, 0, len(newR))
+	for k := range newR {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []detectRedirect
+	for _, k := range keys {
+		if oldR[k] == newR[k] {
+			continue // unchanged replace: not introduced by this PR
+		}
+		name := k
+		if i := strings.IndexByte(name, '@'); i >= 0 {
+			name = name[:i] // drop a version-specific replace's @version
+		}
+		out = append(out, detectRedirect{Name: name, Target: newR[k]})
+	}
+	return out
+}
+
+func goReplaces(src string) map[string]string {
+	if src == "" || src == "-" {
+		return nil
+	}
+	b, err := readSource(src, "go.mod")
+	if err != nil {
+		return nil
+	}
+	m, err := gopkg.ParseBytes(src, b)
+	if err != nil {
+		return nil
+	}
+	return gopkg.ReplaceSet(m)
+}
+
+func mergeRedirect(dst *[]detectRedirect, idx map[string]int, eco string, rd detectRedirect, file string) {
+	key := eco + "\x00" + rd.Name + "\x00" + rd.Target
+	if i, ok := idx[key]; ok {
+		(*dst)[i].Files = appendUnique((*dst)[i].Files, file)
+		return
+	}
+	idx[key] = len(*dst)
+	*dst = append(*dst, detectRedirect{Eco: eco, Name: rd.Name, Target: rd.Target, Files: []string{file}})
+}
+
+func sortRedirects(rs []detectRedirect) {
+	for i := range rs {
+		sort.Strings(rs[i].Files)
+	}
+	sort.Slice(rs, func(i, j int) bool {
+		if rs[i].Eco != rs[j].Eco {
+			return rs[i].Eco < rs[j].Eco
+		}
+		if rs[i].Name != rs[j].Name {
+			return rs[i].Name < rs[j].Name
+		}
+		return rs[i].Target < rs[j].Target
+	})
 }
 
 // resolveManifest reads and parses one side of a pair. An absent side ("-" or

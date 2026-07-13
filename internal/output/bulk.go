@@ -18,7 +18,12 @@ type BulkResult struct {
 	Ref    string       `json:"ref"`
 	Stats  *stats.Stats `json:"stats,omitempty"`
 	Census *Census      `json:"census,omitempty"`
-	Err    string       `json:"error,omitempty"`
+	// Redirect names the non-registry source a dependency (Ref) is pointed at
+	// by a replace/patch/override: a fork, git URL, or local path. FACT-grade
+	// and needs no fetch, so it carries no Stats/Census; the trust-laundering
+	// signal is the redirect itself.
+	Redirect string `json:"redirect,omitempty"`
+	Err      string `json:"error,omitempty"`
 }
 
 // digest is the per-dep signal summary the aggregate rolls up.
@@ -68,9 +73,13 @@ func Bulk(results []BulkResult) string {
 // changed-module set IS a bulk list). transitive adjusts the coverage line
 // that would otherwise (wrongly) claim the transitive graph is unchecked.
 func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) {
-	var failed, newDeps, execHits, genHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
+	var failed, redirects, newDeps, execHits, genHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
 	digests := map[string]digest{}
 	for _, r := range results {
+		if r.Redirect != "" {
+			redirects = append(redirects, r)
+			continue
+		}
 		if r.Census != nil {
 			newDeps = append(newDeps, r)
 			continue
@@ -106,8 +115,15 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		}
 	}
 
-	// order by weight: new risk first, then residual, then breaking, then
-	// the positive (fixes), then the unremarkable
+	// order by weight: a redirect (a trusted name served from elsewhere) is
+	// the loudest, then new risk, residual, breaking, the positive, the rest
+	if len(redirects) > 0 {
+		w("")
+		w("WARNING dependency REDIRECTED off the registry (fork/git/local: trust-laundering shape):")
+		for _, r := range redirects {
+			w("  %s  -> %s", taint(r.Ref), taint(r.Redirect))
+		}
+	}
 	section(w, "WARNING build/install execution surface (present or introduced)", execHits, func(r BulkResult) string {
 		return strings.Join(digests[r.Ref].execWhat, ", ")
 	})

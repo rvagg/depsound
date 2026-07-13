@@ -149,6 +149,46 @@ func TestDetectLockfileKinds(t *testing.T) {
 	}
 }
 
+// TestDetectGoRedirect: a replace added in the new go.mod redirects a module
+// off the registry (the trust-laundering vector). An unchanged replace present
+// in both versions is not flagged; only what this PR introduces.
+func TestDetectGoRedirect(t *testing.T) {
+	writeText := func(content string) string {
+		p := filepath.Join(t.TempDir(), "f")
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	const base = "module example.com/m\n\ngo 1.21\n\nrequire github.com/trusted/x v1.2.0\n"
+	forked := base + "\nreplace github.com/trusted/x => github.com/attacker/x v1.2.0\n"
+
+	res := detectChanges([]detectPair{{path: "go.mod", old: writeText(base), new: writeText(forked)}})
+	if len(res.Redirects) != 1 {
+		t.Fatalf("want 1 redirect, got %+v", res.Redirects)
+	}
+	r := res.Redirects[0]
+	if r.Eco != "go" || r.Name != "github.com/trusted/x" || r.Target != "github.com/attacker/x@v1.2.0" {
+		t.Errorf("unexpected redirect %+v", r)
+	}
+	if len(r.Files) != 1 || r.Files[0] != "go.mod" {
+		t.Errorf("want provenance [go.mod], got %v", r.Files)
+	}
+
+	// a replace present in BOTH versions is not introduced by this PR
+	res = detectChanges([]detectPair{{path: "go.mod", old: writeText(forked), new: writeText(forked)}})
+	if len(res.Redirects) != 0 {
+		t.Errorf("an unchanged replace must not flag: %+v", res.Redirects)
+	}
+
+	// a replace to a local path is still a redirect
+	local := base + "\nreplace github.com/trusted/x => ../local\n"
+	res = detectChanges([]detectPair{{path: "go.mod", old: writeText(base), new: writeText(local)}})
+	if len(res.Redirects) != 1 || res.Redirects[0].Target != "../local" {
+		t.Errorf("local replace should redirect to ../local, got %+v", res.Redirects)
+	}
+}
+
 // TestDetectSkipsUnknown: a changed file with no detector is noted, not
 // silently dropped, and once per base name.
 func TestDetectSkipsUnknown(t *testing.T) {

@@ -85,6 +85,17 @@ func RequireSet(m *Mod) map[string]Require {
 	return out
 }
 
+// ReplaceSet returns the replace directives keyed by the replaced module
+// (path, or path@version for a version-specific replace) and valued by the
+// target (path, or path@version). In the MAIN module (what detect inspects on
+// a consumer's own go.mod) a replace is LIVE: it redirects the build's view of
+// that module, so a replace pointing at a fork or a local path is a
+// supply-chain redirect, unlike the inert dependency-side replace RequireDelta
+// annotates.
+func ReplaceSet(m *Mod) map[string]string {
+	return replaces(m)
+}
+
 // ConstraintsDelta reports forced-adjacency changes: the go directive
 // (bumps propagate into consumers' go.mod), toolchain, and tool blocks.
 func ConstraintsDelta(a, b *Mod) []manifest.Change {

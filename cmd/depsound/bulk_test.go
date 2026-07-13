@@ -19,23 +19,25 @@ go:github.com/x/y v1.0.0 v1.1.0
 		t.Fatal(err)
 	}
 	want := []bulkItem{
-		{"npm:hono", "4.12.20", "4.12.27"},
-		{"go:github.com/x/y", "v1.0.0", "v1.1.0"},
+		{spec: "npm:hono", from: "4.12.20", to: "4.12.27"},
+		{spec: "go:github.com/x/y", from: "v1.0.0", to: "v1.1.0"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v want %+v", got, want)
 	}
 }
 
-// a two-field line is a new dependency (census): no from, just a version.
-func TestParseBulkLinesCensus(t *testing.T) {
-	got, err := parseBulkLines("npm:left-pad 1.3.0\ngo:github.com/x/y v1.0.0 v1.1.0\n")
+// a two-field line is a new dependency (census); a `redirect` line flags a
+// non-registry source. Both ride the same stream as bumps.
+func TestParseBulkLinesCensusAndRedirect(t *testing.T) {
+	got, err := parseBulkLines("npm:left-pad 1.3.0\ngo:github.com/x/y v1.0.0 v1.1.0\nredirect go:github.com/a/b github.com/fork/b@v1.0.0\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []bulkItem{
-		{"npm:left-pad", "", "1.3.0"}, // census: empty from
-		{"go:github.com/x/y", "v1.0.0", "v1.1.0"},
+		{spec: "npm:left-pad", to: "1.3.0"}, // census: empty from
+		{spec: "go:github.com/x/y", from: "v1.0.0", to: "v1.1.0"},
+		{spec: "go:github.com/a/b", redirect: "github.com/fork/b@v1.0.0"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v want %+v", got, want)
@@ -64,8 +66,8 @@ func TestParseBulkJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []bulkItem{
-		{"npm:hono", "4.12.20", "4.12.27"},
-		{"crates:rand", "0.9.2", "0.10.0"},
+		{spec: "npm:hono", from: "4.12.20", to: "4.12.27"},
+		{spec: "crates:rand", from: "0.9.2", to: "0.10.0"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v want %+v", got, want)

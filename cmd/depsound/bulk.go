@@ -76,6 +76,7 @@ func bulkCmd(args []string) error {
 
 type bulkItem struct {
 	spec, from, to string
+	redirect       string // non-empty: spec is redirected to this target (a flag, no fetch)
 }
 
 // readBulkList reads from --file, else a positional file arg, else stdin.
@@ -111,17 +112,27 @@ func parseBulkJSON(raw []byte) ([]bulkItem, error) {
 		Name      string `json:"name"`
 		From      string `json:"from"`
 		To        string `json:"to"`
+		Redirect  string `json:"redirect"`
 	}
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return nil, fmt.Errorf("bulk JSON: %w", err)
 	}
 	var items []bulkItem
 	for _, e := range arr {
-		// from omitted marks a new dependency (census); to is always required
-		if e.Ecosystem == "" || e.Name == "" || e.To == "" {
-			return nil, fmt.Errorf("bulk JSON entry needs ecosystem, name, to (from optional for a new dep): %+v", e)
+		if e.Ecosystem == "" || e.Name == "" {
+			return nil, fmt.Errorf("bulk JSON entry needs ecosystem and name: %+v", e)
 		}
-		items = append(items, bulkItem{spec: e.Ecosystem + ":" + e.Name, from: e.From, to: e.To})
+		spc := e.Ecosystem + ":" + e.Name
+		// a redirect is a flag (no version to diff); otherwise to is required,
+		// with from omitted marking a new dependency (census)
+		if e.Redirect != "" {
+			items = append(items, bulkItem{spec: spc, redirect: e.Redirect})
+			continue
+		}
+		if e.To == "" {
+			return nil, fmt.Errorf("bulk JSON entry needs to (or redirect): %+v", e)
+		}
+		items = append(items, bulkItem{spec: spc, from: e.From, to: e.To})
 	}
 	return items, nil
 }
@@ -138,6 +149,17 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 			continue
 		}
 		f := strings.Fields(line)
+		// a redirect line flags a non-registry source: `redirect <eco>:<name> <target>`
+		if len(f) > 0 && f[0] == "redirect" {
+			if len(f) != 3 {
+				return nil, fmt.Errorf("bulk line %q: want `redirect <eco>:<name> <target>`", line)
+			}
+			if _, err := spec.Parse(f[1]); err != nil {
+				return nil, err
+			}
+			items = append(items, bulkItem{spec: f[1], redirect: f[2]})
+			continue
+		}
 		switch len(f) {
 		case 2:
 			if _, err := spec.Parse(f[0]); err != nil {
@@ -150,7 +172,7 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 			}
 			items = append(items, bulkItem{spec: f[0], from: f[1], to: f[2]})
 		default:
-			return nil, fmt.Errorf("bulk line %q: want `<eco>:<name> <from> <to>` (bump) or `<eco>:<name> <version>` (new dep)", line)
+			return nil, fmt.Errorf("bulk line %q: want `<eco>:<name> <from> <to>` (bump), `<eco>:<name> <version>` (new dep), or `redirect <eco>:<name> <target>`", line)
 		}
 	}
 	return items, nil
@@ -185,6 +207,12 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Durati
 		go func(i int, it bulkItem) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// a redirect is a flag, not an artifact: nothing to fetch or diff,
+			// the signal is that a trusted name points off the registry
+			if it.redirect != "" {
+				results[i] = output.BulkResult{Ref: it.spec, Redirect: it.redirect}
+				return
+			}
 			// no from = a newly-added dependency: census its whole footprint,
 			// there is no prior version to diff against
 			if it.from == "" {
