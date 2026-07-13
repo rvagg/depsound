@@ -149,6 +149,18 @@ func TestMarkdownLinksAdvisories(t *testing.T) {
 	}
 }
 
+func TestCommas(t *testing.T) {
+	for in, want := range map[int]string{
+		0: "0", 42: "42", 999: "999", 1000: "1,000",
+		49532: "49,532", 1234567: "1,234,567",
+		-123: "-123", -49532: "-49,532",
+	} {
+		if got := commas(in); got != want {
+			t.Errorf("commas(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestMdTaint(t *testing.T) {
 	// each metacharacter checked in isolation: entity encodings contain '#'
 	// and digits, so a combined input would collide (&#124; holds "#12").

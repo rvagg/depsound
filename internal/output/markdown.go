@@ -102,6 +102,19 @@ func refArrow(ref string) string {
 	return mdTaint(strings.ReplaceAll(ref, " -> ", " → "))
 }
 
+// commas formats a count with thousands separators: 49532 -> "49,532".
+func commas(n int) string {
+	sign := ""
+	if n < 0 {
+		sign, n = "-", -n
+	}
+	s := fmt.Sprintf("%d", n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return sign + s
+}
+
 // commentSignals turns one dep's stats into its worst tier and plain-language
 // signal phrases. Reuses the bulk digest so the router and the comment agree
 // on what fired. Values that originate in package/advisory data are escaped
@@ -133,7 +146,7 @@ func commentSignals(s *stats.Stats) (tier, []string) {
 		// review-worthy but not new-risk-introduced, so it weighs rather than
 		// taking the loud tier; otherwise every routine dist bump dominates
 		// the headline. Introduced CVEs and new execution surface stay loud.
-		add(tierWeigh, fmt.Sprintf("generated code changed (%s, ±%d lines): outside the review surface, worth a look", mdTaint(d.genFile), d.genDelta))
+		add(tierWeigh, fmt.Sprintf("generated code changed (%s, ±%s lines): outside the review surface, worth a look", mdTaint(d.genFile), commas(d.genDelta)))
 	}
 	if d.osvStill > 0 {
 		add(tierWeigh, fmt.Sprintf("%d known CVE(s) still present after the bump: %s", d.osvStill, linkedVulnIDs(s.Security.StillPresent, 5)))
