@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -28,8 +29,9 @@ type commentRow struct {
 
 // Markdown renders bulk results as a GitHub-Flavored Markdown report shaped
 // for a PR sticky comment: a plain-language headline, the deps that tripped a
-// signal (worst first), the coverage boundary in small print, and the full
-// router report folded into a <details> block. depsound owns the wording; the
+// signal (worst first), and the coverage boundary in small print. The full
+// firehose report is left to the run artifact, not embedded, so the comment
+// carries no terminal-style shout. depsound owns the wording; the
 // action that posts this is thin plumbing (and appends run-specific links like
 // the artifact URL, which depsound cannot know). A leading HTML comment carries
 // the one-line check title; a trailing one is the per-PR upsert anchor, both
@@ -95,18 +97,6 @@ func Markdown(results []BulkResult) string {
 		"transitive depth, publish provenance. Silence is not safety. " +
 		"Drill any dep: <code>depsound &lt;eco&gt;:&lt;name&gt; &lt;from&gt; &lt;to&gt;</code>.</sub>")
 
-	report := Bulk(results)
-	f := fence(report)
-	w("")
-	w("<details><summary>depsound report</summary>")
-	w("")
-	w("%s", f)
-	b.WriteString(report)
-	if !strings.HasSuffix(report, "\n") {
-		w("")
-	}
-	w("%s", f)
-	w("</details>")
 	w("")
 	w("<sub>depsound %s · gateway, not verdict</sub>", mdTaint(toolVersion(results)))
 	w("<!-- depsound -->")
@@ -129,13 +119,14 @@ func commentSignals(s *stats.Stats) (tier, []string) {
 	}
 
 	if d.osvIntro > 0 {
-		add(tierLook, fmt.Sprintf("introduces %d known CVE(s): %s", d.osvIntro, mdTaint(d.introIDs)))
+		add(tierLook, fmt.Sprintf("introduces %d known CVE(s): %s", d.osvIntro, linkedVulnIDs(s.Security.Introduced, 5)))
 	}
 	if d.exec {
+		surfaces := mdTaint(strings.Join(humanExec(d.execWhat), ", "))
 		if execIntroduced(d.execWhat) {
-			add(tierLook, "new execution surface ("+mdTaint(strings.Join(d.execWhat, "; "))+")")
+			add(tierLook, "new execution surface: "+surfaces)
 		} else {
-			add(tierWeigh, "execution surface present, its build code may have changed")
+			add(tierWeigh, "execution surface present ("+surfaces+"), its build code may have changed")
 		}
 	}
 	if d.genDelta > 0 {
@@ -146,7 +137,7 @@ func commentSignals(s *stats.Stats) (tier, []string) {
 		add(tierWeigh, fmt.Sprintf("generated code changed (%s, ±%d lines): outside the review surface, read it", mdTaint(d.genFile), d.genDelta))
 	}
 	if d.osvStill > 0 {
-		add(tierWeigh, fmt.Sprintf("%d known CVE(s) still present after the bump: %s", d.osvStill, mdTaint(d.stillIDs)))
+		add(tierWeigh, fmt.Sprintf("%d known CVE(s) still present after the bump: %s", d.osvStill, linkedVulnIDs(s.Security.StillPresent, 5)))
 	}
 	if d.compat {
 		add(tierWeigh, compatPhrase(s))
@@ -165,15 +156,31 @@ func compatPhrase(s *stats.Stats) string {
 	if c.TypeFrom != c.TypeTo && c.TypeFrom != "" && c.TypeTo != "" {
 		return fmt.Sprintf("module format changed: %s -> %s", mdTaint(c.TypeFrom), mdTaint(c.TypeTo))
 	}
-	if len(c.Constraints) > 0 {
-		x := c.Constraints[0]
-		more := ""
-		if len(c.Constraints) > 1 {
-			more = fmt.Sprintf(" (+%d more)", len(c.Constraints)-1)
+	// structural constraints (edition, MSRV, engines, go directive) are few and
+	// load-bearing, so name them; feature-set changes are churny, so count them
+	var structural []string
+	features := 0
+	for _, x := range c.Constraints {
+		if strings.HasPrefix(x.Key, "feature.") {
+			features++
+			continue
 		}
-		return fmt.Sprintf("%s %s -> %s%s", mdTaint(x.Key), mdTaint(x.From), mdTaint(x.To), more)
+		structural = append(structural, fmt.Sprintf("%s %s -> %s", mdTaint(x.Key), mdTaint(x.From), mdTaint(x.To)))
 	}
-	return "exports/resolution changed"
+	const maxShown = 2
+	var parts []string
+	if len(structural) > maxShown {
+		parts = append(structural[:maxShown:maxShown], fmt.Sprintf("+%d more constraint%s", len(structural)-maxShown, plural(len(structural)-maxShown)))
+	} else {
+		parts = structural
+	}
+	if features > 0 {
+		parts = append(parts, fmt.Sprintf("%d feature change%s", features, plural(features)))
+	}
+	if len(parts) == 0 {
+		return "exports/resolution changed"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func execIntroduced(what []string) bool {
@@ -183,6 +190,86 @@ func execIntroduced(what []string) bool {
 		}
 	}
 	return false
+}
+
+// humanExec strips the router's terminal decorations ("INTRODUCED", the
+// present-note, the "lifecycle " prefix) so surfaces read as plain names in a
+// comment bullet instead of shouting.
+func humanExec(what []string) []string {
+	out := make([]string, 0, len(what))
+	for _, w := range what {
+		w = strings.TrimPrefix(w, "lifecycle ")
+		w = strings.ReplaceAll(w, " INTRODUCED", "")
+		w = strings.ReplaceAll(w, " present (build code may have changed)", "")
+		out = append(out, w)
+	}
+	return out
+}
+
+// linkedVulnIDs renders up to max advisory ids as clickable links, then a
+// "+N more" tail so a heavy dep does not become a wall.
+func linkedVulnIDs(vulns []osv.Vuln, max int) string {
+	parts := make([]string, 0, len(vulns))
+	for i, v := range vulns {
+		if i >= max {
+			parts = append(parts, fmt.Sprintf("+%d more", len(vulns)-max))
+			break
+		}
+		parts = append(parts, vulnLink(preferredID(v)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// preferredID picks the most recognizable id to show: the CVE alias when
+// present (as the router does), else the primary OSV id.
+func preferredID(v osv.Vuln) string {
+	for _, a := range v.Aliases {
+		if strings.HasPrefix(a, "CVE-") {
+			return a
+		}
+	}
+	return v.ID
+}
+
+// vulnLink renders a clickable advisory id. The charset check IS the
+// sanitization: advisory ids are [A-Za-z0-9-], safe as both a Markdown label
+// and a URL path, so a validated id needs no further escaping. A malformed id
+// (a hostile feed) degrades to plain escaped text, no link.
+func vulnLink(id string) string {
+	if !safeVulnID(id) {
+		return mdTaint(id)
+	}
+	return "[" + id + "](" + vulnURL(id) + ")"
+}
+
+// vulnURL routes an advisory id to its authoritative page.
+func vulnURL(id string) string {
+	switch {
+	case strings.HasPrefix(id, "CVE-"):
+		return "https://www.cve.org/CVERecord?id=" + id
+	case strings.HasPrefix(id, "GHSA-"):
+		return "https://github.com/advisories/" + id
+	case strings.HasPrefix(id, "RUSTSEC-"):
+		return "https://rustsec.org/advisories/" + id + ".html"
+	case strings.HasPrefix(id, "GO-"):
+		return "https://pkg.go.dev/vuln/" + id
+	default:
+		return "https://osv.dev/vulnerability/" + id
+	}
+}
+
+func safeVulnID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func triage(worst tier, attention int) string {
@@ -246,22 +333,4 @@ func mdTaint(s string) string {
 		"@", "&#64;",
 		"#", "&#35;",
 	).Replace(s)
-}
-
-// fence returns a Markdown code fence of backticks one longer than the longest
-// backtick run in content, so tainted content inside cannot break out of the
-// fence (a package name may carry backticks). Minimum three.
-func fence(content string) string {
-	longest, cur := 0, 0
-	for _, c := range content {
-		if c == '`' {
-			cur++
-			if cur > longest {
-				longest = cur
-			}
-		} else {
-			cur = 0
-		}
-	}
-	return strings.Repeat("`", max(longest+1, 3))
 }

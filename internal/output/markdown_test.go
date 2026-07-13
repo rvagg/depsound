@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -70,34 +71,78 @@ func TestMarkdownGeneratedDeltaWeighs(t *testing.T) {
 	}
 }
 
-// A hostile package name or error must not inject HTML or Markdown into the
-// ACTIVE region of the comment (headline + bullets + coverage). The full
-// report is embedded inside a code fence, where such bytes are inert, so this
-// checks only the region GitHub renders as Markdown.
+// A hostile package name or error must not inject HTML or Markdown. The whole
+// comment is active Markdown now (no embedded report), so check all of it.
 func TestMarkdownEscapesHostileValues(t *testing.T) {
 	hostile := "npm:evil <img src=x onerror=alert(1)> `code` *bold* [l](u)"
 	out := Markdown([]BulkResult{{Ref: hostile, Stats: nil, Err: "boom <script>"}})
 
-	active, _, _ := strings.Cut(out, "<details>")
 	for _, raw := range []string{"<img", "<script"} {
-		if strings.Contains(active, raw) {
-			t.Errorf("raw %q reached active Markdown (injection):\n%s", raw, active)
+		if strings.Contains(out, raw) {
+			t.Errorf("raw %q reached the comment (injection):\n%s", raw, out)
 		}
 	}
-	if !strings.Contains(active, "&lt;img") {
-		t.Errorf("hostile ref not HTML-escaped in active region:\n%s", active)
+	if !strings.Contains(out, "&lt;img") {
+		t.Errorf("hostile ref not HTML-escaped:\n%s", out)
 	}
 }
 
-func TestFenceOutgrowsBackticks(t *testing.T) {
-	if f := fence("no ticks"); f != "```" {
-		t.Errorf("plain content fence = %q, want three", f)
+// The router shouts "INTRODUCED" (caps) in its terminal output; that must not
+// leak into a comment bullet.
+func TestMarkdownExecDeshout(t *testing.T) {
+	s := cleanStats()
+	s.Runnable = stats.Runnable{CgoTo: true} // cgo newly introduced (was absent)
+	out := Markdown([]BulkResult{{Ref: "go:example.com/x v1 -> v2", Stats: s}})
+	if strings.Contains(out, "INTRODUCED") {
+		t.Errorf("terminal shout leaked into comment:\n%s", out)
 	}
-	if f := fence("a ``` b"); len(f) < 4 {
-		t.Errorf("content with ``` needs a longer fence, got %q", f)
+	if !strings.Contains(out, "new execution surface: cgo") {
+		t.Errorf("expected clean exec phrase:\n%s", out)
 	}
-	if f := fence("````"); f != "`````" {
-		t.Errorf("fence must exceed the longest run, got %q", f)
+	if !strings.Contains(out, "look at now") {
+		t.Errorf("new execution surface should be the loud tier:\n%s", out)
+	}
+}
+
+// A rich compat change must name the load-bearing constraints (MSRV must not
+// hide) and count feature churn, never a dangling "+N more".
+func TestMarkdownCompatNamesConstraints(t *testing.T) {
+	s := cleanStats()
+	s.Compat = stats.Compat{Constraints: []manifest.Change{
+		{Key: "edition", Status: "changed", From: "2021", To: "2024"},
+		{Key: "rust-version (MSRV)", Status: "changed", From: "1.63", To: "1.85"},
+		{Key: "feature.foo", Status: "added", To: "dep:x"},
+		{Key: "feature.bar", Status: "changed", From: "a", To: "b"},
+	}}
+	out := Markdown([]BulkResult{{Ref: "crates:x 1 -> 2", Stats: s}})
+	if strings.Contains(out, "more)") {
+		t.Errorf("no bare '(+N more)' should survive:\n%s", out)
+	}
+	if !strings.Contains(out, "rust-version (MSRV) 1.63 -> 1.85") {
+		t.Errorf("MSRV must be surfaced, not hidden in a count:\n%s", out)
+	}
+	if !strings.Contains(out, "2 feature changes") {
+		t.Errorf("feature churn should be named and counted:\n%s", out)
+	}
+}
+
+// Advisory ids render as clickable links to their authoritative pages, with
+// the charset check as the sanitizer (a malformed id gets no link).
+func TestMarkdownLinksAdvisories(t *testing.T) {
+	s := cleanStats()
+	s.Security = stats.Security{
+		Introduced:   []osv.Vuln{{ID: "GHSA-aaaa-bbbb-cccc", Aliases: []string{"CVE-2026-1111"}}},
+		StillPresent: []osv.Vuln{{ID: "RUSTSEC-2026-0097"}},
+	}
+	out := Markdown([]BulkResult{{Ref: "npm:x 1 -> 2", Stats: s}})
+	if !strings.Contains(out, "[CVE-2026-1111](https://www.cve.org/CVERecord?id=CVE-2026-1111)") {
+		t.Errorf("CVE not linked to cve.org (alias preferred as label):\n%s", out)
+	}
+	if !strings.Contains(out, "[RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097.html)") {
+		t.Errorf("RUSTSEC not linked:\n%s", out)
+	}
+	if got := vulnLink("evil id](http://x)"); strings.Contains(got, "](http") {
+		t.Errorf("malformed id must not become a link: %q", got)
 	}
 }
 
