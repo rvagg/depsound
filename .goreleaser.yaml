@@ -16,6 +16,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X github.com/rvagg/depsound/internal/version.version={{ .Version }}
     mod_timestamp: '{{ .CommitTimestamp }}'
 
 universal_binaries:

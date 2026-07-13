@@ -32,7 +32,7 @@ const metaTimeout = 30 * time.Second
 // tests can shorten it.
 var stallTimeout = 30 * time.Second
 
-const userAgent = version.UserAgent
+var userAgent = version.UserAgent
 
 // NPM fetches name@version into dest. The version metadata document
 // supplies the canonical tarball URL and integrity, which is verified

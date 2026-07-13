@@ -21,7 +21,7 @@ var apiURL = "https://api.osv.dev/v1/query"
 
 var batchURL = "https://api.osv.dev/v1/querybatch"
 
-const userAgent = version.UserAgent
+var userAgent = version.UserAgent
 
 // cacheTTL bounds staleness: OSV is time-varying (advisories land after a
 // release), so unlike immutable artifacts it is re-fetched when stale.
