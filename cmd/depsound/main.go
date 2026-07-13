@@ -61,6 +61,8 @@ func run(args []string) error {
 			return censusCmd(args[1:])
 		case "transitive":
 			return transitiveCmd(args[1:])
+		case "detect":
+			return detectCmd(args[1:])
 		}
 	}
 	// spec alone or spec+version (1-2 positionals) is a census; spec+from+to
