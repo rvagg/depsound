@@ -39,21 +39,17 @@ type commentRow struct {
 // Markdown/HTML medium here, at the point they enter a document GitHub renders.
 func Markdown(results []BulkResult) string {
 	var shown []commentRow
-	var nClean, attention int
+	var nClean int
 	worst := tierClean
 	for _, r := range results {
 		if r.Stats == nil {
 			shown = append(shown, commentRow{ref: r.Ref, failed: true, errMsg: r.Err})
-			attention++
 			worst = tierLook // an un-analysed dep is a gap worth a look
 			continue
 		}
 		t, phrases := commentSignals(r.Stats)
 		if t > worst {
 			worst = t
-		}
-		if t >= tierWeigh {
-			attention++
 		}
 		if len(phrases) == 0 {
 			nClean++
@@ -77,8 +73,8 @@ func Markdown(results []BulkResult) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("<!-- depsound-title: depsound: %s -->", checkTitle(worst, total, attention))
-	w("**depsound** · %d dependency update%s · %s", total, plural(total), triage(worst, attention))
+	w("<!-- depsound-title: depsound: %s -->", checkTitle(worst, total))
+	w("**depsound** · %d dependency update%s · %s", total, plural(total), triage(worst))
 	if len(shown) > 0 {
 		w("")
 		for _, r := range shown {
@@ -93,12 +89,9 @@ func Markdown(results []BulkResult) string {
 		}
 	}
 	w("")
-	w("<sub>Not a verdict. Not checked: reachability, runtime behaviour, your tests, " +
-		"transitive depth, publish provenance. Silence is not safety. " +
-		"Drill any dep: <code>depsound &lt;eco&gt;:&lt;name&gt; &lt;from&gt; &lt;to&gt;</code>.</sub>")
+	w("<sub>Not checked: reachability, runtime behaviour, your tests, " +
+		"transitive depth, publish provenance. Silence is not safety.</sub>")
 
-	w("")
-	w("<sub>depsound %s · gateway, not verdict</sub>", mdTaint(toolVersion(results)))
 	w("<!-- depsound -->")
 	return b.String()
 }
@@ -272,34 +265,22 @@ func safeVulnID(id string) bool {
 	return true
 }
 
-func triage(worst tier, attention int) string {
+func triage(worst tier) string {
 	switch worst {
 	case tierLook:
 		return "flags to look at now"
 	case tierWeigh:
-		if attention == 1 {
-			return "1 to weigh"
-		}
-		return fmt.Sprintf("%d to weigh", attention)
+		return "review the changes"
 	default:
 		return "no signals tripped"
 	}
 }
 
-func checkTitle(worst tier, total, attention int) string {
+func checkTitle(worst tier, total int) string {
 	if worst >= tierWeigh {
-		return fmt.Sprintf("%d update(s), %d to review", total, attention)
+		return fmt.Sprintf("%d update(s), flagged for review", total)
 	}
 	return fmt.Sprintf("%d update(s), no signals tripped", total)
-}
-
-func toolVersion(results []BulkResult) string {
-	for _, r := range results {
-		if r.Stats != nil {
-			return r.Stats.Tool.Version
-		}
-	}
-	return ""
 }
 
 func plural(n int) string {

@@ -33,8 +33,8 @@ func TestMarkdownHeadlineTiers(t *testing.T) {
 	s := cleanStats()
 	s.Compat = stats.Compat{TypeFrom: "commonjs", TypeTo: "module"}
 	out = Markdown([]BulkResult{{Ref: "npm:commander 14 -> 15", Stats: s}})
-	if !strings.Contains(out, "1 to weigh") {
-		t.Errorf("compat flip should be '1 to weigh':\n%s", out)
+	if !strings.Contains(out, "review the changes") {
+		t.Errorf("compat flip should read 'review the changes':\n%s", out)
 	}
 	if !strings.Contains(out, "module format changed: commonjs -> module") {
 		t.Errorf("missing module-format phrase:\n%s", out)
@@ -63,8 +63,8 @@ func TestMarkdownGeneratedDeltaWeighs(t *testing.T) {
 	if strings.Contains(out, "look at now") {
 		t.Errorf("generated-delta alone must not read 'look at now':\n%s", out)
 	}
-	if !strings.Contains(out, "to weigh") {
-		t.Errorf("generated-delta should weigh:\n%s", out)
+	if !strings.Contains(out, "review the changes") {
+		t.Errorf("generated-delta should read 'review the changes':\n%s", out)
 	}
 	if !strings.Contains(out, "dist/bundle.js") {
 		t.Errorf("should name the generated file:\n%s", out)
