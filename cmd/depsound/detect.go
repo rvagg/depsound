@@ -14,14 +14,17 @@ import (
 
 // detectManifests maps an authoritative resolution file's base name to the
 // lockfile KIND it parses as. Only files that carry the RESOLVED set belong
-// here: go.mod (post-1.17 prune puts direct+indirect in it) and, later, the
-// lockfiles (package-lock.json / pnpm-lock.yaml / Cargo.lock, which also carry
-// transitive). Declaration files (package.json, Cargo.toml) are deliberately
-// absent: their lockfile is the ground truth and diffing it is authoritative.
-// A changed file whose base name is not here is skipped with a note, never
-// silently.
+// here: go.mod (post-1.17 prune puts direct+indirect in it) and the lockfiles
+// (package-lock.json / pnpm-lock.yaml / Cargo.lock, which carry transitive).
+// Declaration files (package.json, Cargo.toml) are deliberately absent: their
+// lockfile is the ground truth and diffing it is authoritative and catches
+// transitive bumps a manifest diff misses. A changed file whose base name is
+// not here is skipped with a note, never silently.
 var detectManifests = map[string]string{
-	"go.mod": "go",
+	"go.mod":            "go",
+	"package-lock.json": "npm",
+	"pnpm-lock.yaml":    "pnpm",
+	"Cargo.lock":        "crates",
 }
 
 // detectCmd reports the dependency changes a PR makes, by parsing the two

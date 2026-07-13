@@ -104,12 +104,57 @@ func TestDetectIndirect(t *testing.T) {
 	}
 }
 
+// TestDetectLockfileKinds wires the three lockfiles through detect: the
+// authoritative resolution file per ecosystem, parsed by resolveLock. pnpm
+// resolves npm packages, so its analysis ecosystem is npm.
+func TestDetectLockfileKinds(t *testing.T) {
+	write := func(content string) string {
+		p := filepath.Join(t.TempDir(), "lock")
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	npmLock := func(ver string) string {
+		return `{"lockfileVersion":3,"packages":{"":{"name":"root","version":"1.0.0"},` +
+			`"node_modules/lodash":{"version":"` + ver + `","resolved":"https://registry.npmjs.org/lodash/-/lodash-` + ver + `.tgz"}}}`
+	}
+	cargoLock := func(ver string) string {
+		return "version = 3\n\n[[package]]\nname = \"aho-corasick\"\nversion = \"" + ver +
+			"\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+	}
+	pnpmLock := func(ver string) string {
+		return "lockfileVersion: '9.0'\npackages:\n  lodash@" + ver + ":\n    resolution: {integrity: sha512-x}\n"
+	}
+
+	cases := []struct {
+		path, oldC, newC    string
+		eco, name, from, to string
+	}{
+		{"package-lock.json", npmLock("4.17.20"), npmLock("4.17.21"), "npm", "lodash", "4.17.20", "4.17.21"},
+		{"Cargo.lock", cargoLock("1.1.2"), cargoLock("1.1.3"), "crates", "aho-corasick", "1.1.2", "1.1.3"},
+		{"pnpm-lock.yaml", pnpmLock("4.17.20"), pnpmLock("4.17.21"), "npm", "lodash", "4.17.20", "4.17.21"},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			res := detectChanges([]detectPair{{path: c.path, old: write(c.oldC), new: write(c.newC)}})
+			if len(res.Changed) != 1 {
+				t.Fatalf("want 1 change, got %+v (notes %v)", res.Changed, res.Notes)
+			}
+			g := res.Changed[0]
+			if g.Eco != c.eco || g.Name != c.name || g.From != c.from || g.To != c.to {
+				t.Errorf("got %+v, want %s:%s %s->%s", g, c.eco, c.name, c.from, c.to)
+			}
+		})
+	}
+}
+
 // TestDetectSkipsUnknown: a changed file with no detector is noted, not
 // silently dropped, and once per base name.
 func TestDetectSkipsUnknown(t *testing.T) {
 	res := detectChanges([]detectPair{
-		{path: "package-lock.json", old: "-", new: "-"},
-		{path: "sub/package-lock.json", old: "-", new: "-"},
+		{path: "requirements.txt", old: "-", new: "-"}, // python: no parser
+		{path: "sub/requirements.txt", old: "-", new: "-"},
 	})
 	if len(res.Changed) != 0 || len(res.Added) != 0 {
 		t.Fatalf("want nothing detected, got %+v %+v", res.Changed, res.Added)
