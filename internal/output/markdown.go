@@ -79,10 +79,10 @@ func Markdown(results []BulkResult) string {
 		w("")
 		for _, r := range shown {
 			if r.failed {
-				w("- **%s** could not be analysed: %s", mdTaint(r.ref), mdTaint(r.errMsg))
+				w("- **%s** could not be analysed: %s", refArrow(r.ref), mdTaint(r.errMsg))
 				continue
 			}
-			w("- **%s** — %s", mdTaint(r.ref), strings.Join(r.phrases, "; "))
+			w("- **%s** — %s", refArrow(r.ref), strings.Join(r.phrases, "; "))
 		}
 		if nClean > 0 {
 			w("- %d other%s: no signals tripped.", nClean, plural(nClean))
@@ -94,6 +94,12 @@ func Markdown(results []BulkResult) string {
 
 	w("<!-- depsound -->")
 	return b.String()
+}
+
+// refArrow renders a dependency ref for a bullet: the tool's " -> " separator
+// as a unicode arrow, then escaped for the Markdown/HTML medium.
+func refArrow(ref string) string {
+	return mdTaint(strings.ReplaceAll(ref, " -> ", " → "))
 }
 
 // commentSignals turns one dep's stats into its worst tier and plain-language
@@ -127,7 +133,7 @@ func commentSignals(s *stats.Stats) (tier, []string) {
 		// review-worthy but not new-risk-introduced, so it weighs rather than
 		// taking the loud tier; otherwise every routine dist bump dominates
 		// the headline. Introduced CVEs and new execution surface stay loud.
-		add(tierWeigh, fmt.Sprintf("generated code changed (%s, ±%d lines): outside the review surface, read it", mdTaint(d.genFile), d.genDelta))
+		add(tierWeigh, fmt.Sprintf("generated code changed (%s, ±%d lines): outside the review surface, worth a look", mdTaint(d.genFile), d.genDelta))
 	}
 	if d.osvStill > 0 {
 		add(tierWeigh, fmt.Sprintf("%d known CVE(s) still present after the bump: %s", d.osvStill, linkedVulnIDs(s.Security.StillPresent, 5)))
@@ -147,7 +153,7 @@ func commentSignals(s *stats.Stats) (tier, []string) {
 func compatPhrase(s *stats.Stats) string {
 	c := s.Compat
 	if c.TypeFrom != c.TypeTo && c.TypeFrom != "" && c.TypeTo != "" {
-		return fmt.Sprintf("module format changed: %s -> %s", mdTaint(c.TypeFrom), mdTaint(c.TypeTo))
+		return fmt.Sprintf("module format changed: %s → %s", mdTaint(c.TypeFrom), mdTaint(c.TypeTo))
 	}
 	// structural constraints (edition, MSRV, engines, go directive) are few and
 	// load-bearing, so name them; feature-set changes are churny, so count them
@@ -158,7 +164,7 @@ func compatPhrase(s *stats.Stats) string {
 			features++
 			continue
 		}
-		structural = append(structural, fmt.Sprintf("%s %s -> %s", mdTaint(x.Key), mdTaint(x.From), mdTaint(x.To)))
+		structural = append(structural, fmt.Sprintf("%s %s → %s", mdTaint(x.Key), mdTaint(x.From), mdTaint(x.To)))
 	}
 	const maxShown = 2
 	var parts []string

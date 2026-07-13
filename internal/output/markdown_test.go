@@ -36,8 +36,11 @@ func TestMarkdownHeadlineTiers(t *testing.T) {
 	if !strings.Contains(out, "review the changes") {
 		t.Errorf("compat flip should read 'review the changes':\n%s", out)
 	}
-	if !strings.Contains(out, "module format changed: commonjs -> module") {
+	if !strings.Contains(out, "module format changed: commonjs → module") {
 		t.Errorf("missing module-format phrase:\n%s", out)
+	}
+	if !strings.Contains(out, "npm:commander 14 → 15") {
+		t.Errorf("ref should render with a unicode arrow:\n%s", out)
 	}
 
 	// an introduced advisory is the loud tier
@@ -118,7 +121,7 @@ func TestMarkdownCompatNamesConstraints(t *testing.T) {
 	if strings.Contains(out, "more)") {
 		t.Errorf("no bare '(+N more)' should survive:\n%s", out)
 	}
-	if !strings.Contains(out, "rust-version (MSRV) 1.63 -> 1.85") {
+	if !strings.Contains(out, "rust-version (MSRV) 1.63 → 1.85") {
 		t.Errorf("MSRV must be surfaced, not hidden in a count:\n%s", out)
 	}
 	if !strings.Contains(out, "2 feature changes") {
