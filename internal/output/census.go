@@ -112,6 +112,42 @@ func (c *Census) hasExec() bool {
 	return len(c.Lifecycle) > 0 || c.BuildRS || c.Cgo || c.ProcMacro || c.Gyp
 }
 
+// censusExecWhat lists the install/build execution surfaces a census carries,
+// as plain names for a one-line adopt-review summary.
+func censusExecWhat(c *Census) []string {
+	var w []string
+	for _, l := range c.Lifecycle {
+		w = append(w, l.Key)
+	}
+	if c.BuildRS {
+		w = append(w, "build.rs")
+	}
+	if c.Cgo {
+		w = append(w, "cgo")
+	}
+	if c.ProcMacro {
+		w = append(w, "proc-macro")
+	}
+	if c.Gyp {
+		w = append(w, "binding.gyp")
+	}
+	return w
+}
+
+// censusFootprint is the one-line adopt-review summary of a new dependency for
+// the text router: size, whether it runs code on install/build, known
+// advisories at that version.
+func censusFootprint(c *Census) string {
+	parts := []string{fmt.Sprintf("%d files", c.Files)}
+	if c.hasExec() {
+		parts = append(parts, "runs install/build code ("+strings.Join(censusExecWhat(c), ", ")+")")
+	}
+	if len(c.Vulns) > 0 {
+		parts = append(parts, fmt.Sprintf("%d known CVE(s)", len(c.Vulns)))
+	}
+	return strings.Join(parts, "; ")
+}
+
 // SubtreeDep is one node of a resolved transitive footprint (deps.dev).
 // Status is set only under --against: have | conflict | new. Advisories are
 // the OSV IDs affecting this node (from a batch scan), if any.

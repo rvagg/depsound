@@ -27,11 +27,27 @@ go:github.com/x/y v1.0.0 v1.1.0
 	}
 }
 
+// a two-field line is a new dependency (census): no from, just a version.
+func TestParseBulkLinesCensus(t *testing.T) {
+	got, err := parseBulkLines("npm:left-pad 1.3.0\ngo:github.com/x/y v1.0.0 v1.1.0\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []bulkItem{
+		{"npm:left-pad", "", "1.3.0"}, // census: empty from
+		{"go:github.com/x/y", "v1.0.0", "v1.1.0"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v want %+v", got, want)
+	}
+}
+
 func TestParseBulkLinesRejectsMalformed(t *testing.T) {
 	for _, bad := range []string{
-		"npm:hono 4.12.20",  // missing to
+		"npm:hono",          // bare spec, no version
 		"hono 1 2",          // no ecosystem colon -> spec.Parse fails
 		"pypi:requests 1 2", // unsupported ecosystem
+		"npm:hono 1 2 3",    // too many fields
 	} {
 		if _, err := parseBulkLines(bad); err == nil {
 			t.Errorf("parseBulkLines(%q): want error", bad)

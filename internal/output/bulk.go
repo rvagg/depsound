@@ -10,11 +10,15 @@ import (
 )
 
 // BulkResult pairs a dependency-change reference with its analysis, or an
-// error if it failed. Ref is tool-formed (spec + versions), safe to print.
+// error if it failed. Ref is tool-formed (spec + versions), safe to print. A
+// bump carries Stats (a diff); a newly-added dependency carries Census (its
+// whole footprint, since there is no prior version to diff): a new dep is
+// unreviewed surface, not a delta, and must never be silently absent.
 type BulkResult struct {
-	Ref   string       `json:"ref"`
-	Stats *stats.Stats `json:"stats,omitempty"`
-	Err   string       `json:"error,omitempty"`
+	Ref    string       `json:"ref"`
+	Stats  *stats.Stats `json:"stats,omitempty"`
+	Census *Census      `json:"census,omitempty"`
+	Err    string       `json:"error,omitempty"`
 }
 
 // digest is the per-dep signal summary the aggregate rolls up.
@@ -64,9 +68,13 @@ func Bulk(results []BulkResult) string {
 // changed-module set IS a bulk list). transitive adjusts the coverage line
 // that would otherwise (wrongly) claim the transitive graph is unchecked.
 func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) {
-	var failed, execHits, genHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
+	var failed, newDeps, execHits, genHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
 	digests := map[string]digest{}
 	for _, r := range results {
+		if r.Census != nil {
+			newDeps = append(newDeps, r)
+			continue
+		}
 		if r.Stats == nil {
 			failed = append(failed, r)
 			continue
@@ -121,6 +129,13 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	section(w, "advisories FIXED by the upgrade (the merge argument)", fixHits, func(r BulkResult) string {
 		return fmt.Sprintf("%d fixed", digests[r.Ref].osvFixed)
 	})
+	if len(newDeps) > 0 {
+		w("")
+		w("NEW dependencies (whole footprint unreviewed; adopt-review, not a diff):")
+		for _, r := range newDeps {
+			w("  %s  %s", taint(r.Ref), censusFootprint(r.Census))
+		}
+	}
 	if len(clean) > 0 {
 		w("")
 		w("NO FLAGS RAISED (%d): NOT the same as safe. These were not assessed", len(clean))

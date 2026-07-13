@@ -74,6 +74,39 @@ func TestMarkdownGeneratedDeltaWeighs(t *testing.T) {
 	}
 }
 
+// A newly-added dependency has no prior version to diff, so it rides the
+// stream as a census: it must appear (never silently absent), floor at the
+// weigh tier (unreviewed surface), and go loud on a shipped CVE or install code.
+func TestMarkdownNewDependency(t *testing.T) {
+	c := &Census{Ecosystem: "npm", Name: "left-pad", Version: "1.3.0", Files: 3}
+	out := Markdown([]BulkResult{{Ref: "npm:left-pad 1.3.0", Census: c}})
+	if !strings.Contains(out, "new dependency") {
+		t.Errorf("a new dep should be labelled:\n%s", out)
+	}
+	if !strings.Contains(out, "adopting 3 files") {
+		t.Errorf("should state the footprint:\n%s", out)
+	}
+	if !strings.Contains(out, "review the changes") || strings.Contains(out, "no signals tripped") {
+		t.Errorf("a new dep floors at weigh and is never clean:\n%s", out)
+	}
+
+	c = &Census{
+		Ecosystem: "npm", Name: "evil", Version: "9.9.9", Files: 12,
+		Vulns:     []osv.Vuln{{ID: "GHSA-aaaa-bbbb-cccc"}},
+		Lifecycle: []manifest.Change{{Key: "postinstall", Status: "present"}},
+	}
+	out = Markdown([]BulkResult{{Ref: "npm:evil 9.9.9", Census: c}})
+	if !strings.Contains(out, "look at now") {
+		t.Errorf("CVE + install script is the loud tier:\n%s", out)
+	}
+	if !strings.Contains(out, "runs code on install/build: postinstall") {
+		t.Errorf("should surface the install execution surface:\n%s", out)
+	}
+	if !strings.Contains(out, "GHSA-aaaa-bbbb-cccc") {
+		t.Errorf("should link the advisory:\n%s", out)
+	}
+}
+
 // A hostile package name or error must not inject HTML or Markdown. The whole
 // comment is active Markdown now (no embedded report), so check all of it.
 func TestMarkdownEscapesHostileValues(t *testing.T) {

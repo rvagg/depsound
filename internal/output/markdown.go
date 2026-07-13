@@ -23,6 +23,7 @@ type commentRow struct {
 	ref     string
 	tier    tier
 	phrases []string
+	isNew   bool // a newly-added dependency (census), not a bump
 	failed  bool
 	errMsg  string
 }
@@ -42,6 +43,16 @@ func Markdown(results []BulkResult) string {
 	var nClean int
 	worst := tierClean
 	for _, r := range results {
+		if r.Census != nil {
+			t, phrases := censusSignals(r.Census)
+			if t > worst {
+				worst = t
+			}
+			// a new dependency is unreviewed surface by definition, so it
+			// always shows (never folds into the clean count)
+			shown = append(shown, commentRow{ref: r.Ref, tier: t, phrases: phrases, isNew: true})
+			continue
+		}
 		if r.Stats == nil {
 			shown = append(shown, commentRow{ref: r.Ref, failed: true, errMsg: r.Err})
 			worst = tierLook // an un-analysed dep is a gap worth a look
@@ -74,12 +85,16 @@ func Markdown(results []BulkResult) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
 	w("<!-- depsound-title: depsound: %s -->", checkTitle(worst, total))
-	w("**depsound** · %d dependency update%s · %s", total, plural(total), triage(worst))
+	w("**depsound** · %d dependency change%s · %s", total, plural(total), triage(worst))
 	if len(shown) > 0 {
 		w("")
 		for _, r := range shown {
 			if r.failed {
 				w("- **%s** could not be analysed: %s", refArrow(r.ref), mdTaint(r.errMsg))
+				continue
+			}
+			if r.isNew {
+				w("- **new dependency %s** — %s", refArrow(r.ref), strings.Join(r.phrases, "; "))
 				continue
 			}
 			w("- **%s** — %s", refArrow(r.ref), strings.Join(r.phrases, "; "))
@@ -157,6 +172,27 @@ func commentSignals(s *stats.Stats) (tier, []string) {
 	if d.osvFixed > 0 {
 		// the merge argument; positive, does not raise the tier
 		phrases = append(phrases, fmt.Sprintf("fixes %d advisory(ies)", d.osvFixed))
+	}
+	return t, phrases
+}
+
+// censusSignals turns a newly-added dependency's footprint into the comment
+// tier and phrases. A new dep is never "clean": you are adopting unreviewed
+// code, so the floor is the weigh tier, rising to look when it ships known
+// CVEs or runs code on install/build (the sneaked-in-malware shape).
+func censusSignals(c *Census) (tier, []string) {
+	t := tierWeigh
+	phrases := []string{fmt.Sprintf("adopting %s file%s, whole footprint unreviewed", commas(c.Files), plural(c.Files))}
+	if len(c.Vulns) > 0 {
+		t = tierLook
+		phrases = append(phrases, fmt.Sprintf("%d known CVE(s) at this version: %s", len(c.Vulns), linkedVulnIDs(c.Vulns, 5)))
+	}
+	if c.hasExec() {
+		t = tierLook
+		phrases = append(phrases, "runs code on install/build: "+mdTaint(strings.Join(censusExecWhat(c), ", ")))
+	}
+	if c.BigExcluded != "" {
+		phrases = append(phrases, "largest unreviewed file "+mdTaint(c.BigExcluded))
 	}
 	return t, phrases
 }
@@ -297,9 +333,9 @@ func triage(worst tier) string {
 
 func checkTitle(worst tier, total int) string {
 	if worst >= tierWeigh {
-		return fmt.Sprintf("%d update(s), flagged for review", total)
+		return fmt.Sprintf("%d change(s), flagged for review", total)
 	}
-	return fmt.Sprintf("%d update(s), no signals tripped", total)
+	return fmt.Sprintf("%d change(s), no signals tripped", total)
 }
 
 func plural(n int) string {

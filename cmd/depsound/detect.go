@@ -67,18 +67,17 @@ func detectCmd(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(res)
 	case "lines":
+		// bumps as three-field lines, new deps as two-field (census) lines;
+		// bulk consumes both, so a sneaked-in dependency rides the same stream
+		// into the report instead of vanishing.
 		for _, c := range res.Changed {
 			fmt.Printf("%s:%s %s %s\n", c.Eco, c.Name, c.From, c.To)
 		}
-		// Additions are census-shaped (no from) and bulk is diff-only, so they
-		// cannot ride the bump list yet. Emit them as skipped-by-bulk comment
-		// lines plus a stderr count: a new dependency must never vanish (a
-		// sneaked-in dep is exactly what detect exists to catch).
 		for _, c := range res.Added {
-			fmt.Printf("# added: %s:%s %s (in %s)\n", c.Eco, c.Name, c.To, strings.Join(c.Files, ", "))
+			fmt.Printf("%s:%s %s\n", c.Eco, c.Name, c.To)
 		}
 		if len(res.Added) > 0 {
-			fmt.Fprintf(os.Stderr, "depsound: detect: %d new dependency(ies) detected, census-shaped, NOT in the bump list above (see the # added lines)\n", len(res.Added))
+			fmt.Fprintf(os.Stderr, "depsound: detect: %d new dependency(ies) in the list (census-shaped)\n", len(res.Added))
 		}
 		for _, n := range res.Notes {
 			fmt.Fprintf(os.Stderr, "depsound: detect: note: %s\n", n)

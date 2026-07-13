@@ -117,14 +117,19 @@ func parseBulkJSON(raw []byte) ([]bulkItem, error) {
 	}
 	var items []bulkItem
 	for _, e := range arr {
-		if e.Ecosystem == "" || e.Name == "" || e.From == "" || e.To == "" {
-			return nil, fmt.Errorf("bulk JSON entry needs ecosystem, name, from, to: %+v", e)
+		// from omitted marks a new dependency (census); to is always required
+		if e.Ecosystem == "" || e.Name == "" || e.To == "" {
+			return nil, fmt.Errorf("bulk JSON entry needs ecosystem, name, to (from optional for a new dep): %+v", e)
 		}
 		items = append(items, bulkItem{spec: e.Ecosystem + ":" + e.Name, from: e.From, to: e.To})
 	}
 	return items, nil
 }
 
+// parseBulkLines reads either a bump (`<eco>:<name> <from> <to>`) or a new
+// dependency (`<eco>:<name> <version>`, no from) per line. A new dep is
+// census-shaped: there is no prior version to diff, so it carries an empty
+// from and runBulk censuses it.
 func parseBulkLines(s string) ([]bulkItem, error) {
 	var items []bulkItem
 	for line := range strings.Lines(s) {
@@ -133,15 +138,39 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 			continue
 		}
 		f := strings.Fields(line)
-		if len(f) != 3 {
-			return nil, fmt.Errorf("bulk line %q: want `<eco>:<name> <from> <to>`", line)
+		switch len(f) {
+		case 2:
+			if _, err := spec.Parse(f[0]); err != nil {
+				return nil, err
+			}
+			items = append(items, bulkItem{spec: f[0], to: f[1]})
+		case 3:
+			if _, err := spec.Parse(f[0]); err != nil {
+				return nil, err
+			}
+			items = append(items, bulkItem{spec: f[0], from: f[1], to: f[2]})
+		default:
+			return nil, fmt.Errorf("bulk line %q: want `<eco>:<name> <from> <to>` (bump) or `<eco>:<name> <version>` (new dep)", line)
 		}
-		if _, err := spec.Parse(f[0]); err != nil {
-			return nil, err
-		}
-		items = append(items, bulkItem{spec: f[0], from: f[1], to: f[2]})
 	}
 	return items, nil
+}
+
+// censusForBulk builds a lean footprint of a newly-added dependency for the
+// bulk stream: the direct census plus a known-CVE scan, the load-bearing
+// signals when there is no prior version to diff. Transitive/provenance depth
+// is left to the deeper per-dep census the report routes to.
+func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.Duration) (*output.Census, error) {
+	c, err := buildCensus(cacheDir, specStr, version, cooldown)
+	if err != nil {
+		return nil, err
+	}
+	if !noOSV {
+		c.Vulns, c.OSVFetchedAt, c.OSVQueried = osv.Present(context.Background(), &http.Client{},
+			censusCacheRoot(cacheDir), c.Ecosystem, c.Name, c.Version)
+	}
+	c.Coverage, c.NextActions = output.CensusGuide(c)
+	return c, nil
 }
 
 // runBulk fans analyze()+OSV over the list, bounded-parallel, preserving
@@ -156,6 +185,18 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Durati
 		go func(i int, it bulkItem) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// no from = a newly-added dependency: census its whole footprint,
+			// there is no prior version to diff against
+			if it.from == "" {
+				ref := it.spec + " " + it.to
+				c, err := censusForBulk(cacheDir, it.spec, it.to, noOSV, cooldown)
+				if err != nil {
+					results[i] = output.BulkResult{Ref: ref, Err: err.Error()}
+					return
+				}
+				results[i] = output.BulkResult{Ref: ref, Census: c}
+				return
+			}
 			ref := it.spec + " " + it.from + " -> " + it.to
 			r, err := analyze(cacheDir, it.spec, it.from, it.to, cooldown)
 			if err != nil {
