@@ -145,6 +145,9 @@ func censusFootprint(c *Census) string {
 	if len(c.Vulns) > 0 {
 		parts = append(parts, fmt.Sprintf("%d known CVE(s)", len(c.Vulns)))
 	}
+	if c.BigExcluded != "" {
+		parts = append(parts, "largest unreviewed "+c.BigExcluded)
+	}
 	return strings.Join(parts, "; ")
 }
 

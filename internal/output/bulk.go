@@ -26,16 +26,13 @@ type BulkResult struct {
 	Err      string `json:"error,omitempty"`
 }
 
-// digest is the per-dep signal summary the aggregate rolls up.
+// digest is the low-level Stats->signals extractor Derive wraps into the typed
+// ledger (exec surface, generated-delta, compat). It is no longer a renderer
+// engine; OSV lives in the ledger derivation directly.
 type digest struct {
 	exec     bool
 	execWhat []string
 	compat   bool
-	osvFixed int
-	osvStill int
-	osvIntro int
-	stillIDs string // pre-joined advisory IDs: a pointer to act on, not a count
-	introIDs string
 	genFile  string // biggest unreviewed generated/binary file, if a large delta
 	genDelta int
 }
@@ -68,55 +65,62 @@ func Bulk(results []BulkResult) string {
 	return b.String()
 }
 
-// writeRouter renders the prioritised signal sections + coverage boundary
-// over a set of analysed deps. Shared by bulk and transitive (the transitive
-// changed-module set IS a bulk list). transitive adjusts the coverage line
-// that would otherwise (wrongly) claim the transitive graph is unchecked.
+// bulkSection is one router section: the ledger codes it collects and its
+// title. Every diff-signal code has a home here; census/redirect/failure render
+// as their own blocks. A new signal code without a section fails renderer parity.
+type bulkSection struct {
+	codes []Code
+	title string
+}
+
+var bulkSections = []bulkSection{
+	{[]Code{CodeExecIntroduced}, "WARNING new build/install execution surface INTRODUCED"},
+	{[]Code{CodeExecPresent}, "WARNING build/install execution surface present, its build code may have changed"},
+	{[]Code{CodeBinaryAdded}, "WARNING binary/opaque file ADDED (zero line delta, an ideal payload channel)"},
+	{[]Code{CodeGeneratedDelta}, "WARNING large UNREVIEWED generated/binary change (payload can hide here)"},
+	{[]Code{CodeGHACaps}, "WARNING GitHub Actions runner capability INTRODUCED by the bump"},
+	{[]Code{CodeOSVIntroduced}, "WARNING CVEs INTRODUCED by the upgrade"},
+	{[]Code{CodeOSVStill}, "CVEs STILL PRESENT after the upgrade (bump did not fix them)"},
+	{[]Code{CodeGHAUsing}, "GitHub Actions runtime changed (may raise the minimum runner version)"},
+	{[]Code{CodeCompatChange}, "compatibility changes"},
+	{[]Code{CodeOSVDisabled}, "COVERAGE GAP: known-CVE scan did not run for these deps"},
+	{[]Code{CodeOSVFixed}, "advisories FIXED by the upgrade (the merge argument)"},
+}
+
+// writeRouter renders the prioritised signal sections + coverage boundary over
+// a set of analysed deps, entirely from the shared ledger (so it surfaces every
+// fact markdown does; digestOf is now an internal input to Derive, not a second
+// engine). Shared by bulk and transitive (the transitive changed-module set IS
+// a bulk list); transitive adjusts the coverage line that would otherwise
+// wrongly claim the transitive graph is unchecked.
 func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) {
-	var failed, redirects, newDeps, execHits, genHits, compatHits, introHits, stillHits, fixHits, clean []BulkResult
-	digests := map[string]digest{}
+	var failed, redirects, newDeps, clean []BulkResult
+	type sigEntry struct {
+		ref string
+		sig Signal
+	}
+	buckets := map[Code][]sigEntry{}
 	for _, r := range results {
-		if r.Redirect != "" {
+		switch {
+		case r.Redirect != "":
 			redirects = append(redirects, r)
-			continue
-		}
-		if r.Census != nil {
+		case r.Census != nil:
 			newDeps = append(newDeps, r)
-			continue
-		}
-		if r.Stats == nil {
+		case r.Stats == nil:
 			failed = append(failed, r)
-			continue
-		}
-		d := digestOf(r.Stats)
-		digests[r.Ref] = d
-		if d.osvIntro > 0 {
-			introHits = append(introHits, r)
-		}
-		if d.exec {
-			execHits = append(execHits, r)
-		}
-		if d.genDelta > 0 {
-			genHits = append(genHits, r)
-		}
-		if d.osvStill > 0 {
-			stillHits = append(stillHits, r)
-		}
-		if d.compat {
-			compatHits = append(compatHits, r)
-		}
-		if d.osvFixed > 0 {
-			fixHits = append(fixHits, r)
-		}
-		// clean = nothing notable at all, including no fixed advisories
-		// (which are called out above as their own positive signal)
-		if !d.exec && d.genDelta == 0 && !d.compat && d.osvIntro == 0 && d.osvStill == 0 && d.osvFixed == 0 {
-			clean = append(clean, r)
+		default:
+			l := Derive(r.Ref, r.Stats)
+			if len(l.Signals) == 0 {
+				clean = append(clean, r)
+				continue
+			}
+			for _, sig := range l.Signals {
+				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
+			}
 		}
 	}
 
-	// order by weight: a redirect (a trusted name served from elsewhere) is
-	// the loudest, then new risk, residual, breaking, the positive, the rest
+	// a redirect (a trusted name served from elsewhere) is the loudest
 	if len(redirects) > 0 {
 		w("")
 		w("WARNING dependency REDIRECTED off the registry (fork/git/local: trust-laundering shape):")
@@ -124,32 +128,30 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 			w("  %s  -> %s", taint(r.Ref), taint(r.Redirect))
 		}
 	}
-	section(w, "WARNING build/install execution surface (present or introduced)", execHits, func(r BulkResult) string {
-		return strings.Join(digests[r.Ref].execWhat, ", ")
-	})
-	section(w, "WARNING large UNREVIEWED generated/binary change (payload can hide here)", genHits, func(r BulkResult) string {
-		d := digests[r.Ref]
-		return fmt.Sprintf("%s +/- %d lines (heuristic-excluded from review surface)", d.genFile, d.genDelta)
-	})
-	section(w, "WARNING CVEs INTRODUCED by the upgrade", introHits, func(r BulkResult) string {
-		d := digests[r.Ref]
-		return fmt.Sprintf("%d introduced: %s", d.osvIntro, d.introIDs)
-	})
-	section(w, "CVEs STILL PRESENT after the upgrade (bump did not fix them)", stillHits, func(r BulkResult) string {
-		d := digests[r.Ref]
-		return fmt.Sprintf("%d still present: %s", d.osvStill, d.stillIDs)
-	})
-	section(w, "compatibility changes", compatHits, func(r BulkResult) string {
-		return "constraints/exports changed"
-	})
-	section(w, "advisories FIXED by the upgrade (the merge argument)", fixHits, func(r BulkResult) string {
-		return fmt.Sprintf("%d fixed", digests[r.Ref].osvFixed)
-	})
+	// diff signals in priority order, from the ledger
+	for _, sec := range bulkSections {
+		var ents []sigEntry
+		for _, code := range sec.codes {
+			ents = append(ents, buckets[code]...)
+		}
+		if len(ents) == 0 {
+			continue
+		}
+		w("")
+		w("%s:", sec.title)
+		for _, e := range ents {
+			line := e.sig.Title
+			if e.sig.Detail != "" {
+				line += ": " + e.sig.Detail
+			}
+			w("  %s  %s", taint(e.ref), taint(line))
+		}
+	}
 	if len(newDeps) > 0 {
 		w("")
 		w("NEW dependencies (whole footprint unreviewed; adopt-review, not a diff):")
 		for _, r := range newDeps {
-			w("  %s  %s", taint(r.Ref), censusFootprint(r.Census))
+			w("  %s  %s", taint(r.Ref), taint(censusFootprint(r.Census)))
 		}
 	}
 	if len(clean) > 0 {
@@ -210,11 +212,6 @@ func digestOf(s *stats.Stats) digest {
 		d.genFile = big.Path
 		d.genDelta = big.Added + big.Removed
 	}
-	d.osvFixed = len(s.Security.FixedByUpgrade)
-	d.osvStill = len(s.Security.StillPresent)
-	d.osvIntro = len(s.Security.Introduced)
-	d.stillIDs = joinVulnIDs(s.Security.StillPresent, 5)
-	d.introIDs = joinVulnIDs(s.Security.Introduced, 5)
 	sort.Strings(d.execWhat)
 	return d
 }
@@ -239,15 +236,4 @@ func joinVulnIDs(vulns []osv.Vuln, max int) string {
 		ids = append(ids, id)
 	}
 	return strings.Join(ids, ", ")
-}
-
-func section(w func(string, ...any), title string, hits []BulkResult, detail func(BulkResult) string) {
-	if len(hits) == 0 {
-		return
-	}
-	w("")
-	w("%s:", title)
-	for _, r := range hits {
-		w("  %s  %s", taint(r.Ref), taint(detail(r)))
-	}
 }

@@ -9,21 +9,26 @@ import (
 	"github.com/rvagg/depsound/internal/stats"
 )
 
-// ledgerRenderers are the renderers driven by the shared ledger. bulk and text
-// join here as they migrate onto it; the parity test then forces each to
-// surface every signal code, so a renderer cannot silently narrow the ledger.
+// ledgerRenderers are the renderers driven by the shared ledger, each with its
+// OWN marker per code: bulk shouts terminal WARNINGs while markdown stays calm,
+// so a shared marker cannot check both. The parity test forces each renderer to
+// surface every code; a renderer that narrows the ledger, or a new one added
+// without markers, fails. text/census stay off the list (they are the detailed
+// reports, not summaries).
 var ledgerRenderers = []struct {
-	name string
-	fn   func([]BulkResult) string
+	name    string
+	fn      func([]BulkResult) string
+	markers map[Code]string
 }{
-	{"markdown", Markdown},
+	{"markdown", Markdown, markdownMarkers()},
+	{"bulk", Bulk, bulkMarkers()},
 }
 
-// signalMarkers is a stable substring each signal code must produce in rendered
-// output, anchored on the code (not wording): wording may change, presence may
-// not. It must cover exactly AllSignalCodes (asserted below), so a new code
-// cannot be added without giving it a marker and a fixture.
-func signalMarkers() map[Code]string {
+// markers are anchored on the code, not exact wording: each is a stable
+// substring the renderer must emit for that code. Both maps must cover exactly
+// AllSignalCodes (asserted below), so a code cannot ship without a marker (and
+// thus a rendering) in every ledger renderer.
+func markdownMarkers() map[Code]string {
 	return map[Code]string{
 		CodeOSVIntroduced:  "introduces",
 		CodeOSVStill:       "still present",
@@ -42,6 +47,28 @@ func signalMarkers() map[Code]string {
 		CodeCensusExec:     "runs code on install/build",
 		CodeCensusBig:      "largest unreviewed file",
 		CodeAnalysisFailed: "could not be analysed",
+	}
+}
+
+func bulkMarkers() map[Code]string {
+	return map[Code]string{
+		CodeOSVIntroduced:  "introduces",
+		CodeOSVStill:       "still present",
+		CodeOSVFixed:       "fixes",
+		CodeOSVDisabled:    "COVERAGE GAP",
+		CodeExecIntroduced: "new execution surface",
+		CodeExecPresent:    "execution surface present",
+		CodeCompatChange:   "compatibility changed",
+		CodeGeneratedDelta: "generated/bundled code changed",
+		CodeGHACaps:        "runner capability",
+		CodeGHAUsing:       "runtime changed",
+		CodeBinaryAdded:    "binary/opaque file added",
+		CodeRedirect:       "REDIRECTED off the registry",
+		CodeCensusNew:      "whole footprint unreviewed",
+		CodeCensusCVE:      "known CVE(s)",
+		CodeCensusExec:     "runs install/build code",
+		CodeCensusBig:      "largest unreviewed",
+		CodeAnalysisFailed: "FAILED (not analysed)",
 	}
 }
 
@@ -71,17 +98,19 @@ func parityFixture() []BulkResult {
 	}
 }
 
-// TestSignalMarkersCoverAllCodes: every declared code needs a marker, so adding
-// a code forces a parity marker (and thus a fixture in parityFixture).
+// TestSignalMarkersCoverAllCodes: every renderer must declare a marker for every
+// code, so a code cannot be added without forcing a marker (and thus a
+// rendering) in each ledger renderer.
 func TestSignalMarkersCoverAllCodes(t *testing.T) {
-	m := signalMarkers()
-	for _, code := range AllSignalCodes() {
-		if _, ok := m[code]; !ok {
-			t.Errorf("signal code %q has no parity marker; add one so every renderer is checked for it", code)
+	for _, rd := range ledgerRenderers {
+		for _, code := range AllSignalCodes() {
+			if _, ok := rd.markers[code]; !ok {
+				t.Errorf("renderer %s has no marker for code %q; add one so it is checked for it", rd.name, code)
+			}
 		}
-	}
-	if len(m) != len(AllSignalCodes()) {
-		t.Errorf("signalMarkers has %d entries, AllSignalCodes has %d; a marker exists for a code that was removed", len(m), len(AllSignalCodes()))
+		if len(rd.markers) != len(AllSignalCodes()) {
+			t.Errorf("renderer %s has %d markers, AllSignalCodes has %d; a marker exists for a removed code", rd.name, len(rd.markers), len(AllSignalCodes()))
+		}
 	}
 }
 
@@ -90,10 +119,9 @@ func TestSignalMarkersCoverAllCodes(t *testing.T) {
 // narrows the ledger, fails here.
 func TestRendererParity(t *testing.T) {
 	results := parityFixture()
-	markers := signalMarkers()
 	for _, rd := range ledgerRenderers {
 		out := rd.fn(results)
-		for code, marker := range markers {
+		for code, marker := range rd.markers {
 			if !strings.Contains(out, marker) {
 				t.Errorf("renderer %s omits signal %q (marker %q)\n%s", rd.name, code, marker, out)
 			}
