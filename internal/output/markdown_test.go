@@ -9,11 +9,15 @@ import (
 	"github.com/rvagg/depsound/internal/stats"
 )
 
+// cleanStats is a genuinely clean result: the OSV scan RAN (Queried) and found
+// nothing, and nothing else changed. Queried matters, an unqueried scan is now
+// a degradation, not a clean result.
 func cleanStats() *stats.Stats {
 	return &stats.Stats{
-		Tool:    stats.Tool{Name: "depsound", Version: "0.0.0"},
-		Package: stats.PkgRef{Ecosystem: "npm", Name: "ms", From: "2.1.2", To: "2.1.3"},
-		Compat:  stats.Compat{TypeFrom: "commonjs", TypeTo: "commonjs"},
+		Tool:     stats.Tool{Name: "depsound", Version: "0.0.0"},
+		Package:  stats.PkgRef{Ecosystem: "npm", Name: "ms", From: "2.1.2", To: "2.1.3"},
+		Compat:   stats.Compat{TypeFrom: "commonjs", TypeTo: "commonjs"},
+		Security: stats.Security{Queried: true},
 	}
 }
 
@@ -45,7 +49,7 @@ func TestMarkdownHeadlineTiers(t *testing.T) {
 
 	// an introduced advisory is the loud tier
 	s = cleanStats()
-	s.Security = stats.Security{Introduced: []osv.Vuln{{ID: "GHSA-xxxx-yyyy-zzzz"}}}
+	s.Security = stats.Security{Queried: true, Introduced: []osv.Vuln{{ID: "GHSA-xxxx-yyyy-zzzz"}}}
 	out = Markdown([]BulkResult{{Ref: "npm:x 1 -> 2", Stats: s}})
 	if !strings.Contains(out, "look at now") {
 		t.Errorf("introduced CVE should read 'look at now':\n%s", out)
@@ -186,6 +190,7 @@ func TestMarkdownCompatNamesConstraints(t *testing.T) {
 func TestMarkdownLinksAdvisories(t *testing.T) {
 	s := cleanStats()
 	s.Security = stats.Security{
+		Queried:      true,
 		Introduced:   []osv.Vuln{{ID: "GHSA-aaaa-bbbb-cccc", Aliases: []string{"CVE-2026-1111"}}},
 		StillPresent: []osv.Vuln{{ID: "RUSTSEC-2026-0097"}},
 	}

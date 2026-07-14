@@ -9,107 +9,114 @@ import (
 	"github.com/rvagg/depsound/internal/stats"
 )
 
-// tier ranks a dep's worst signal, driving the comment headline.
-type tier int
+// rowKind selects a bullet's framing; the ledger decides inclusion and tier,
+// this only picks how the dependency is introduced.
+type rowKind int
 
 const (
-	tierClean tier = iota
-	tierWeigh
-	tierLook
+	rowStats rowKind = iota
+	rowCensus
+	rowRedirect
+	rowFailed
 )
 
-// commentRow is one dependency's rendered signals.
-type commentRow struct {
-	ref      string
-	tier     tier
-	phrases  []string
-	isNew    bool   // a newly-added dependency (census), not a bump
-	redirect string // non-empty: this dep is redirected to this target
-	failed   bool
-	errMsg   string
+// ledgerRow pairs a dependency's derived ledger with the source it renders
+// richly from (Stats/Census) and its framing.
+type ledgerRow struct {
+	l    Ledger
+	s    *stats.Stats
+	c    *Census
+	ref  string
+	kind rowKind
 }
 
-// Markdown renders bulk results as a GitHub-Flavored Markdown report shaped
-// for a PR sticky comment: a plain-language headline, the deps that tripped a
-// signal (worst first), and the coverage boundary in small print. The full
-// firehose report is left to the run artifact, not embedded, so the comment
-// carries no terminal-style shout. depsound owns the wording; the
-// action that posts this is thin plumbing (and appends run-specific links like
-// the artifact URL, which depsound cannot know). A leading HTML comment carries
-// the one-line check title; a trailing one is the per-PR upsert anchor, both
-// invisible when rendered. Attacker-influenced values are escaped for the
-// Markdown/HTML medium here, at the point they enter a document GitHub renders.
-func Markdown(results []BulkResult) string {
-	var shown []commentRow
-	var nClean int
-	worst := tierClean
-	for _, r := range results {
-		if r.Redirect != "" {
-			// a trusted name served from a non-registry source is FACT-grade
-			// security, the loudest signal; no fetch, so no phrases to compute
-			worst = tierLook
-			shown = append(shown, commentRow{ref: r.Ref, tier: tierLook, redirect: r.Redirect})
-			continue
-		}
-		if r.Census != nil {
-			t, phrases := censusSignals(r.Census)
-			if t > worst {
-				worst = t
-			}
-			// a new dependency is unreviewed surface by definition, so it
-			// always shows (never folds into the clean count)
-			shown = append(shown, commentRow{ref: r.Ref, tier: t, phrases: phrases, isNew: true})
-			continue
-		}
-		if r.Stats == nil {
-			shown = append(shown, commentRow{ref: r.Ref, failed: true, errMsg: r.Err})
-			worst = tierLook // an un-analysed dep is a gap worth a look
-			continue
-		}
-		t, phrases := commentSignals(r.Stats)
-		if t > worst {
-			worst = t
-		}
-		if len(phrases) == 0 {
-			nClean++
-			continue
-		}
-		shown = append(shown, commentRow{ref: r.Ref, tier: t, phrases: phrases})
-	}
-	// worst first; failed rows sort as look-tier
-	sort.SliceStable(shown, func(i, j int) bool {
-		ti, tj := shown[i].tier, shown[j].tier
-		if shown[i].failed {
-			ti = tierLook
-		}
-		if shown[j].failed {
-			tj = tierLook
-		}
-		return ti > tj
-	})
+func (r ledgerRow) tier() int { return Assess(r.l).Tier }
 
-	total := len(results)
+func (r ledgerRow) phrases() string {
+	out := make([]string, 0, len(r.l.Signals))
+	for _, sig := range r.l.Signals {
+		out = append(out, mdSignal(sig, r.s, r.c))
+	}
+	return strings.Join(out, "; ")
+}
+
+// bullet frames the row by kind; redirect and failure carry their evidence in
+// the framing itself (the target / the error), the rest render their signals.
+func (r ledgerRow) bullet() string {
+	detail := ""
+	if len(r.l.Signals) > 0 {
+		detail = r.l.Signals[0].Detail
+	}
+	switch r.kind {
+	case rowRedirect:
+		return fmt.Sprintf("- **%s → %s** (redirect) — served from a non-registry source (fork/git/local); a trusted name pointed elsewhere is the trust-laundering vector, verify the source", mdTaint(r.ref), mdTaint(detail))
+	case rowFailed:
+		return fmt.Sprintf("- **%s** could not be analysed: %s", refArrow(r.ref), mdTaint(detail))
+	case rowCensus:
+		return fmt.Sprintf("- **new dependency %s** — %s", refArrow(r.ref), r.phrases())
+	default:
+		return fmt.Sprintf("- **%s** — %s", refArrow(r.ref), r.phrases())
+	}
+}
+
+// ledgerRows derives one ledger per result; inclusion and verdict come from the
+// ledger, never from this renderer.
+func ledgerRows(results []BulkResult) []ledgerRow {
+	rows := make([]ledgerRow, 0, len(results))
+	for _, r := range results {
+		switch {
+		case r.Redirect != "":
+			rows = append(rows, ledgerRow{l: DeriveRedirect(r.Ref, r.Redirect), ref: r.Ref, kind: rowRedirect})
+		case r.Census != nil:
+			rows = append(rows, ledgerRow{l: DeriveCensus(r.Ref, r.Census), c: r.Census, ref: r.Ref, kind: rowCensus})
+		case r.Stats != nil:
+			rows = append(rows, ledgerRow{l: Derive(r.Ref, r.Stats), s: r.Stats, ref: r.Ref, kind: rowStats})
+		default:
+			rows = append(rows, ledgerRow{l: DeriveFailure(r.Ref, r.Err), ref: r.Ref, kind: rowFailed})
+		}
+	}
+	return rows
+}
+
+// Markdown renders bulk results as a GitHub-Flavored Markdown PR comment: a
+// plain-language headline, the deps that tripped a signal (worst first), and the
+// coverage boundary in small print. Every rendered signal comes from the shared
+// ledger, so no fact bulk knows can silently vanish here; the headline is the
+// ledger's Verdict, so "no signals tripped" cannot appear unless coverage was
+// actually complete. depsound owns the wording; the posting action appends
+// run-specific links. Attacker-influenced values are escaped for the Markdown/
+// HTML medium at the point they enter the document.
+func Markdown(results []BulkResult) string {
+	rows := ledgerRows(results)
+	ledgers := make([]Ledger, len(rows))
+	for i, r := range rows {
+		ledgers[i] = r.l
+	}
+	v := Assess(ledgers...)
+
+	// worst first; genuinely-clean rows (an empty ledger) collapse to a count
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].tier() > rows[j].tier() })
+
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("<!-- depsound-title: depsound: %s -->", checkTitle(worst, total))
-	w("**depsound** · %d dependency change%s · %s", total, plural(total), triage(worst))
-	if len(shown) > 0 {
+	total := len(results)
+	w("<!-- depsound-title: depsound: %s -->", checkTitle(v, total))
+	w("**depsound** · %d dependency change%s · %s", total, plural(total), triage(v))
+
+	var bullets []string
+	nClean := 0
+	for _, r := range rows {
+		if len(r.l.Signals) == 0 {
+			nClean++
+			continue
+		}
+		bullets = append(bullets, r.bullet())
+	}
+	if len(bullets) > 0 || nClean > 0 {
 		w("")
-		for _, r := range shown {
-			if r.failed {
-				w("- **%s** could not be analysed: %s", refArrow(r.ref), mdTaint(r.errMsg))
-				continue
-			}
-			if r.redirect != "" {
-				w("- **%s → %s** (redirect) — served from a non-registry source (fork/git/local); a trusted name pointed elsewhere is the trust-laundering vector, verify the source", mdTaint(r.ref), mdTaint(r.redirect))
-				continue
-			}
-			if r.isNew {
-				w("- **new dependency %s** — %s", refArrow(r.ref), strings.Join(r.phrases, "; "))
-				continue
-			}
-			w("- **%s** — %s", refArrow(r.ref), strings.Join(r.phrases, "; "))
+		for _, bl := range bullets {
+			w("%s", bl)
 		}
 		if nClean > 0 {
 			w("- %d other%s: no signals tripped.", nClean, plural(nClean))
@@ -118,9 +125,52 @@ func Markdown(results []BulkResult) string {
 	w("")
 	w("<sub>Not checked: reachability, runtime behaviour, your tests, " +
 		"transitive depth, publish provenance. Silence is not safety.</sub>")
-
 	w("<!-- depsound -->")
 	return b.String()
+}
+
+// mdSignal renders one ledger signal as a comment phrase. It dispatches on the
+// stable Code to reuse rich formatting (linked advisories, compat phrasing) from
+// the source Stats/Census, and falls back to the raw Title/Detail for any code
+// without a specific case, so a new signal renders plainly, never drops.
+func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
+	switch sig.Code {
+	case CodeOSVIntroduced:
+		return fmt.Sprintf("introduces %d known CVE(s): %s", len(s.Security.Introduced), linkedVulnIDs(s.Security.Introduced, 5))
+	case CodeOSVStill:
+		return fmt.Sprintf("%d known CVE(s) still present after the bump: %s", len(s.Security.StillPresent), linkedVulnIDs(s.Security.StillPresent, 5))
+	case CodeOSVFixed:
+		return fmt.Sprintf("fixes %d advisory(ies)", len(s.Security.FixedByUpgrade))
+	case CodeOSVDisabled:
+		return "known-CVE scan not run (coverage gap, not a clean result)"
+	case CodeExecIntroduced:
+		return "new execution surface: " + mdTaint(sig.Detail)
+	case CodeExecPresent:
+		return "execution surface present (" + mdTaint(sig.Detail) + "), its build code may have changed"
+	case CodeGeneratedDelta:
+		return "generated code changed (" + mdTaint(sig.Detail) + "): outside the review surface, worth a look"
+	case CodeCompatChange:
+		return compatPhrase(s)
+	case CodeGHACaps:
+		return "new runner capability referenced: " + mdTaint(sig.Detail)
+	case CodeGHAUsing:
+		return "action runtime changed: " + mdTaint(sig.Detail)
+	case CodeBinaryAdded:
+		return "binary/opaque file added: " + mdTaint(sig.Detail)
+	case CodeCensusNew:
+		return fmt.Sprintf("adopting %s file%s, whole footprint unreviewed", commas(c.Files), plural(c.Files))
+	case CodeCensusCVE:
+		return fmt.Sprintf("%d known CVE(s) at this version: %s", len(c.Vulns), linkedVulnIDs(c.Vulns, 5))
+	case CodeCensusExec:
+		return "runs code on install/build: " + mdTaint(sig.Detail)
+	case CodeCensusBig:
+		return "largest unreviewed file " + mdTaint(sig.Detail)
+	default:
+		if sig.Detail != "" {
+			return mdTaint(sig.Title) + ": " + mdTaint(sig.Detail)
+		}
+		return mdTaint(sig.Title)
+	}
 }
 
 // refArrow renders a dependency ref for a bullet: the tool's " -> " separator
@@ -140,73 +190,6 @@ func commas(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return sign + s
-}
-
-// commentSignals turns one dep's stats into its worst tier and plain-language
-// signal phrases. Reuses the bulk digest so the router and the comment agree
-// on what fired. Values that originate in package/advisory data are escaped
-// for Markdown as they are composed.
-func commentSignals(s *stats.Stats) (tier, []string) {
-	d := digestOf(s)
-	t := tierClean
-	var phrases []string
-	add := func(nt tier, p string) {
-		if nt > t {
-			t = nt
-		}
-		phrases = append(phrases, p)
-	}
-
-	if d.osvIntro > 0 {
-		add(tierLook, fmt.Sprintf("introduces %d known CVE(s): %s", d.osvIntro, linkedVulnIDs(s.Security.Introduced, 5)))
-	}
-	if d.exec {
-		surfaces := mdTaint(strings.Join(humanExec(d.execWhat), ", "))
-		if execIntroduced(d.execWhat) {
-			add(tierLook, "new execution surface: "+surfaces)
-		} else {
-			add(tierWeigh, "execution surface present ("+surfaces+"), its build code may have changed")
-		}
-	}
-	if d.genDelta > 0 {
-		// a generated/bundled change (an npm dist/, a vendored blob) is
-		// review-worthy but not new-risk-introduced, so it weighs rather than
-		// taking the loud tier; otherwise every routine dist bump dominates
-		// the headline. Introduced CVEs and new execution surface stay loud.
-		add(tierWeigh, fmt.Sprintf("generated code changed (%s, ±%s lines): outside the review surface, worth a look", mdTaint(d.genFile), commas(d.genDelta)))
-	}
-	if d.osvStill > 0 {
-		add(tierWeigh, fmt.Sprintf("%d known CVE(s) still present after the bump: %s", d.osvStill, linkedVulnIDs(s.Security.StillPresent, 5)))
-	}
-	if d.compat {
-		add(tierWeigh, compatPhrase(s))
-	}
-	if d.osvFixed > 0 {
-		// the merge argument; positive, does not raise the tier
-		phrases = append(phrases, fmt.Sprintf("fixes %d advisory(ies)", d.osvFixed))
-	}
-	return t, phrases
-}
-
-// censusSignals turns a newly-added dependency's footprint into the comment
-// tier and phrases. A new dep is never "clean": you are adopting unreviewed
-// code, so the floor is the weigh tier, rising to look when it ships known
-// CVEs or runs code on install/build (the sneaked-in-malware shape).
-func censusSignals(c *Census) (tier, []string) {
-	t := tierWeigh
-	phrases := []string{fmt.Sprintf("adopting %s file%s, whole footprint unreviewed", commas(c.Files), plural(c.Files))}
-	if len(c.Vulns) > 0 {
-		t = tierLook
-		phrases = append(phrases, fmt.Sprintf("%d known CVE(s) at this version: %s", len(c.Vulns), linkedVulnIDs(c.Vulns, 5)))
-	}
-	if c.hasExec() {
-		t = tierLook
-		phrases = append(phrases, "runs code on install/build: "+mdTaint(strings.Join(censusExecWhat(c), ", ")))
-	}
-	if c.BigExcluded != "" {
-		phrases = append(phrases, "largest unreviewed file "+mdTaint(c.BigExcluded))
-	}
-	return t, phrases
 }
 
 // compatPhrase names the most consumer-relevant compatibility change: the
@@ -332,22 +315,24 @@ func safeVulnID(id string) bool {
 	return true
 }
 
-func triage(worst tier) string {
-	switch worst {
-	case tierLook:
-		return "flags to look at now"
-	case tierWeigh:
-		return "review the changes"
-	default:
+// triage is the headline verb, derived from the ledger verdict: a degradation
+// (coverage lost) can never read "no signals tripped".
+func triage(v Verdict) string {
+	switch {
+	case v.Clean():
 		return "no signals tripped"
+	case v.Tier >= weightLook:
+		return "flags to look at now"
+	default:
+		return "review the changes"
 	}
 }
 
-func checkTitle(worst tier, total int) string {
-	if worst >= tierWeigh {
-		return fmt.Sprintf("%d change(s), flagged for review", total)
+func checkTitle(v Verdict, total int) string {
+	if v.Clean() {
+		return fmt.Sprintf("%d change(s), no signals tripped", total)
 	}
-	return fmt.Sprintf("%d change(s), no signals tripped", total)
+	return fmt.Sprintf("%d change(s), flagged for review", total)
 }
 
 func plural(n int) string {

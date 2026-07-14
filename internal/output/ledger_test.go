@@ -14,7 +14,7 @@ import (
 // fixture here, which the renderer parity test (added with the migration) then
 // forces into every output.
 func TestLedgerEveryCodeReachable(t *testing.T) {
-	got := map[string]bool{}
+	got := map[Code]bool{}
 	collect := func(l Ledger) {
 		for _, s := range l.Signals {
 			got[s.Code] = true
@@ -44,9 +44,10 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 	// exec present-in-both (not introduced) and the disabled-OSV degradation
 	collect(Derive("present", &stats.Stats{Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}))
 	collect(Derive("noosv", &stats.Stats{Security: stats.Security{Queried: false}}))
-	// census + redirect
-	collect(DeriveCensus("cen", &Census{Files: 10, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}}))
+	// census (incl. the biggest-unreviewed-file lead), redirect, failure
+	collect(DeriveCensus("cen", &Census{Files: 10, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
+	collect(DeriveFailure("bad", "fetch failed"))
 
 	for _, code := range AllSignalCodes() {
 		if !got[code] {

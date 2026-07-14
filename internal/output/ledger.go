@@ -39,11 +39,54 @@ const (
 	weightLook     = 2
 )
 
-// Signal is one derived finding. Code is the STABLE identifier the parity tests
+// Code is a signal's stable identifier: the anchor the parity tests and the
+// report JSON key on. It is typed so a typo or rename is a compile error rather
+// than a red test, and it marshals to its string value so the JSON stays
+// readable. Typing prevents typos; it does NOT give exhaustiveness (Go has no
+// exhaustive switch), so the parity test remains load-bearing for omissions.
+type Code string
+
+const (
+	CodeOSVIntroduced  Code = "osv.introduced"
+	CodeOSVStill       Code = "osv.still"
+	CodeOSVFixed       Code = "osv.fixed"
+	CodeOSVDisabled    Code = "coverage.osv.disabled"
+	CodeExecIntroduced Code = "exec.introduced"
+	CodeExecPresent    Code = "exec.present"
+	CodeCompatChange   Code = "compat.change"
+	CodeGeneratedDelta Code = "generated.delta"
+	CodeGHACaps        Code = "gha.capsIntroduced"
+	CodeGHAUsing       Code = "gha.using"
+	CodeBinaryAdded    Code = "binary.added"
+	CodeRedirect       Code = "redirect"
+	CodeCensusNew      Code = "census.new"
+	CodeCensusCVE      Code = "census.cve"
+	CodeCensusExec     Code = "census.exec"
+	CodeCensusBig      Code = "census.bigExcluded"
+	CodeAnalysisFailed Code = "analysis.failed"
+)
+
+// allCodes is the single source of the code set. AllSignalCodes returns it, and
+// the parity/reachability tests require a fixture and a marker for each, so a
+// code cannot be added to the model without proving it reaches every output.
+var allCodes = []Code{
+	CodeOSVIntroduced, CodeOSVStill, CodeOSVFixed, CodeOSVDisabled,
+	CodeExecIntroduced, CodeExecPresent,
+	CodeCompatChange, CodeGeneratedDelta,
+	CodeGHACaps, CodeGHAUsing,
+	CodeBinaryAdded,
+	CodeRedirect,
+	CodeCensusNew, CodeCensusCVE, CodeCensusExec, CodeCensusBig,
+	CodeAnalysisFailed,
+}
+
+func AllSignalCodes() []Code { return allCodes }
+
+// Signal is one derived finding. Code is the stable identifier the parity tests
 // anchor on: wording (Title/Detail) may change freely, the Code may not.
 // Title/Detail are RAW; each renderer escapes them for its own medium.
 type Signal struct {
-	Code   string
+	Code   Code
 	Kind   SignalKind
 	Lens   Lens
 	Weight int
@@ -59,46 +102,30 @@ type Ledger struct {
 	Signals []Signal
 }
 
-// AllSignalCodes enumerates every code a derivation can emit. It is the
-// enforcement anchor: a code here with no fixture, or a renderer that omits one,
-// is a test failure, so a fact cannot be added to the model without proving it
-// reaches every output.
-func AllSignalCodes() []string {
-	return []string{
-		"osv.introduced", "osv.still", "osv.fixed", "coverage.osv.disabled",
-		"exec.introduced", "exec.present",
-		"compat.change", "generated.delta",
-		"gha.capsIntroduced", "gha.using",
-		"binary.added",
-		"redirect",
-		"census.new", "census.cve", "census.exec",
-	}
-}
-
 // Derive turns a diff's Stats into its signal ledger. This is the ONE place
 // that decides what counts; every renderer consumes the result.
 func Derive(ref string, s *stats.Stats) Ledger {
 	l := Ledger{Ref: ref}
-	add := func(code string, k SignalKind, lens Lens, w int, title, detail string) {
+	add := func(code Code, k SignalKind, lens Lens, w int, title, detail string) {
 		l.Signals = append(l.Signals, Signal{Code: code, Kind: k, Lens: lens, Weight: w, Title: title, Detail: detail})
 	}
 
 	// OSV status is derived from whether the scan ran, never assumed: a
 	// disabled/failed scan is a degradation, not silence that reads as clean.
 	if !s.Security.Queried {
-		add("coverage.osv.disabled", KindDegradation, LensCoverage, weightWeigh,
+		add(CodeOSVDisabled, KindDegradation, LensCoverage, weightWeigh,
 			"known-CVE scan not run", "OSV was disabled or did not complete for this dependency")
 	} else {
 		if n := len(s.Security.Introduced); n > 0 {
-			add("osv.introduced", KindFact, LensSecurity, weightLook,
+			add(CodeOSVIntroduced, KindFact, LensSecurity, weightLook,
 				fmt.Sprintf("introduces %d known CVE(s)", n), joinVulnIDs(s.Security.Introduced, 5))
 		}
 		if n := len(s.Security.StillPresent); n > 0 {
-			add("osv.still", KindFact, LensSecurity, weightWeigh,
+			add(CodeOSVStill, KindFact, LensSecurity, weightWeigh,
 				fmt.Sprintf("%d known CVE(s) still present after the bump", n), joinVulnIDs(s.Security.StillPresent, 5))
 		}
 		if n := len(s.Security.FixedByUpgrade); n > 0 {
-			add("osv.fixed", KindFact, LensSecurity, weightPositive,
+			add(CodeOSVFixed, KindFact, LensSecurity, weightPositive,
 				fmt.Sprintf("fixes %d advisory(ies)", n), "")
 		}
 	}
@@ -109,28 +136,28 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	if d.exec {
 		what := strings.Join(humanExec(d.execWhat), ", ")
 		if execIntroduced(d.execWhat) {
-			add("exec.introduced", KindFact, LensSecurity, weightLook, "new execution surface", what)
+			add(CodeExecIntroduced, KindFact, LensSecurity, weightLook, "new execution surface", what)
 		} else {
-			add("exec.present", KindFact, LensSecurity, weightWeigh, "execution surface present", what)
+			add(CodeExecPresent, KindFact, LensSecurity, weightWeigh, "execution surface present", what)
 		}
 	}
 	if d.genDelta > 0 {
-		add("generated.delta", KindHeuristic, LensCompat, weightWeigh,
+		add(CodeGeneratedDelta, KindHeuristic, LensCompat, weightWeigh,
 			"generated/bundled code changed", fmt.Sprintf("%s, +/-%d lines", d.genFile, d.genDelta))
 	}
 	if d.compat {
-		add("compat.change", KindFact, LensCompat, weightWeigh, "compatibility changed", rawCompat(s))
+		add(CodeCompatChange, KindFact, LensCompat, weightWeigh, "compatibility changed", rawCompat(s))
 	}
 
 	// GitHub Actions execution model (gha only). CapsIntroduced is the
 	// load-bearing delta; a runtime move is a real compat fact, not maintenance.
 	if a := s.Action; a != nil {
 		if len(a.CapsIntroduced) > 0 {
-			add("gha.capsIntroduced", KindFact, LensSecurity, weightLook,
+			add(CodeGHACaps, KindFact, LensSecurity, weightLook,
 				"new runner capability referenced", strings.Join(a.CapsIntroduced, ", "))
 		}
 		if a.UsingFrom != a.UsingTo && a.UsingFrom != "" && a.UsingTo != "" {
-			add("gha.using", KindFact, LensCompat, weightWeigh,
+			add(CodeGHAUsing, KindFact, LensCompat, weightWeigh,
 				"action runtime changed", a.UsingFrom+" -> "+a.UsingTo)
 		}
 	}
@@ -139,7 +166,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	// ranking hides it; surface the addition as a fact from status + class.
 	for _, e := range s.Files.Entries {
 		if e.Excluded && e.Status == "A" {
-			add("binary.added", KindFact, LensSecurity, weightLook, "binary/opaque file added", e.Path)
+			add(CodeBinaryAdded, KindFact, LensSecurity, weightLook, "binary/opaque file added", e.Path)
 			break
 		}
 	}
@@ -152,18 +179,22 @@ func Derive(ref string, s *stats.Stats) Ledger {
 // dependency is unreviewed surface by definition, so it always carries a signal.
 func DeriveCensus(ref string, c *Census) Ledger {
 	l := Ledger{Ref: ref}
-	add := func(code string, k SignalKind, lens Lens, w int, title, detail string) {
+	add := func(code Code, k SignalKind, lens Lens, w int, title, detail string) {
 		l.Signals = append(l.Signals, Signal{Code: code, Kind: k, Lens: lens, Weight: w, Title: title, Detail: detail})
 	}
-	add("census.new", KindFact, LensCompat, weightWeigh,
+	add(CodeCensusNew, KindFact, LensCompat, weightWeigh,
 		fmt.Sprintf("new dependency, %s file(s) unreviewed", commas(c.Files)), "")
 	if len(c.Vulns) > 0 {
-		add("census.cve", KindFact, LensSecurity, weightLook,
+		add(CodeCensusCVE, KindFact, LensSecurity, weightLook,
 			fmt.Sprintf("%d known CVE(s) at this version", len(c.Vulns)), joinVulnIDs(c.Vulns, 5))
 	}
 	if c.hasExec() {
-		add("census.exec", KindFact, LensSecurity, weightLook,
+		add(CodeCensusExec, KindFact, LensSecurity, weightLook,
 			"runs code on install/build", strings.Join(censusExecWhat(c), ", "))
+	}
+	if c.BigExcluded != "" {
+		add(CodeCensusBig, KindHeuristic, LensCompat, weightPositive,
+			"largest unreviewed file", c.BigExcluded)
 	}
 	sortSignals(l.Signals)
 	return l
@@ -173,8 +204,18 @@ func DeriveCensus(ref string, c *Census) Ledger {
 // non-registry source; it needs no fetch, so it carries no other analysis.
 func DeriveRedirect(ref, target string) Ledger {
 	return Ledger{Ref: ref, Signals: []Signal{{
-		Code: "redirect", Kind: KindFact, Lens: LensSecurity, Weight: weightLook,
+		Code: CodeRedirect, Kind: KindFact, Lens: LensSecurity, Weight: weightLook,
 		Title: "redirected off the registry", Detail: target,
+	}}}
+}
+
+// DeriveFailure records a dependency that could not be analysed as a
+// DEGRADATION, so a failed analysis reads as a coverage gap worth a look, never
+// as silence that a clean headline would swallow.
+func DeriveFailure(ref, errMsg string) Ledger {
+	return Ledger{Ref: ref, Signals: []Signal{{
+		Code: CodeAnalysisFailed, Kind: KindDegradation, Lens: LensCoverage, Weight: weightLook,
+		Title: "could not be analysed", Detail: errMsg,
 	}}}
 }
 
