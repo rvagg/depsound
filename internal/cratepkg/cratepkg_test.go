@@ -22,6 +22,59 @@ func load(t *testing.T, cargoToml string) *Crate {
 	return c
 }
 
+// loadWithBuildRS writes a Cargo.toml AND a root build.rs, for the cases where
+// the default/disabled behavior depends on build.rs existing.
+func loadWithBuildRS(t *testing.T, cargoToml string) *Crate {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(cargoToml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "build.rs"), []byte("fn main(){}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func hasWarning(c *Crate, sub string) bool {
+	for _, w := range c.Warnings {
+		if strings.Contains(w, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestBuildScript covers package.build's forms: a custom path is detected (a
+// root-build.rs stat would miss it), build = false disables even when build.rs
+// ships, the default resolves to build.rs when present, and a path escaping the
+// crate is still an execution surface AND is flagged.
+func TestBuildScript(t *testing.T) {
+	if c := load(t, "[package]\nname = \"x\"\nbuild = \"custom.rs\"\n"); !c.HasBuildRS() || c.BuildScript != "custom.rs" {
+		t.Errorf("custom build path: HasBuildRS=%v BuildScript=%q", c.HasBuildRS(), c.BuildScript)
+	}
+	if c := loadWithBuildRS(t, "[package]\nname = \"x\"\nbuild = false\n"); c.HasBuildRS() || c.BuildScript != "" {
+		t.Errorf("build = false must disable even with build.rs present: HasBuildRS=%v BuildScript=%q", c.HasBuildRS(), c.BuildScript)
+	}
+	if c := loadWithBuildRS(t, "[package]\nname = \"x\"\n"); !c.HasBuildRS() || c.BuildScript != "build.rs" {
+		t.Errorf("default build.rs: HasBuildRS=%v BuildScript=%q", c.HasBuildRS(), c.BuildScript)
+	}
+	if c := load(t, "[package]\nname = \"x\"\n"); c.HasBuildRS() {
+		t.Errorf("no build key and no build.rs must be absent, got %q", c.BuildScript)
+	}
+	hostile := load(t, "[package]\nname = \"x\"\nbuild = \"../../evil.rs\"\n")
+	if !hostile.HasBuildRS() {
+		t.Error("a build script escaping the crate is still an execution surface")
+	}
+	if !hasWarning(hostile, "outside the crate") {
+		t.Errorf("escaping build path should warn: %v", hostile.Warnings)
+	}
+}
+
 func TestDeltas(t *testing.T) {
 	old := load(t, `
 [package]

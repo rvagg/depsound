@@ -19,6 +19,11 @@ type Crate struct {
 	Edition     string
 	RustVersion string
 	ProcMacro   bool
+	// BuildScript is the ACTIVE build-script path (crate-relative), or "" if
+	// none. It honors package.build: a custom path, false (disabled even when
+	// build.rs exists), or the default build.rs when present. This, not a bare
+	// root-build.rs stat, is the execution surface.
+	BuildScript string
 	Features    map[string][]string
 	Deps        map[string]string // name -> version req (rendered)
 	DevDeps     map[string]string
@@ -33,6 +38,7 @@ type rawManifest struct {
 	Package struct {
 		Edition     any    `toml:"edition"` // string, or {workspace=true}
 		RustVersion string `toml:"rust-version"`
+		Build       any    `toml:"build"` // a custom script PATH (string), or false to disable
 	} `toml:"package"`
 	Lib struct {
 		ProcMacro bool `toml:"proc-macro"`
@@ -70,6 +76,10 @@ func Load(dir string) (*Crate, error) {
 	c.Edition = editionString(raw.Package.Edition)
 	c.RustVersion = raw.Package.RustVersion
 	c.ProcMacro = raw.Lib.ProcMacro
+	c.BuildScript = resolveBuildScript(dir, raw.Package.Build)
+	if c.BuildScript != "" && (filepath.IsAbs(c.BuildScript) || strings.HasPrefix(c.BuildScript, "..")) {
+		c.Warnings = append(c.Warnings, "package.build points outside the crate ("+c.BuildScript+"): unusual, verify")
+	}
 	if raw.Features != nil {
 		c.Features = raw.Features
 	}
@@ -236,9 +246,34 @@ func specFlag(spec string) string {
 // HasBuildRS reports whether the crate ships a build.rs (a build script
 // that runs at the consumer's compile time: the cargo analog of an npm
 // install hook).
+// HasBuildRS reports whether the crate runs a build script at the consumer's
+// build time. It honors package.build, so a crate with build = "custom.rs" is
+// caught (a root-build.rs stat would miss it) and one with build = false is not
+// a false positive (build.rs may exist but is inert).
 func (c *Crate) HasBuildRS() bool {
-	_, err := os.Stat(filepath.Join(c.dir, "build.rs"))
-	return err == nil
+	return c.BuildScript != ""
+}
+
+// resolveBuildScript maps package.build to the active build-script path:
+// false -> none (even if build.rs exists); a string -> that custom path; absent
+// -> build.rs when it is present. A custom string is kept as configured (Cargo
+// runs it regardless of whether the file resolves cleanly, so the execution
+// surface exists); a suspicious path is flagged by the caller, not dropped.
+func resolveBuildScript(dir string, build any) string {
+	switch v := build.(type) {
+	case bool:
+		return "" // build = false: disabled
+	case string:
+		if v == "" {
+			return ""
+		}
+		return filepath.Clean(v)
+	default: // absent: default is build.rs if it exists
+		if _, err := os.Stat(filepath.Join(dir, "build.rs")); err == nil {
+			return "build.rs"
+		}
+		return ""
+	}
 }
 
 func appendDelta(out []manifest.Change, key, from, to string) []manifest.Change {
