@@ -100,6 +100,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		sig Signal
 	}
 	buckets := map[Code][]sigEntry{}
+	diffCount := 0 // deps carrying a version diff (the OSV-via-diff denominator)
 	for _, r := range results {
 		switch {
 		case r.Redirect != "":
@@ -109,6 +110,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		case r.Stats == nil:
 			failed = append(failed, r)
 		default:
+			diffCount++
 			l := Derive(r.Ref, r.Stats)
 			if len(l.Signals) == 0 {
 				clean = append(clean, r)
@@ -175,8 +177,20 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	// repeated per dep). CVE scan is named backward-looking, not "security"
 	w("")
 	w("=== COVERAGE: heuristic triage, NOT a verdict ===")
-	w("checked: artifact diff, file classes, manifest compat, execution surface,")
-	w("  KNOWN-CVE scan (OSV, backward-looking; blind to novel/injected code).")
+	w("checked: artifact diff, file classes, manifest compat, execution surface.")
+	// OSV status is derived from what actually ran, not asserted flat: a
+	// disabled/failed scan must not read as coverage the batch did not get.
+	osvNotRun := len(buckets[CodeOSVDisabled])
+	switch {
+	case diffCount == 0:
+		// no version diffs here; OSV via the diff path is not applicable
+	case osvNotRun == 0:
+		w("  KNOWN-CVE scan (OSV, backward-looking; blind to novel/injected code): run.")
+	case osvNotRun >= diffCount:
+		w("  KNOWN-CVE scan (OSV): NOT run for any dep (see COVERAGE GAP above).")
+	default:
+		w("  KNOWN-CVE scan (OSV): NOT run for %d of %d dep(s) (see COVERAGE GAP above).", osvNotRun, diffCount)
+	}
 	if transitive {
 		w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
 		w("  ADDED modules are listed but not diffed; test-only/deeper modules beyond")
