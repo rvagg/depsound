@@ -83,8 +83,9 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeOSVStill}, "CVEs STILL PRESENT after the upgrade (bump did not fix them)"},
 	{[]Code{CodeGHAUsing}, "GitHub Actions runtime changed (may raise the minimum runner version)"},
 	{[]Code{CodeCompatChange}, "compatibility changes"},
-	{[]Code{CodeOSVDisabled}, "COVERAGE GAP: known-CVE scan did not run for these deps"},
+	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "COVERAGE GAP: known-CVE scan did not complete for these deps"},
 	{[]Code{CodeOSVFixed}, "advisories FIXED by the upgrade (the merge argument)"},
+	{[]Code{CodeOSVUnsupported}, "note: known-CVE scan not applicable (OSV has no index for this ecosystem)"},
 }
 
 // writeRouter renders the prioritised signal sections + coverage boundary over
@@ -179,17 +180,21 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	w("=== COVERAGE: heuristic triage, NOT a verdict ===")
 	w("checked: artifact diff, file classes, manifest compat, execution surface.")
 	// OSV status is derived from what actually ran, not asserted flat: a
-	// disabled/failed scan must not read as coverage the batch did not get.
-	osvNotRun := len(buckets[CodeOSVDisabled])
-	switch {
-	case diffCount == 0:
-		// no version diffs here; OSV via the diff path is not applicable
-	case osvNotRun == 0:
-		w("  KNOWN-CVE scan (OSV, backward-looking; blind to novel/injected code): run.")
-	case osvNotRun >= diffCount:
-		w("  KNOWN-CVE scan (OSV): NOT run for any dep (see COVERAGE GAP above).")
-	default:
-		w("  KNOWN-CVE scan (OSV): NOT run for %d of %d dep(s) (see COVERAGE GAP above).", osvNotRun, diffCount)
+	// disabled/failed scan is a gap, an unsupported ecosystem is not.
+	osvGap := len(buckets[CodeOSVDisabled]) + len(buckets[CodeOSVFailed])
+	osvNA := len(buckets[CodeOSVUnsupported])
+	if diffCount > 0 {
+		var st []string
+		if ran := diffCount - osvGap - osvNA; ran > 0 {
+			st = append(st, fmt.Sprintf("run for %d", ran))
+		}
+		if osvGap > 0 {
+			st = append(st, fmt.Sprintf("did NOT complete for %d (see COVERAGE GAP above)", osvGap))
+		}
+		if osvNA > 0 {
+			st = append(st, fmt.Sprintf("not applicable for %d (ecosystem unsupported)", osvNA))
+		}
+		w("  KNOWN-CVE scan (OSV, backward-looking; blind to novel/injected code): %s.", strings.Join(st, "; "))
 	}
 	if transitive {
 		w("NOT checked: does your code REACH each change; what it DOES; test coverage;")

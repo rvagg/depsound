@@ -34,6 +34,8 @@ func markdownMarkers() map[Code]string {
 		CodeOSVStill:       "still present",
 		CodeOSVFixed:       "fixes",
 		CodeOSVDisabled:    "scan not run",
+		CodeOSVFailed:      "scan failed",
+		CodeOSVUnsupported: "not applicable",
 		CodeExecIntroduced: "new execution surface",
 		CodeExecPresent:    "execution surface present",
 		CodeCompatChange:   "module format changed",
@@ -55,7 +57,9 @@ func bulkMarkers() map[Code]string {
 		CodeOSVIntroduced:  "introduces",
 		CodeOSVStill:       "still present",
 		CodeOSVFixed:       "fixes",
-		CodeOSVDisabled:    "COVERAGE GAP",
+		CodeOSVDisabled:    "scan not run",
+		CodeOSVFailed:      "scan failed",
+		CodeOSVUnsupported: "not applicable",
 		CodeExecIntroduced: "new execution surface",
 		CodeExecPresent:    "execution surface present",
 		CodeCompatChange:   "compatibility changed",
@@ -90,8 +94,10 @@ func parityFixture() []BulkResult {
 			}},
 			Action: &stats.ActionSection{CapsIntroduced: []string{"id-token"}, UsingFrom: "node20", UsingTo: "node24"},
 		}},
-		{Ref: "go:b v1 -> v2", Stats: &stats.Stats{Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}},
-		{Ref: "npm:c 1 -> 2", Stats: &stats.Stats{Security: stats.Security{Queried: false}}},
+		{Ref: "go:b v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}},
+		{Ref: "npm:c 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}},                            // disabled
+		{Ref: "npm:f 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false, Note: "OSV lookup failed"}}}, // failed
+		{Ref: "gha:u v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false}}},                          // unsupported
 		{Ref: "npm:new 1.0.0", Census: &Census{Files: 12, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}},
 		{Ref: "go:trusted/x", Redirect: "github.com/fork/x@v1.0.0"},
 		{Ref: "npm:broke 1 -> 2", Err: "fetch failed"},

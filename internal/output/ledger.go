@@ -5,19 +5,22 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
 // SignalKind is a signal's trust tier, the distinction the whole tool rests on:
 // a FACT is ground truth (trust and act), a HEURISTIC is evadable
 // pattern-matching (navigate and inspect), a DEGRADATION is coverage lost (a
-// check did not complete, so silence here is emphatically not safety).
+// check did not complete, so silence here is emphatically not safety), a NOTE
+// is informational (a check that does not APPLY here, which is not a gap).
 type SignalKind int
 
 const (
 	KindFact SignalKind = iota
 	KindHeuristic
 	KindDegradation
+	KindNote
 )
 
 // Lens is the value dimension a signal speaks to: adversarial security, or
@@ -51,6 +54,8 @@ const (
 	CodeOSVStill       Code = "osv.still"
 	CodeOSVFixed       Code = "osv.fixed"
 	CodeOSVDisabled    Code = "coverage.osv.disabled"
+	CodeOSVUnsupported Code = "coverage.osv.unsupported"
+	CodeOSVFailed      Code = "coverage.osv.failed"
 	CodeExecIntroduced Code = "exec.introduced"
 	CodeExecPresent    Code = "exec.present"
 	CodeCompatChange   Code = "compat.change"
@@ -70,7 +75,8 @@ const (
 // the parity/reachability tests require a fixture and a marker for each, so a
 // code cannot be added to the model without proving it reaches every output.
 var allCodes = []Code{
-	CodeOSVIntroduced, CodeOSVStill, CodeOSVFixed, CodeOSVDisabled,
+	CodeOSVIntroduced, CodeOSVStill, CodeOSVFixed,
+	CodeOSVDisabled, CodeOSVUnsupported, CodeOSVFailed,
 	CodeExecIntroduced, CodeExecPresent,
 	CodeCompatChange, CodeGeneratedDelta,
 	CodeGHACaps, CodeGHAUsing,
@@ -110,12 +116,23 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		l.Signals = append(l.Signals, Signal{Code: code, Kind: k, Lens: lens, Weight: w, Title: title, Detail: detail})
 	}
 
-	// OSV status is derived from whether the scan ran, never assumed: a
-	// disabled/failed scan is a degradation, not silence that reads as clean.
-	if !s.Security.Queried {
-		add(CodeOSVDisabled, KindDegradation, LensCoverage, weightWeigh,
-			"known-CVE scan not run", "OSV was disabled or did not complete for this dependency")
-	} else {
+	// OSV status is derived from what actually ran, never assumed. A scan that
+	// did not APPLY (no OSV index for the ecosystem, e.g. gha) is a NOTE, not a
+	// gap; a scan that was disabled or FAILED on a covered ecosystem is a
+	// degradation that must not read as clean.
+	switch {
+	case !s.Security.Queried:
+		if _, ok := osv.Ecosystem(s.Package.Ecosystem); !ok {
+			add(CodeOSVUnsupported, KindNote, LensCoverage, weightPositive,
+				"known-CVE scan not applicable", "OSV has no advisory index for the "+s.Package.Ecosystem+" ecosystem")
+		} else if s.Security.Note != "" {
+			add(CodeOSVFailed, KindDegradation, LensCoverage, weightWeigh,
+				"known-CVE scan failed", s.Security.Note)
+		} else {
+			add(CodeOSVDisabled, KindDegradation, LensCoverage, weightWeigh,
+				"known-CVE scan not run", "OSV was disabled for this dependency")
+		}
+	default:
 		if n := len(s.Security.Introduced); n > 0 {
 			add(CodeOSVIntroduced, KindFact, LensSecurity, weightLook,
 				fmt.Sprintf("introduces %d known CVE(s)", n), joinVulnIDs(s.Security.Introduced, 5))

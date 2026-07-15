@@ -41,9 +41,13 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 			UsingFrom:      "node20", UsingTo: "node24",
 		},
 	}))
-	// exec present-in-both (not introduced) and the disabled-OSV degradation
-	collect(Derive("present", &stats.Stats{Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}))
-	collect(Derive("noosv", &stats.Stats{Security: stats.Security{Queried: false}}))
+	// exec present-in-both (not introduced), and the three not-queried OSV
+	// states: disabled (covered eco, no scan), failed (scan errored),
+	// unsupported (no OSV index for the eco).
+	collect(Derive("present", &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}))
+	collect(Derive("disabled", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}))
+	collect(Derive("failed", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false, Note: "OSV lookup failed"}}))
+	collect(Derive("unsupported", &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false}}))
 	// census (incl. the biggest-unreviewed-file lead), redirect, failure
 	collect(DeriveCensus("cen", &Census{Files: 10, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
@@ -59,10 +63,17 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 // TestLedgerVerdict: the headline is a pure function of the ledger, and a
 // degradation can never read as clean.
 func TestLedgerVerdict(t *testing.T) {
-	// a disabled scan alone: not clean, coverage incomplete
-	deg := Assess(Derive("d", &stats.Stats{Security: stats.Security{Queried: false}}))
+	// a disabled scan on a COVERED ecosystem: a degradation, not clean
+	deg := Assess(Derive("d", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}))
 	if deg.Clean() || deg.CoverageComplete {
 		t.Errorf("a degradation must not read clean: %+v", deg)
+	}
+
+	// OSV unsupported for the ecosystem (gha) is a NOTE, not a gap: it must
+	// still read clean, since there was no coverage to lose.
+	na := Assess(Derive("n", &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false}}))
+	if !na.Clean() {
+		t.Errorf("an unsupported-OSV note must read clean (no gap): %+v", na)
 	}
 
 	// OSV ran, nothing found, no other change: genuinely clean

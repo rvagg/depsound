@@ -143,6 +143,10 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 		return fmt.Sprintf("fixes %d advisory(ies)", len(s.Security.FixedByUpgrade))
 	case CodeOSVDisabled:
 		return "known-CVE scan not run (coverage gap, not a clean result)"
+	case CodeOSVFailed:
+		return "known-CVE scan failed (coverage gap, not a clean result): " + mdTaint(sig.Detail)
+	case CodeOSVUnsupported:
+		return "known-CVE scan not applicable (this ecosystem has no OSV index)"
 	case CodeExecIntroduced:
 		return "new execution surface: " + mdTaint(sig.Detail)
 	case CodeExecPresent:
