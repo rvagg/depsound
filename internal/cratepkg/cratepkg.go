@@ -2,6 +2,7 @@ package cratepkg
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -77,7 +78,7 @@ func Load(dir string) (*Crate, error) {
 	c.RustVersion = raw.Package.RustVersion
 	c.ProcMacro = raw.Lib.ProcMacro
 	c.BuildScript = resolveBuildScript(dir, raw.Package.Build)
-	if c.BuildScript != "" && (filepath.IsAbs(c.BuildScript) || strings.HasPrefix(c.BuildScript, "..")) {
+	if c.BuildScript != "" && (path.IsAbs(c.BuildScript) || strings.HasPrefix(c.BuildScript, "..")) {
 		c.Warnings = append(c.Warnings, "package.build points outside the crate ("+c.BuildScript+"): unusual, verify")
 	}
 	if raw.Features != nil {
@@ -249,7 +250,9 @@ func specFlag(spec string) string {
 // HasBuildRS reports whether the crate runs a build script at the consumer's
 // build time. It honors package.build, so a crate with build = "custom.rs" is
 // caught (a root-build.rs stat would miss it) and one with build = false is not
-// a false positive (build.rs may exist but is inert).
+// a false positive (build.rs may exist but is inert). Not covered: package.
+// metabuild (a currently nightly, build.rs-free build-execution path via a
+// build-dependency); if it stabilizes, add a metabuild check here.
 func (c *Crate) HasBuildRS() bool {
 	return c.BuildScript != ""
 }
@@ -267,8 +270,18 @@ func resolveBuildScript(dir string, build any) string {
 		if v == "" {
 			return ""
 		}
-		return filepath.Clean(v)
-	default: // absent: default is build.rs if it exists
+		return path.Clean(v) // a registry manifest path is always /-separated
+	case []any:
+		// multiple build scripts (the currently nightly `multiple-build-scripts`
+		// feature): any non-empty entry is an execution surface, so return one
+		// rather than fall through to the build.rs default and miss it.
+		for _, e := range v {
+			if s, ok := e.(string); ok && s != "" {
+				return path.Clean(s)
+			}
+		}
+		return ""
+	default: // absent: the default is build.rs when it is present
 		if _, err := os.Stat(filepath.Join(dir, "build.rs")); err == nil {
 			return "build.rs"
 		}

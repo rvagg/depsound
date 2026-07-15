@@ -57,6 +57,11 @@ func TestBuildScript(t *testing.T) {
 	if c := load(t, "[package]\nname = \"x\"\nbuild = \"custom.rs\"\n"); !c.HasBuildRS() || c.BuildScript != "custom.rs" {
 		t.Errorf("custom build path: HasBuildRS=%v BuildScript=%q", c.HasBuildRS(), c.BuildScript)
 	}
+	// an array of build scripts (currently nightly multiple-build-scripts) with
+	// no root build.rs must NOT fall through to "none" (a false-negative)
+	if c := load(t, "cargo-features = [\"multiple-build-scripts\"]\n[package]\nname = \"x\"\nbuild = [\"a.rs\", \"b.rs\"]\n"); !c.HasBuildRS() || c.BuildScript != "a.rs" {
+		t.Errorf("multiple build scripts: HasBuildRS=%v BuildScript=%q", c.HasBuildRS(), c.BuildScript)
+	}
 	if c := loadWithBuildRS(t, "[package]\nname = \"x\"\nbuild = false\n"); c.HasBuildRS() || c.BuildScript != "" {
 		t.Errorf("build = false must disable even with build.rs present: HasBuildRS=%v BuildScript=%q", c.HasBuildRS(), c.BuildScript)
 	}
