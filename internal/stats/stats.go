@@ -179,6 +179,13 @@ type FileEntry struct {
 	Evidence string `json:"evidence,omitempty"`
 	Added    int    `json:"added"`
 	Removed  int    `json:"removed"`
+	// Binary marks an opaque file git reports as -/- (zero line delta): its
+	// change is invisible to line-based ranking, so it is ranked by BYTES
+	// instead. BytesFrom/BytesTo are populated for binaries (0 for an absent
+	// side), so an added .node/.wasm/executable can never hide behind 0 lines.
+	Binary    bool  `json:"binary,omitempty"`
+	BytesFrom int64 `json:"bytesFrom,omitempty"`
+	BytesTo   int64 `json:"bytesTo,omitempty"`
 }
 
 type Flag struct {
@@ -375,6 +382,12 @@ func Build(in Input) (*Stats, error) {
 		e := FileEntry{
 			Path: d.Path, OldPath: d.OldPath, Status: d.Status,
 			Class: string(res.Class), Excluded: excluded, Added: d.Added, Removed: d.Removed,
+			Binary: d.Binary,
+		}
+		// a binary's line delta is a git -/- (zero), so record byte sizes: the
+		// only way an added/changed opaque payload can be ranked and named
+		if d.Binary {
+			e.BytesFrom, e.BytesTo = binaryBytes(in.OldTree, in.NewTree, d.OldPath, d.Path, d.Status)
 		}
 		// empty only for source, the default class when no rule matches
 		e.Evidence = res.Evidence
@@ -556,6 +569,26 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// binaryBytes stats the old and new sizes of a binary file (0 for an absent
+// side), so a byte delta exists where git reports a zero line delta.
+func binaryBytes(oldTree, newTree, oldPath, path, status string) (from, to int64) {
+	if status != "A" {
+		op := oldPath
+		if op == "" {
+			op = path
+		}
+		if fi, err := os.Stat(filepath.Join(oldTree, op)); err == nil {
+			from = fi.Size()
+		}
+	}
+	if status != "D" {
+		if fi, err := os.Stat(filepath.Join(newTree, path)); err == nil {
+			to = fi.Size()
+		}
+	}
+	return
 }
 
 func treeSize(root string) (bytes int64, files int, err error) {

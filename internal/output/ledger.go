@@ -63,6 +63,7 @@ const (
 	CodeGHACaps        Code = "gha.capsIntroduced"
 	CodeGHAUsing       Code = "gha.using"
 	CodeBinaryAdded    Code = "binary.added"
+	CodeBinaryChanged  Code = "binary.changed"
 	CodeRedirect       Code = "redirect"
 	CodeCensusNew      Code = "census.new"
 	CodeCensusCVE      Code = "census.cve"
@@ -83,7 +84,7 @@ var allCodes = []Code{
 	CodeExecIntroduced, CodeExecPresent,
 	CodeCompatChange, CodeGeneratedDelta,
 	CodeGHACaps, CodeGHAUsing,
-	CodeBinaryAdded,
+	CodeBinaryAdded, CodeBinaryChanged,
 	CodeRedirect,
 	CodeCensusNew, CodeCensusCVE, CodeCensusExec, CodeCensusBig,
 	CodeAnalysisFailed,
@@ -183,13 +184,29 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		}
 	}
 
-	// an added binary/excluded file carries a ZERO line delta, so line-based
-	// ranking hides it; surface the addition as a fact from status + class.
+	// binaries carry a ZERO line delta (git -/-), so line-based ranking hides
+	// them; rank by BYTES and name every one. A newly-added opaque file is
+	// fact-grade regardless of size (an ideal payload channel); a changed one
+	// weighs (dist/native rebuild, or drift).
+	var addedBin, changedBin []stats.FileEntry
 	for _, e := range s.Files.Entries {
-		if e.Excluded && e.Status == "A" {
-			add(CodeBinaryAdded, KindFact, LensSecurity, weightLook, "binary/opaque file added", e.Path)
-			break
+		if !e.Binary {
+			continue
 		}
+		switch e.Status {
+		case "A":
+			addedBin = append(addedBin, e)
+		case "M", "R":
+			changedBin = append(changedBin, e)
+		}
+	}
+	if len(addedBin) > 0 {
+		add(CodeBinaryAdded, KindFact, LensSecurity, weightLook,
+			fmt.Sprintf("%d binary/opaque file(s) added", len(addedBin)), binaryList(addedBin, false))
+	}
+	if len(changedBin) > 0 {
+		add(CodeBinaryChanged, KindHeuristic, LensCompat, weightWeigh,
+			fmt.Sprintf("%d binary/opaque file(s) changed", len(changedBin)), binaryList(changedBin, true))
 	}
 
 	sortSignals(l.Signals)
@@ -313,6 +330,56 @@ func rawCompat(s *stats.Stats) string {
 		}
 	}
 	return "exports/resolution changed"
+}
+
+// binaryList ranks binary files by bytes (added by new size, changed by the
+// absolute byte delta) and names them, capped, so an opaque payload is always
+// visible and the biggest leads. Paths are raw; renderers escape them.
+func binaryList(files []stats.FileEntry, delta bool) string {
+	weight := func(e stats.FileEntry) int64 {
+		if delta {
+			if d := e.BytesTo - e.BytesFrom; d < 0 {
+				return -d
+			} else {
+				return d
+			}
+		}
+		return e.BytesTo
+	}
+	sorted := append([]stats.FileEntry(nil), files...)
+	sort.SliceStable(sorted, func(i, j int) bool { return weight(sorted[i]) > weight(sorted[j]) })
+	const max = 3
+	var parts []string
+	for i, e := range sorted {
+		if i >= max {
+			parts = append(parts, fmt.Sprintf("+%d more", len(sorted)-max))
+			break
+		}
+		if delta {
+			parts = append(parts, e.Path+" ("+signedBytes(e.BytesTo-e.BytesFrom)+")")
+		} else {
+			parts = append(parts, e.Path+" ("+humanBytes(e.BytesTo)+")")
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+func signedBytes(n int64) string {
+	if n >= 0 {
+		return "+" + humanBytes(n)
+	}
+	return "-" + humanBytes(-n)
 }
 
 func sortSignals(ss []Signal) {

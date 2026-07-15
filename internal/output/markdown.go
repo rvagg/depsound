@@ -161,8 +161,8 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 		return "new runner capability referenced: " + mdTaint(sig.Detail)
 	case CodeGHAUsing:
 		return "action runtime changed: " + mdTaint(sig.Detail)
-	case CodeBinaryAdded:
-		return "binary/opaque file added: " + mdTaint(sig.Detail)
+	case CodeBinaryAdded, CodeBinaryChanged:
+		return sig.Title + " (ranked by size): " + mdTaint(sig.Detail)
 	case CodeCensusNew:
 		return fmt.Sprintf("adopting %s file%s, whole footprint unreviewed", commas(c.Files), plural(c.Files))
 	case CodeCensusCVE:

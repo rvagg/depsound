@@ -33,7 +33,8 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 		Runnable: stats.Runnable{CgoTo: true}, // cgo newly introduced
 		Compat:   stats.Compat{TypeFrom: "commonjs", TypeTo: "module"},
 		Files: stats.FilesSection{Entries: []stats.FileEntry{
-			{Path: "native.node", Status: "A", Excluded: true},
+			{Path: "native.node", Status: "A", Excluded: true, Binary: true, BytesTo: 2 << 20},
+			{Path: "prebuilt.wasm", Status: "M", Excluded: true, Binary: true, BytesFrom: 1 << 20, BytesTo: 3 << 20},
 			{Path: "dist/b.js", Status: "M", Class: "generated", Added: 200},
 		}},
 		Action: &stats.ActionSection{
