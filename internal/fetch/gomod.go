@@ -134,10 +134,10 @@ func fetchToTemp(ctx context.Context, client *http.Client, u, dir string) (strin
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return "", fmt.Errorf("GET %s: %s (module path or version not found on the proxy; check spelling)", u, resp.Status)
+		return "", statusErr(u, resp.StatusCode, "module path or version not found on the proxy; check spelling")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s: %s", u, resp.Status)
+		return "", statusErr(u, resp.StatusCode, "")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err

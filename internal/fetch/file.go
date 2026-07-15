@@ -45,7 +45,7 @@ func GetURL(ctx context.Context, client *http.Client, u string) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", u, resp.Status)
+		return nil, statusErr(u, resp.StatusCode, "")
 	}
 	return readCapped(resp.Body, u)
 }
@@ -78,9 +78,9 @@ func GitHubContents(ctx context.Context, client *http.Client, name, ref, path st
 	case http.StatusOK:
 		return readCapped(resp.Body, u)
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("github:%s@%s:%s not found (repo, ref or path wrong; private repos need GITHUB_TOKEN)", name, ref, path)
+		return nil, statusErr(u, resp.StatusCode, fmt.Sprintf("github:%s@%s:%s not found (repo, ref or path wrong; private repos need GITHUB_TOKEN)", name, ref, path))
 	default:
-		return nil, fmt.Errorf("GET %s: %s", u, resp.Status)
+		return nil, statusErr(u, resp.StatusCode, "")
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
 	"github.com/rvagg/depsound/internal/spec"
@@ -195,6 +197,19 @@ func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.
 	return c, nil
 }
 
+// bulkFail classifies an analysis error: a typed acquisition failure becomes a
+// structured Unavailable (absent/denied/transient, preserving URL and status),
+// so a taken-down artifact reads as a distinct fact rather than an opaque
+// error; anything else stays a generic analysis failure.
+func bulkFail(ref string, err error) output.BulkResult {
+	if he, ok := errors.AsType[*fetch.HTTPError](err); ok {
+		return output.BulkResult{Ref: ref, Unavailable: &output.Unavailable{
+			Kind: he.Kind(), Status: he.Status, URL: he.URL, Hint: he.Hint,
+		}}
+	}
+	return output.BulkResult{Ref: ref, Err: err.Error()}
+}
+
 // runBulk fans analyze()+OSV over the list, bounded-parallel, preserving
 // input order in the results.
 func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Duration) []output.BulkResult {
@@ -228,7 +243,7 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Durati
 			ref := it.spec + " " + it.from + " -> " + it.to
 			r, err := analyze(cacheDir, it.spec, it.from, it.to, cooldown)
 			if err != nil {
-				results[i] = output.BulkResult{Ref: ref, Err: err.Error()}
+				results[i] = bulkFail(ref, err)
 				return
 			}
 			if !noOSV {

@@ -150,7 +150,7 @@ func getBytes(ctx context.Context, client *http.Client, u string) ([]byte, error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", u, resp.Status)
+		return nil, statusErr(u, resp.StatusCode, "")
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 }

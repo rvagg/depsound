@@ -65,6 +65,8 @@ func ledgerRows(results []BulkResult) []ledgerRow {
 	rows := make([]ledgerRow, 0, len(results))
 	for _, r := range results {
 		switch {
+		case r.Unavailable != nil:
+			rows = append(rows, ledgerRow{l: DeriveUnavailable(r.Ref, r.Unavailable), ref: r.Ref, kind: rowStats})
 		case r.Redirect != "":
 			rows = append(rows, ledgerRow{l: DeriveRedirect(r.Ref, r.Redirect), ref: r.Ref, kind: rowRedirect})
 		case r.Census != nil:
@@ -169,6 +171,12 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 		return "runs code on install/build: " + mdTaint(sig.Detail)
 	case CodeCensusBig:
 		return "largest unreviewed file " + mdTaint(sig.Detail)
+	case CodeArtifactAbsent:
+		return "artifact unavailable: the published bytes are gone (a takedown-shaped event); contents not inspected — " + mdTaint(sig.Detail)
+	case CodeArtifactDenied:
+		return "artifact access denied (auth/policy): " + mdTaint(sig.Detail)
+	case CodeArtifactFetch:
+		return "artifact fetch failed (transient): " + mdTaint(sig.Detail)
 	default:
 		if sig.Detail != "" {
 			return mdTaint(sig.Title) + ": " + mdTaint(sig.Detail)

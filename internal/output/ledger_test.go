@@ -51,7 +51,10 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 	// census (incl. the biggest-unreviewed-file lead), redirect, failure
 	collect(DeriveCensus("cen", &Census{Files: 10, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
-	collect(DeriveFailure("bad", "fetch failed"))
+	collect(DeriveFailure("bad", "extraction failed"))
+	collect(DeriveUnavailable("gone", &Unavailable{Kind: "absent", Status: 404, URL: "u"}))
+	collect(DeriveUnavailable("locked", &Unavailable{Kind: "denied", Status: 403, URL: "u"}))
+	collect(DeriveUnavailable("flaky", &Unavailable{Kind: "transient", Status: 503, URL: "u"}))
 
 	for _, code := range AllSignalCodes() {
 		if !got[code] {

@@ -69,6 +69,9 @@ const (
 	CodeCensusExec     Code = "census.exec"
 	CodeCensusBig      Code = "census.bigExcluded"
 	CodeAnalysisFailed Code = "analysis.failed"
+	CodeArtifactAbsent Code = "artifact.absent"    // the published bytes are gone (404/410)
+	CodeArtifactDenied Code = "artifact.denied"    // access denied (401/403)
+	CodeArtifactFetch  Code = "artifact.fetchFail" // transient acquisition failure
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -84,6 +87,7 @@ var allCodes = []Code{
 	CodeRedirect,
 	CodeCensusNew, CodeCensusCVE, CodeCensusExec, CodeCensusBig,
 	CodeAnalysisFailed,
+	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -234,6 +238,38 @@ func DeriveFailure(ref, errMsg string) Ledger {
 		Code: CodeAnalysisFailed, Kind: KindDegradation, Lens: LensCoverage, Weight: weightLook,
 		Title: "could not be analysed", Detail: errMsg,
 	}}}
+}
+
+// Unavailable is a classified acquisition failure from the fetch layer: Kind is
+// "absent" (404/410, the bytes are gone), "denied" (401/403), or "transient".
+type Unavailable struct {
+	Kind   string
+	Status int
+	URL    string
+	Hint   string
+}
+
+// DeriveUnavailable turns an acquisition failure into a signal. Absent is a
+// FACT (the published bytes are gone, a takedown-shaped event worth a look, and
+// the contents were not inspected); denied and transient are degradations.
+func DeriveUnavailable(ref string, u *Unavailable) Ledger {
+	detail := u.URL
+	if u.Hint != "" {
+		detail += " (" + u.Hint + ")"
+	}
+	sig := Signal{Lens: LensCoverage, Detail: detail}
+	switch u.Kind {
+	case "absent":
+		sig.Code, sig.Kind, sig.Lens, sig.Weight = CodeArtifactAbsent, KindFact, LensSecurity, weightLook
+		sig.Title = fmt.Sprintf("artifact unavailable (HTTP %d): the published bytes are gone; contents not inspected", u.Status)
+	case "denied":
+		sig.Code, sig.Kind, sig.Weight = CodeArtifactDenied, KindDegradation, weightWeigh
+		sig.Title = fmt.Sprintf("artifact access denied (HTTP %d): authentication or policy", u.Status)
+	default:
+		sig.Code, sig.Kind, sig.Weight = CodeArtifactFetch, KindDegradation, weightLook
+		sig.Title = fmt.Sprintf("artifact fetch failed (HTTP %d, transient)", u.Status)
+	}
+	return Ledger{Ref: ref, Signals: []Signal{sig}}
 }
 
 // Verdict is the headline state, computed purely from the ledger so no renderer

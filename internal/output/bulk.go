@@ -23,7 +23,10 @@ type BulkResult struct {
 	// and needs no fetch, so it carries no Stats/Census; the trust-laundering
 	// signal is the redirect itself.
 	Redirect string `json:"redirect,omitempty"`
-	Err      string `json:"error,omitempty"`
+	// Unavailable is a classified acquisition failure (the artifact could not be
+	// fetched): absent/denied/transient, preserving URL and status.
+	Unavailable *Unavailable `json:"unavailable,omitempty"`
+	Err         string       `json:"error,omitempty"`
 }
 
 // digest is the low-level Stats->signals extractor Derive wraps into the typed
@@ -74,6 +77,9 @@ type bulkSection struct {
 }
 
 var bulkSections = []bulkSection{
+	{[]Code{CodeArtifactAbsent}, "WARNING artifact UNAVAILABLE (published bytes gone: takedown-shaped, contents not inspected)"},
+	{[]Code{CodeArtifactDenied}, "COVERAGE GAP: artifact access DENIED (auth/policy)"},
+	{[]Code{CodeArtifactFetch}, "COVERAGE GAP: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "WARNING new build/install execution surface INTRODUCED"},
 	{[]Code{CodeExecPresent}, "WARNING build/install execution surface present, its build code may have changed"},
 	{[]Code{CodeBinaryAdded}, "WARNING binary/opaque file ADDED (zero line delta, an ideal payload channel)"},
@@ -104,6 +110,10 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	diffCount := 0 // deps carrying a version diff (the OSV-via-diff denominator)
 	for _, r := range results {
 		switch {
+		case r.Unavailable != nil:
+			for _, sig := range DeriveUnavailable(r.Ref, r.Unavailable).Signals {
+				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
+			}
 		case r.Redirect != "":
 			redirects = append(redirects, r)
 		case r.Census != nil:

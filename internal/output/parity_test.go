@@ -49,6 +49,9 @@ func markdownMarkers() map[Code]string {
 		CodeCensusExec:     "runs code on install/build",
 		CodeCensusBig:      "largest unreviewed file",
 		CodeAnalysisFailed: "could not be analysed",
+		CodeArtifactAbsent: "artifact unavailable",
+		CodeArtifactDenied: "access denied",
+		CodeArtifactFetch:  "fetch failed",
 	}
 }
 
@@ -73,6 +76,9 @@ func bulkMarkers() map[Code]string {
 		CodeCensusExec:     "runs install/build code",
 		CodeCensusBig:      "largest unreviewed",
 		CodeAnalysisFailed: "FAILED (not analysed)",
+		CodeArtifactAbsent: "artifact unavailable",
+		CodeArtifactDenied: "access denied",
+		CodeArtifactFetch:  "fetch failed",
 	}
 }
 
@@ -100,7 +106,10 @@ func parityFixture() []BulkResult {
 		{Ref: "gha:u v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false}}},                          // unsupported
 		{Ref: "npm:new 1.0.0", Census: &Census{Files: 12, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}},
 		{Ref: "go:trusted/x", Redirect: "github.com/fork/x@v1.0.0"},
-		{Ref: "npm:broke 1 -> 2", Err: "fetch failed"},
+		{Ref: "npm:broke 1 -> 2", Err: "extraction failed"},
+		{Ref: "npm:gone 1 -> 2", Unavailable: &Unavailable{Kind: "absent", Status: 404, URL: "https://registry.npmjs.org/gone/-/gone-2.tgz"}},
+		{Ref: "npm:locked 1 -> 2", Unavailable: &Unavailable{Kind: "denied", Status: 403, URL: "https://registry.example/locked"}},
+		{Ref: "npm:flaky 1 -> 2", Unavailable: &Unavailable{Kind: "transient", Status: 503, URL: "https://registry.example/flaky"}},
 	}
 }
 

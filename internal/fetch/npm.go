@@ -185,7 +185,7 @@ func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", u, resp.Status)
+		return statusErr(u, resp.StatusCode, "")
 	}
 	return json.NewDecoder(resp.Body).Decode(v)
 }
@@ -204,7 +204,7 @@ func download(ctx context.Context, client *http.Client, u, dest, integrity, shas
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", u, resp.Status)
+		return statusErr(u, resp.StatusCode, "")
 	}
 	// stall watchdog: cancels the request when no bytes arrive for
 	// stallTimeout; progress resets it, so slow links are never killed

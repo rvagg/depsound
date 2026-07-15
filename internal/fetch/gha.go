@@ -118,11 +118,11 @@ func getGitHubJSON(ctx context.Context, client *http.Client, u string, v any) er
 	case http.StatusOK:
 		return json.NewDecoder(resp.Body).Decode(v)
 	case http.StatusNotFound:
-		return fmt.Errorf("GET %s: 404 (repo or ref not found; check owner/repo and the tag)", u)
+		return statusErr(u, resp.StatusCode, "repo or ref not found; check owner/repo and the tag")
 	case http.StatusForbidden:
-		return fmt.Errorf("GET %s: 403 (rate-limited or forbidden; set GITHUB_TOKEN to raise the limit)", u)
+		return statusErr(u, resp.StatusCode, "rate-limited or forbidden; set GITHUB_TOKEN to raise the limit")
 	default:
-		return fmt.Errorf("GET %s: %s", u, resp.Status)
+		return statusErr(u, resp.StatusCode, "")
 	}
 }
 
@@ -146,7 +146,7 @@ func downloadPlain(ctx context.Context, client *http.Client, u, dest string) err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", u, resp.Status)
+		return statusErr(u, resp.StatusCode, "")
 	}
 	watchdog := time.AfterFunc(stallTimeout, cancel)
 	defer watchdog.Stop()
