@@ -10,7 +10,7 @@ import (
 const identity = `depsound: sound the depths of a dependency change. It fetches the published
 artifact, diffs two versions, and lays out the evidence.
 A gateway to review, never a verdict: it surfaces mechanical facts; the
-judgement is yours. "No flags" is a starting point, never an all-clear.`
+judgement is yours. "No flags" is a starting point, never a clean bill.`
 
 // routingTable answers the highest-leverage question, which command when. It
 // is generated (not hand-spaced) so the command column stays aligned, and

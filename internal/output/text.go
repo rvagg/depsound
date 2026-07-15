@@ -203,7 +203,7 @@ func writeGuidance(w func(string, ...any), s *stats.Stats) {
 	for _, c := range cov.Checked {
 		w("  + %s", c)
 	}
-	w("NOT checked ('no flags' is a STARTING POINT, not an all-clear):")
+	w("NOT checked ('no flags' is a STARTING POINT, not a clean bill):")
 	for _, c := range cov.NotChecked {
 		w("  - %s", c)
 	}

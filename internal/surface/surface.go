@@ -151,8 +151,8 @@ func (idx *Index) DirRollup(depth int) []DirStat {
 }
 
 // Unit statuses. "No result" has several meanings with different weights;
-// only noChangedFiles is a positive all-clear, and subpackagesOnly is NOT
-// a match for the unit itself.
+// only noChangedFiles is a positive no-change-under-mapped-paths result, and
+// subpackagesOnly is NOT a match for the unit itself.
 const (
 	StatusMatched         = "matched"
 	StatusSubpackagesOnly = "subpackagesOnly"
@@ -192,7 +192,7 @@ func (idx *Index) Match(unit string, prefixes []string, packageDirs bool) UnitRe
 			// (old x/a.go -> new y/a.go): the new path misses, but the
 			// file WAS in the unit, a removal from its surface. Test the
 			// old path too, else a rename-away reports the false
-			// "noChangedFiles" all-clear. FileSurface carries OldPath, so
+			// "noChangedFiles" no-change result. FileSurface carries OldPath, so
 			// the renderer shows the move.
 			if !own && !desc && f.OldPath != "" {
 				own, desc = matchKind(f.OldPath, p, packageDirs)

@@ -11,7 +11,7 @@ import (
 
 // Surface renders the consumer-intersection report: matched units first
 // with their changed files and top symbols, then the honest non-matches
-// (unmapped and out-of-scope are NOT all-clears), and always the
+// (unmapped and out-of-scope are NOT no-change results), and always the
 // unindexable and attribution disclosures so a clean result cannot be
 // mistaken for complete coverage.
 func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, ws string) string {
@@ -75,7 +75,7 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 
 	if len(clear) > 0 {
 		w("")
-		w("no changes touch (mapped, all-clear):")
+		w("no changed files under these mapped paths (a match location, NOT a clean bill):")
 		for _, r := range clear {
 			w("  %s", taint(r.Unit))
 		}
