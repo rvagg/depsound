@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-// Acquisition-failure kinds. The distinction is load-bearing: an ABSENT
+// Acquisition-failure kinds. The distinction matters: an ABSENT
 // artifact (a takedown, or never-published) is a fact worth preserving for a
 // forensic/advisory fallback; a DENIED one is actionable (auth/policy); a
 // TRANSIENT one is retryable. Collapsing them into one opaque error loses all

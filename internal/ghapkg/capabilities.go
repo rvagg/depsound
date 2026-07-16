@@ -67,8 +67,8 @@ func Capabilities(tree string) []string {
 }
 
 // CapabilityDelta returns the categories present in the new version and the
-// subset NEWLY introduced (present in new, absent in old): the delta is the
-// load-bearing signal.
+// subset newly introduced (present in new, absent in old): the delta is
+// the signal that matters.
 func CapabilityDelta(oldTree, newTree string) (present, introduced []string) {
 	old := ScanCapabilities(oldTree)
 	niu := ScanCapabilities(newTree)

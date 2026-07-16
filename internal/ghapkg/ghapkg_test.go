@@ -57,7 +57,7 @@ func TestDockerImage(t *testing.T) {
 	}
 }
 
-// A NEW post hook runs code around the action: the load-bearing signal, so
+// A NEW post hook runs code around the action: the signal that matters, so
 // the delta must surface it as "added".
 func TestExecDeltaNewHook(t *testing.T) {
 	old := &Action{Using: "node20", Main: "dist/index.js"}

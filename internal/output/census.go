@@ -453,7 +453,7 @@ func CensusText(c *Census) string {
 	if c.Ecosystem == "gha" {
 		w("execution model (context, not an alarm: running code is an action's job.")
 		w("  It runs on a CI runner with the runner's secrets/GITHUB_TOKEN/OIDC; the")
-		w("  load-bearing questions are the pin and what the code reaches):")
+		w("  the questions that matter are the pin and what the code reaches):")
 		if c.GHAUsing != "" {
 			w("  using %s", taint(c.GHAUsing))
 		}

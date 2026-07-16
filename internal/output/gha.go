@@ -17,9 +17,9 @@ func writeAction(w func(string, ...any), a *stats.ActionSection) {
 	w("")
 	w("github action  (runs on a CI runner, not your machine; the risk is the")
 	w("runner's secrets, GITHUB_TOKEN and OIDC, plus push/publish powers, and")
-	w("more on self-hosted runners. Running code IS an action's whole job, so")
-	w("the execution model below is context, not an alarm; the load-bearing")
-	w("questions are the pin and what the code reaches, read the dist bundle.)")
+	w("more on self-hosted runners. Running code is an action's whole job, so")
+	w("the execution model below is context, not an alarm; the questions that")
+	w("matter are the pin and what the code reaches, read the dist bundle.)")
 	for _, p := range a.Pins {
 		w("  %s", renderPin(p))
 	}
@@ -56,7 +56,7 @@ func writeAction(w func(string, ...any), a *stats.ActionSection) {
 
 // writeCaps reports the runner powers the executed code references. It is a
 // grep (evadable, a lead not proof), so present-in-both is context; an
-// INTRODUCED capability (new in this bump) is the load-bearing signal, the
+// INTRODUCED capability (new in this bump) is the signal that matters, the
 // tj-actions shape of adding a secret+network exfil path.
 func writeCaps(w func(string, ...any), present, introduced []string) {
 	if len(present) == 0 {

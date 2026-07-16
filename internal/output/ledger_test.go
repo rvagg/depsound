@@ -80,7 +80,7 @@ func TestLedgerVerdict(t *testing.T) {
 		t.Errorf("an unsupported-OSV note must read clean (no gap): %+v", na)
 	}
 
-	// OSV ran, nothing found, no other change: genuinely clean
+	// OSV ran, nothing found, no other change: actually clean
 	clean := Assess(Derive("c", &stats.Stats{
 		Security: stats.Security{Queried: true},
 		Compat:   stats.Compat{TypeFrom: "commonjs", TypeTo: "commonjs"},

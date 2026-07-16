@@ -224,7 +224,7 @@ type ActionSection struct {
 	Nested    []string          `json:"nested,omitempty"` // composite `uses:` (transitive)
 	SubPath   string            `json:"subPath,omitempty"`
 	// Caps are the runner powers the code references (grep, evadable lead);
-	// CapsIntroduced is the subset NEW in this bump, the load-bearing delta.
+	// CapsIntroduced is the subset new in this bump, the delta that matters.
 	Caps           []string `json:"caps,omitempty"`
 	CapsIntroduced []string `json:"capsIntroduced,omitempty"`
 }

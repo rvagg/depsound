@@ -9,7 +9,7 @@ import (
 	"github.com/rvagg/depsound/internal/stats"
 )
 
-// cleanStats is a genuinely clean result: the OSV scan RAN (Queried) and found
+// cleanStats is an actually-clean result: the OSV scan RAN (Queried) and found
 // nothing, and nothing else changed. Queried matters, an unqueried scan is now
 // a degradation, not a clean result.
 func cleanStats() *stats.Stats {
@@ -163,7 +163,7 @@ func TestMarkdownExecDeshout(t *testing.T) {
 	}
 }
 
-// A rich compat change must name the load-bearing constraints (MSRV must not
+// A rich compat change must name the constraints that matter (MSRV must not
 // hide) and count feature churn, never a dangling "+N more".
 func TestMarkdownCompatNamesConstraints(t *testing.T) {
 	s := cleanStats()

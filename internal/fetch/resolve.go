@@ -191,7 +191,7 @@ func pickCooldown(cand []candidate, cooldown time.Duration) (Resolved, error) {
 		return Resolved{}, fmt.Errorf("no non-prerelease version older than the %s cooldown", cooldown)
 	}
 	// pass 2: how many real versions the cooldown withheld (newer than the
-	// pick but too fresh) -- deterministic, independent of iteration order
+	// pick but too fresh); deterministic, independent of iteration order
 	skipped := 0
 	for _, c := range cand {
 		if !c.published.IsZero() && c.published.After(cutoff) && semverGreater(c.version, best.version) {

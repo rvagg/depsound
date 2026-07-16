@@ -11,7 +11,7 @@ import (
 // the coverage boundary + the notice. That is the anti-false-security SPINE
 // and is meant to be here, but it must not INFLATE, so cap the loud/caveat
 // lines. If this trips, a new always-on caveat was added: put the "why" in
-// `depsound guide`, not in every report. The two load-bearing warnings
+// `depsound guide`, not in every report. The two warnings that matter
 // (attacker-writable data; no-flags != safe) plus the coverage bullets are
 // the budget; explanation of heuristics/threat-model belongs in the guide.
 func TestReportBoilerplateBudget(t *testing.T) {

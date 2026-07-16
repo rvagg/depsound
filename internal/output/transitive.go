@@ -51,14 +51,14 @@ func Transitive(t TransitiveResult) string {
 
 	if len(t.Added) > 0 {
 		w("")
-		w("added to your tree (%d) - new code, not a diff; census each you rely on:", len(t.Added))
+		w("added to your tree (%d), new code, not a diff; census each you rely on:", len(t.Added))
 		for _, m := range t.Added {
 			w("  %s %s%s   depsound %s:%s %s", taint(m.Path), taint(m.To), t.tag(m.Indirect), t.Ecosystem, taint(m.Path), taint(m.To))
 		}
 	}
 	if len(t.Removed) > 0 {
 		w("")
-		w("removed from your tree (%d) - gone, nothing to fetch:", len(t.Removed))
+		w("removed from your tree (%d), gone, nothing to fetch:", len(t.Removed))
 		for _, m := range t.Removed {
 			w("  %s %s%s", taint(m.Path), taint(m.From), t.tag(m.Indirect))
 		}

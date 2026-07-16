@@ -19,7 +19,7 @@ import (
 // here: go.mod (post-1.17 prune puts direct+indirect in it) and the lockfiles
 // (package-lock.json / pnpm-lock.yaml / Cargo.lock, which carry transitive).
 // Declaration files (package.json, Cargo.toml) are deliberately absent: their
-// lockfile is the ground truth and diffing it is authoritative and catches
+// lockfile is authoritative and diffing it catches
 // transitive bumps a manifest diff misses. A changed file whose base name is
 // not here is skipped with a note, never silently.
 var detectManifests = map[string]string{

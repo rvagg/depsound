@@ -6,7 +6,7 @@ import (
 )
 
 // removedShouts are the decorative all-caps markers the shouty audit stripped
-// from human/agent output. Caps are reserved for the two load-bearing warnings
+// from human/agent output. Caps are reserved for the two warnings that matter
 // (attacker-writable DATA; no-flags != safe), which are deliberately NOT in this
 // list. If one of these reappears in a rendered report, lowercase it, the
 // section order and wording carry the weight, not the shout.
@@ -21,7 +21,7 @@ func assertNoShouts(t *testing.T, name, out string) {
 	t.Helper()
 	for _, s := range removedShouts {
 		if strings.Contains(out, s) {
-			t.Errorf("%s output contains removed decorative shout %q; caps are reserved for the two load-bearing warnings, lowercase it:\n%s", name, s, out)
+			t.Errorf("%s output contains removed decorative shout %q; caps are reserved for the two warnings that matter, lowercase it:\n%s", name, s, out)
 		}
 	}
 }

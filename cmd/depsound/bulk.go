@@ -181,8 +181,8 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 }
 
 // censusForBulk builds a lean footprint of a newly-added dependency for the
-// bulk stream: the direct census plus a known-CVE scan, the load-bearing
-// signals when there is no prior version to diff. Transitive/provenance depth
+// bulk stream: the direct census plus a known-CVE scan, the signals
+// that matter when there is no prior version to diff. Transitive/provenance depth
 // is left to the deeper per-dep census the report routes to.
 func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.Duration) (*output.Census, error) {
 	c, err := buildCensus(cacheDir, specStr, version, cooldown)

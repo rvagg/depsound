@@ -21,7 +21,7 @@ func TestRepoMismatch(t *testing.T) {
 	if repoMismatch("git+https://github.com/a/b.git", "https://github.com/a/b") {
 		t.Error("URL-form differences must not read as mismatch")
 	}
-	// a genuinely different host/path IS
+	// a different host/path is
 	if !repoMismatch("https://github.com/a/b", "https://github.com/evil/b") {
 		t.Error("different owner must read as mismatch")
 	}

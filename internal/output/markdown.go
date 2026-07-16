@@ -49,13 +49,13 @@ func (r ledgerRow) bullet() string {
 	}
 	switch r.kind {
 	case rowRedirect:
-		return fmt.Sprintf("- **%s → %s** (redirect) — served from a non-registry source (fork/git/local); a trusted name pointed elsewhere is the trust-laundering vector, verify the source", mdTaint(r.ref), mdTaint(detail))
+		return fmt.Sprintf("- **%s → %s** (redirect): served from a non-registry source (fork/git/local); a trusted name pointed elsewhere is the trust-laundering vector, verify the source", mdTaint(r.ref), mdTaint(detail))
 	case rowFailed:
 		return fmt.Sprintf("- **%s** could not be analysed: %s", refArrow(r.ref), mdTaint(detail))
 	case rowCensus:
-		return fmt.Sprintf("- **new dependency %s** — %s", refArrow(r.ref), r.phrases())
+		return fmt.Sprintf("- **new dependency %s**: %s", refArrow(r.ref), r.phrases())
 	default:
-		return fmt.Sprintf("- **%s** — %s", refArrow(r.ref), r.phrases())
+		return fmt.Sprintf("- **%s**: %s", refArrow(r.ref), r.phrases())
 	}
 }
 
@@ -96,7 +96,7 @@ func Markdown(results []BulkResult) string {
 	}
 	v := Assess(ledgers...)
 
-	// worst first; genuinely-clean rows (an empty ledger) collapse to a count
+	// worst first; clean rows (an empty ledger) collapse to a count
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].tier() > rows[j].tier() })
 
 	var b strings.Builder
@@ -172,7 +172,7 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 	case CodeCensusBig:
 		return "largest unreviewed file " + mdTaint(sig.Detail)
 	case CodeArtifactAbsent:
-		return "artifact unavailable: the published bytes are gone (a takedown-shaped event); contents not inspected — " + mdTaint(sig.Detail)
+		return "artifact unavailable: the published bytes are gone (a takedown-shaped event); contents not inspected: " + mdTaint(sig.Detail)
 	case CodeArtifactDenied:
 		return "artifact access denied (auth/policy): " + mdTaint(sig.Detail)
 	case CodeArtifactFetch:
@@ -212,7 +212,7 @@ func compatPhrase(s *stats.Stats) string {
 		return fmt.Sprintf("module format changed: %s → %s", mdTaint(c.TypeFrom), mdTaint(c.TypeTo))
 	}
 	// structural constraints (edition, MSRV, engines, go directive) are few and
-	// load-bearing, so name them; feature-set changes are churny, so count them
+	// important, so name them; feature-set changes are churny, so count them
 	var structural []string
 	features := 0
 	for _, x := range c.Constraints {

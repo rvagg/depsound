@@ -10,7 +10,7 @@ import (
 )
 
 // SignalKind is a signal's trust tier, the distinction the whole tool rests on:
-// a FACT is ground truth (trust and act), a HEURISTIC is evadable
+// a FACT is verified truth (trust and act), a HEURISTIC is evadable
 // pattern-matching (navigate and inspect), a DEGRADATION is coverage lost (a
 // check did not complete, so silence here is emphatically not safety), a NOTE
 // is informational (a check that does not APPLY here, which is not a gap).
@@ -46,7 +46,7 @@ const (
 // report JSON key on. It is typed so a typo or rename is a compile error rather
 // than a red test, and it marshals to its string value so the JSON stays
 // readable. Typing prevents typos; it does NOT give exhaustiveness (Go has no
-// exhaustive switch), so the parity test remains load-bearing for omissions.
+// exhaustive switch), so the parity test is still what catches omissions.
 type Code string
 
 const (
@@ -171,8 +171,8 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		add(CodeCompatChange, KindFact, LensCompat, weightWeigh, "compatibility changed", rawCompat(s))
 	}
 
-	// GitHub Actions execution model (gha only). CapsIntroduced is the
-	// load-bearing delta; a runtime move is a real compat fact, not maintenance.
+	// GitHub Actions execution model (gha only). CapsIntroduced is the delta
+	// that matters; a runtime move is a real compat fact, not maintenance.
 	if a := s.Action; a != nil {
 		if len(a.CapsIntroduced) > 0 {
 			add(CodeGHACaps, KindFact, LensSecurity, weightLook,

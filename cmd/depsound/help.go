@@ -153,7 +153,7 @@ one file, directory, or symbol without the whole diff. Exactly one selector.`,
 
 A GHA dependency is owner/repo pinned to a ref; the artifact is the repo tree
 at the resolved commit (what runs). depsound resolves each ref and GRADES the
-pin, the load-bearing supply-chain control:
+pin, the key supply-chain control:
   SHA     immutable (best)
   tag     mutable, re-pointable (the tj-actions vector)
   branch  unpinned, moves on every push (worst)
