@@ -366,9 +366,9 @@ func censusGHA(cen *output.Census, scoped, art, ref, sub string) error {
 	case "sha":
 		cen.Notes = append(cen.Notes, "SHA pin (immutable, good practice)")
 	case "branch":
-		cen.Notes = append(cen.Notes, fmt.Sprintf("WARNING BRANCH pin %q is UNPINNED: a branch moves on EVERY push, so adopters run whatever is there at run time (worst practice). Pin a tag or, better, a SHA", ref))
+		cen.Notes = append(cen.Notes, fmt.Sprintf("branch pin %q is unpinned: a branch moves on every push, so adopters run whatever is there at run time (worst practice). Pin a tag or, better, a SHA", ref))
 	default:
-		cen.Notes = append(cen.Notes, fmt.Sprintf("WARNING TAG pin %q is MUTABLE (re-pointable, the tj-actions vector); prefer a SHA pin", ref))
+		cen.Notes = append(cen.Notes, fmt.Sprintf("tag pin %q is mutable (re-pointable, the tj-actions vector); prefer a SHA pin", ref))
 	}
 	if sub != "" {
 		cen.Notes = append(cen.Notes, fmt.Sprintf("scoped to sub-path action %q; it may reference repo-level code outside it (not shown)", sub))

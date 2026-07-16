@@ -45,7 +45,7 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 		for _, f := range r.Files {
 			hunks += len(f.Hunks)
 		}
-		w("MATCHED %s  (%d files, %d hunks; %s)", taint(r.Unit), len(r.Files), hunks, classBreakdown(r.Files))
+		w("matched %s  (%d files, %d hunks; %s)", taint(r.Unit), len(r.Files), hunks, classBreakdown(r.Files))
 		for _, f := range topFiles(r.Files, 8) {
 			w("  %s%s", taint(f.Path), fileHint(f))
 		}
@@ -62,7 +62,7 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	// packages changed. NOT a match, reported honestly, with the exact
 	// commands to drill deeper if the agent judges them reachable.
 	for _, r := range subpkg {
-		w("SUBPACKAGES ONLY %s  (own package unchanged; verify you import these)", taint(r.Unit))
+		w("subpackages only %s  (own package unchanged; verify you import these)", taint(r.Unit))
 		for _, f := range topFiles(r.Descendants, 8) {
 			w("  %s%s", taint(f.Path), fileHint(f))
 		}
@@ -82,14 +82,14 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	}
 	if len(unmapped) > 0 {
 		w("")
-		w("UNMAPPED (could not resolve to changed paths; NOT a no-change result):")
+		w("unmapped (could not resolve to changed paths; NOT a no-change result):")
 		for _, r := range unmapped {
 			w("  %s  %s", taint(r.Unit), taint(r.Detail))
 		}
 	}
 	if len(oos) > 0 {
 		w("")
-		w("OUT OF SCOPE (mechanism unsupported):")
+		w("out of scope (mechanism unsupported):")
 		for _, r := range oos {
 			w("  %s  %s", taint(r.Unit), taint(r.Detail))
 		}
@@ -107,7 +107,7 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	w("")
 	w("coverage: %d of %d hunks are symbol-attributed", with, total)
 	if len(unindexable) > 0 {
-		w("unindexable changes NOT covered by symbol matching (review directly):")
+		w("unindexable changes not covered by symbol matching (review directly):")
 		for _, p := range unindexable {
 			w("  %s", taint(p))
 		}
@@ -119,8 +119,8 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	// so a small or empty match is not mistaken for low impact.
 	outside := unmatchedCount(results, idx)
 	w("")
-	w("=== COVERAGE: matches by PATH, not reachability; NOT a verdict ===")
-	w("NOT checked (a match is where to LOOK, not proof of impact):")
+	w("=== coverage: matches by path, not reachability; NOT a verdict ===")
+	w("NOT checked (a match is where to look, not proof of impact):")
 	for _, l := range SurfaceLimitations(s.Package.Ecosystem) {
 		w("  - %s", l)
 	}

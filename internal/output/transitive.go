@@ -41,24 +41,24 @@ func Transitive(t TransitiveResult) string {
 	if t.Flat {
 		w("depsound transitive %s: %d version-change(s), %d added, %d removed.",
 			t.label(), len(t.Changed), len(t.Added), len(t.Removed))
-		w("  This is the WHOLE resolved set the bump moves (from the lockfile).")
+		w("  This is the whole resolved set the bump moves (from the lockfile).")
 	} else {
 		w("depsound transitive %s: %d module version-change(s) (%d direct, %d indirect),",
 			t.label(), len(t.Changed), t.DirectChanged, t.IndirectChanged)
-		w("  %d added, %d removed. This is the WHOLE subtree the bump moves, direct AND", len(t.Added), len(t.Removed))
+		w("  %d added, %d removed. This is the whole subtree the bump moves, direct and", len(t.Added), len(t.Removed))
 		w("  indirect (from go.mod incl. // indirect; go.sum is fuller with test-only).")
 	}
 
 	if len(t.Added) > 0 {
 		w("")
-		w("ADDED to your tree (%d) - NEW code, not a diff; census each you rely on:", len(t.Added))
+		w("added to your tree (%d) - new code, not a diff; census each you rely on:", len(t.Added))
 		for _, m := range t.Added {
 			w("  %s %s%s   depsound %s:%s %s", taint(m.Path), taint(m.To), t.tag(m.Indirect), t.Ecosystem, taint(m.Path), taint(m.To))
 		}
 	}
 	if len(t.Removed) > 0 {
 		w("")
-		w("REMOVED from your tree (%d) - gone, nothing to fetch:", len(t.Removed))
+		w("removed from your tree (%d) - gone, nothing to fetch:", len(t.Removed))
 		for _, m := range t.Removed {
 			w("  %s %s%s", taint(m.Path), taint(m.From), t.tag(m.Indirect))
 		}

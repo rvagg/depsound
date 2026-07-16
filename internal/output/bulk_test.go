@@ -17,8 +17,8 @@ func TestBulkFlagsPresentExecSurface(t *testing.T) {
 	s.Runnable.CgoTo = true
 
 	out := Bulk([]BulkResult{{Ref: "go:x 1 2", Stats: s}})
-	if strings.Contains(out, "NO FLAGS RAISED") {
-		t.Error("cgo-present dep must not be reported as NO FLAGS")
+	if strings.Contains(out, "no flags raised") {
+		t.Error("cgo-present dep must not be reported as no-flags")
 	}
 	if !strings.Contains(out, "execution surface") || !strings.Contains(out, "build code may have changed") {
 		t.Errorf("present exec surface not flagged:\n%s", out)
@@ -34,8 +34,8 @@ func TestBulkFlagsLargeGeneratedDelta(t *testing.T) {
 		{Path: "index.js", Class: "source", Added: 3, Removed: 1},
 	}
 	out := Bulk([]BulkResult{{Ref: "npm:y 1 2", Stats: s}})
-	if strings.Contains(out, "NO FLAGS RAISED") {
-		t.Error("large generated delta must not be NO FLAGS")
+	if strings.Contains(out, "no flags raised") {
+		t.Error("large generated delta must not be no-flags")
 	}
 	if !strings.Contains(out, "dist/bundle.js") || !strings.Contains(out, "payload can hide") {
 		t.Errorf("large generated delta not flagged:\n%s", out)

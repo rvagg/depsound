@@ -16,12 +16,12 @@ var coverageChecked = []string{
 	"file classification (source vs generated/test/docs, heuristic)",
 	"manifest compatibility: constraints, exports, dependency deltas",
 	"execution surface (lifecycle scripts, cgo, build.rs, proc-macro, gyp)",
-	"KNOWN CVEs via OSV (backward-looking)",
+	"known CVEs via OSV (backward-looking)",
 }
 
 var coverageNotChecked = []string{
 	"whether YOUR code reaches the changed code (reachability)",
-	"what the change DOES at runtime (behavioural / semantic effects)",
+	"what the change does at runtime (behavioural / semantic effects)",
 	"whether your own tests cover the change",
 	"transitive dependencies this bump pulls in",
 	"how the release was published (provenance, anomaly vs history)",
@@ -43,10 +43,10 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 				checked[i] = "action.yml execution model (using, entrypoints, composite uses)"
 			}
 		}
-		checked = append(checked, "capability REFERENCES in the executed code (OIDC/secrets/network/step-injection/exec; grep of the dist bundle, evadable)")
+		checked = append(checked, "capability references in the executed code (OIDC/secrets/network/step-injection/exec; grep of the dist bundle, evadable)")
 		// we now grep for capability references, but not for intent
 		notChecked = append([]string{
-			"whether the referenced capabilities are USED MALICIOUSLY (grep finds references, not intent; an obfuscated payload evades it)",
+			"whether the referenced capabilities are used maliciously (grep finds references, not intent; an obfuscated payload evades it)",
 		}, coverageNotChecked...)
 	}
 	// provenance runs by default; when it answered, flip its blind-spot line
@@ -60,7 +60,7 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		}
 		notChecked = nc
 		checked = append(append([]string(nil), checked...),
-			"provenance deltas (shallow, history-only, NOT a pass)")
+			"provenance deltas (shallow, history-only, not a pass)")
 	}
 	cov := &stats.Coverage{Checked: checked, NotChecked: notChecked}
 
@@ -78,10 +78,10 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	// action (it is the argument FOR the upgrade) and is shown in the
 	// security section, not repeated here as a to-do.
 	if n := len(s.Security.Introduced); n > 0 {
-		add(fmt.Sprintf("this upgrade INTRODUCES %d advisory(ies); confirm exposure", n), "")
+		add(fmt.Sprintf("this upgrade introduces %d advisory(ies); confirm exposure", n), "")
 	}
 	if n := len(s.Security.StillPresent); n > 0 {
-		add(fmt.Sprintf("%d advisory(ies) REMAIN after this upgrade; check whether your code path reaches them", n), "")
+		add(fmt.Sprintf("%d advisory(ies) remain after this upgrade; check whether your code path reaches them", n), "")
 	}
 	if s.Compat.TypeFrom != s.Compat.TypeTo || len(s.Compat.Constraints) > 0 || len(s.Compat.Exports) > 0 {
 		add("compatibility constraints changed; check your usage against the compat section", "")
@@ -98,7 +98,7 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	// Always last, and always present: reachability is the tool's blind
 	// spot, so the standing next-step is to intersect the diff with actual
 	// usage. This is the anti-closure nudge on an otherwise-quiet result.
-	add("reachability and semantics are NOT assessed; if you rely on this dependency, intersect the diff with your usage",
+	add("reachability and semantics are not assessed; if you rely on this dependency, intersect the diff with your usage",
 		"depsound surface "+ref+" --uses=<your import paths>")
 	return cov, na
 }

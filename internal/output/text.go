@@ -26,19 +26,19 @@ func Text(s *stats.Stats) string {
 		bytes(s.Artifact.BytesFrom), bytes(s.Artifact.BytesTo))
 	if s.Files.ReviewFiles < s.Files.Changed {
 		excl := s.Files.Changed - s.Files.ReviewFiles
-		w("  review surface (%d files, HEURISTIC): excludes %d binary/strongly-generated;",
+		w("  review surface (%d files, heuristic): excludes %d binary/strongly-generated;",
 			s.Files.ReviewFiles, excl)
-		w("    path-only generated files are KEPT here (a hand-edit or payload must not vanish)")
+		w("    path-only generated files are kept here (a hand-edit or payload must not vanish)")
 		// one authoritative excluded callout, from the same Excluded flag the
 		// count uses, so the numbers reconcile and a payload cannot hide
 		if big := largestExcluded(s.Files.Entries); big.Path != "" {
-			w("    biggest excluded: %s (%s) +%d/-%d; a GUESS (markers are attacker-writable),",
+			w("    biggest excluded: %s (%s) +%d/-%d; a guess (markers are attacker-writable),",
 				taint(big.Path), big.Class, big.Added, big.Removed)
 			w("    inspect if intent is unclear, exclusion is reading-order, not safety")
 			// for npm, dist/ is not incidental output: it IS the published
 			// runtime, the code that runs on import, so it is the thing to read
 			if s.Package.Ecosystem == "npm" && strings.Contains(big.Path, "dist/") {
-				w("    NOTE for npm, dist/ runs at import (entrypoint named above); read this file too")
+				w("    note for npm, dist/ runs at import (entrypoint named above); read this file too")
 			}
 		}
 	}
@@ -61,14 +61,14 @@ func Text(s *stats.Stats) string {
 		w("  embedded marker %s (%s): %s -> %s  [lead only; unverified vs upstream]", taint(e.Name), taint(e.File), taint(e.From), taint(e.To))
 	}
 	for _, f := range s.Files.Flagged {
-		w("  FLAG %s: %s (maxLine=%d avgLine=%d sourcemap=%v)",
+		w("  flag %s: %s (maxLine=%d avgLine=%d sourcemap=%v)",
 			taint(f.Path), f.Reason, f.Metrics.MaxLine, f.Metrics.AvgLine, f.Metrics.SourceMap)
 	}
 	if n := len(s.Artifact.SkippedLinks); n > 0 {
-		w("  WARNING %d symlink/hardlink entries not materialized; trees diverge from the install artifact (see stats.json artifact.skippedLinks)", n)
+		w("  %d symlink/hardlink entries not materialized; trees diverge from the install artifact (see stats.json artifact.skippedLinks)", n)
 	}
 	if n := len(s.Artifact.HostileEntries); n > 0 {
-		w("  WARNING %d archive members with hostile names (traversal/control bytes) skipped; treat this artifact as actively suspicious (see stats.json artifact.hostileEntries)", n)
+		w("  %d archive members with hostile names (traversal/control bytes) skipped; treat this artifact as actively suspicious (see stats.json artifact.hostileEntries)", n)
 	}
 
 	// GitHub Actions has no npm/go/crates manifest; its execution model and
@@ -94,7 +94,7 @@ func Text(s *stats.Stats) string {
 	} else {
 		w("execution surface:")
 		for _, c := range r.Lifecycle {
-			w("  WARNING lifecycle %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
+			w("  lifecycle %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
 		}
 		if r.GypFrom || r.GypTo {
 			w("  binding.gyp (node-gyp runs at install): %v -> %v", r.GypFrom, r.GypTo)
@@ -103,7 +103,7 @@ func Text(s *stats.Stats) string {
 			line := fmt.Sprintf("  cgo (C compiled at consumer build time): %v -> %v", r.CgoFrom, r.CgoTo)
 			switch {
 			case !r.CgoFrom && r.CgoTo:
-				line = "  WARNING" + line[1:] + "  [cgo INTRODUCED by this update]"
+				line += "  [cgo introduced by this update]"
 			case r.CgoFrom && r.CgoTo:
 				line += bothPresentNote
 			}
@@ -113,7 +113,7 @@ func Text(s *stats.Stats) string {
 			line := fmt.Sprintf("  build.rs (runs at consumer compile time): %v -> %v", r.BuildRSFrom, r.BuildRSTo)
 			switch {
 			case !r.BuildRSFrom && r.BuildRSTo:
-				line = "  WARNING" + line[1:] + "  [build.rs INTRODUCED by this update]"
+				line += "  [build.rs introduced by this update]"
 			case r.BuildRSFrom && r.BuildRSTo:
 				line += bothPresentNote
 			}
@@ -123,7 +123,7 @@ func Text(s *stats.Stats) string {
 			line := fmt.Sprintf("  proc-macro (runs in the compiler): %v -> %v", r.ProcMacroFrom, r.ProcMacroTo)
 			switch {
 			case !r.ProcMacroFrom && r.ProcMacroTo:
-				line = "  WARNING" + line[1:] + "  [proc-macro INTRODUCED by this update]"
+				line += "  [proc-macro introduced by this update]"
 			case r.ProcMacroFrom && r.ProcMacroTo:
 				line += bothPresentNote
 			}
@@ -161,7 +161,7 @@ func Text(s *stats.Stats) string {
 				line += fmt.Sprintf(" %s -> %s", taint(d.From), taint(d.To))
 			}
 			if d.Flag != "" {
-				line = "WARNING " + line + "  [" + d.Flag + "]"
+				line = line + "  [" + d.Flag + "]"
 			}
 			w("  %s", line)
 		}
@@ -198,12 +198,12 @@ func writeGuidance(w func(string, ...any), s *stats.Stats) {
 		cov, next = Guide(s)
 	}
 	w("")
-	w("=== COVERAGE: a heuristic triage, NOT a verdict ===")
+	w("=== coverage: a heuristic triage, NOT a verdict ===")
 	w("checked:")
 	for _, c := range cov.Checked {
 		w("  + %s", c)
 	}
-	w("NOT checked ('no flags' is a STARTING POINT, not a clean bill):")
+	w("NOT checked ('no flags' is a starting point, not a clean bill):")
 	for _, c := range cov.NotChecked {
 		w("  - %s", c)
 	}
@@ -254,7 +254,7 @@ func largestBy(entries []stats.FileEntry, keep func(stats.FileEntry) bool) stats
 func compat(s *stats.Stats) []string {
 	var out []string
 	if s.Compat.TypeFrom != s.Compat.TypeTo && (s.Compat.TypeFrom != "" || s.Compat.TypeTo != "") {
-		out = append(out, fmt.Sprintf("WARNING type: %s -> %s", taint(s.Compat.TypeFrom), taint(s.Compat.TypeTo)))
+		out = append(out, fmt.Sprintf("type: %s -> %s", taint(s.Compat.TypeFrom), taint(s.Compat.TypeTo)))
 	}
 	for _, c := range s.Compat.Constraints {
 		out = append(out, fmt.Sprintf("%s: %s", taint(c.Key), changeDetail(c)))
@@ -263,7 +263,7 @@ func compat(s *stats.Stats) []string {
 	// package drops its CJS entry: "ESM import-only" is faster to grasp than
 	// reading a require-condition-goes-blank row.
 	if esmImportOnly(s.Compat.Exports) {
-		out = append(out, "WARNING package now ESM import-only: require() no longer resolves \".\" (breaks CJS consumers)")
+		out = append(out, "package now ESM import-only: require() no longer resolves \".\" (breaks CJS consumers)")
 	}
 	for _, e := range s.Compat.Exports {
 		line := fmt.Sprintf("exports %q %s: %s -> %s", taint(e.Subpath), e.Condition, blank(taint(e.From)), blank(taint(e.To)))
@@ -295,7 +295,7 @@ func writeResolution(w func(string, ...any), s *stats.Stats) {
 		w("resolved: %s", strings.Join(parts, ", "))
 	}
 	if len(r.ToNewer) > 0 {
-		w("  NOTE %s also admits %d newer, unreviewed version(s) (%s); a shorter or no",
+		w("  note %s also admits %d newer, unreviewed version(s) (%s); a shorter or no",
 			taint(r.ToSpec), len(r.ToNewer), taint(strings.Join(r.ToNewer, ", ")))
 		w("  cooldown installs one of those, review those targets too if policy differs")
 	}
@@ -366,14 +366,14 @@ func writeSecurity(w func(string, ...any), sec osv.Assessment) {
 		// OSV is backward-looking, so "no advisories" is silent on exactly
 		// the novel/injected-code case an attacker relies on
 		w("%s, %s: none for either version", cveScanLabel, sec.FetchedAt)
-		w("  (KNOWN CVEs only; says NOTHING about novel or injected code)")
+		w("  (known CVEs only; says nothing about novel or injected code)")
 		return
 	}
 	w("%s, %s:", cveScanLabel, sec.FetchedAt)
-	writeVulns(w, "FIXED by this upgrade", sec.FixedByUpgrade)
-	writeVulns(w, "WARNING still present after upgrade", sec.StillPresent)
-	writeVulns(w, "WARNING introduced by this upgrade", sec.Introduced)
-	w("  (leads, not a gate; confirm relevance to your usage. KNOWN CVEs only, silent on novel/injected code)")
+	writeVulns(w, "fixed by this upgrade", sec.FixedByUpgrade)
+	writeVulns(w, "still present after upgrade", sec.StillPresent)
+	writeVulns(w, "introduced by this upgrade", sec.Introduced)
+	w("  (leads, not a gate; confirm relevance to your usage. known CVEs only, silent on novel/injected code)")
 }
 
 func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {
@@ -412,7 +412,7 @@ const cveScanLabel = "OSV known-CVE scan (backward-looking)"
 // bothPresentNote fires when a build-time execution surface is present in
 // BOTH versions: the flag did not flip, but the CODE it executes may still
 // have changed, so it must not read as "static/unchanged".
-const bothPresentNote = "  [present in both; the build-time code it runs may still have CHANGED, inspect the diff]"
+const bothPresentNote = "  [present in both; the build-time code it runs may still have changed, inspect the diff]"
 
 // maxTaintedLen bounds attacker-influenced strings in human output;
 // stats.json keeps full fidelity behind JSON's structural escaping.

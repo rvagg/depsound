@@ -46,7 +46,7 @@ func TestGuideDerivesSignalSteps(t *testing.T) {
 		if strings.Contains(a.Reason, "install/build code") {
 			sawExec = true
 		}
-		if strings.Contains(a.Reason, "REMAIN") {
+		if strings.Contains(a.Reason, "remain") {
 			sawStill = true
 		}
 	}

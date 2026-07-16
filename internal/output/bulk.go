@@ -62,7 +62,7 @@ func Bulk(results []BulkResult) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
 	w("depsound bulk: %d dependencies analysed (cached).", len(results))
-	w("this is a ROUTER: a fired signal is a POINTER to inspect, not a summary.")
+	w("this is a router: a fired signal is a pointer to inspect, not a summary.")
 	w("drill any dep with: depsound <eco>:<name> <from> <to>  (now instant, cached)")
 	writeRouter(w, results, false)
 	return b.String()
@@ -77,21 +77,21 @@ type bulkSection struct {
 }
 
 var bulkSections = []bulkSection{
-	{[]Code{CodeArtifactAbsent}, "WARNING artifact UNAVAILABLE (published bytes gone: takedown-shaped, contents not inspected)"},
-	{[]Code{CodeArtifactDenied}, "COVERAGE GAP: artifact access DENIED (auth/policy)"},
-	{[]Code{CodeArtifactFetch}, "COVERAGE GAP: artifact fetch failed (transient)"},
-	{[]Code{CodeExecIntroduced}, "WARNING new build/install execution surface INTRODUCED"},
-	{[]Code{CodeExecPresent}, "WARNING build/install execution surface present, its build code may have changed"},
-	{[]Code{CodeBinaryAdded}, "WARNING binary/opaque file(s) ADDED (zero line delta, an ideal payload channel; ranked by bytes)"},
+	{[]Code{CodeArtifactAbsent}, "artifact unavailable (published bytes gone: takedown-shaped, contents not inspected)"},
+	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
+	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
+	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
+	{[]Code{CodeExecPresent}, "build/install execution surface present, its build code may have changed"},
+	{[]Code{CodeBinaryAdded}, "binary/opaque file(s) added (zero line delta, an ideal payload channel; ranked by bytes)"},
 	{[]Code{CodeBinaryChanged}, "binary/opaque file(s) changed (zero line delta; ranked by byte delta)"},
-	{[]Code{CodeGeneratedDelta}, "WARNING large UNREVIEWED generated/binary change (payload can hide here)"},
-	{[]Code{CodeGHACaps}, "WARNING GitHub Actions runner capability INTRODUCED by the bump"},
-	{[]Code{CodeOSVIntroduced}, "WARNING CVEs INTRODUCED by the upgrade"},
-	{[]Code{CodeOSVStill}, "CVEs STILL PRESENT after the upgrade (bump did not fix them)"},
+	{[]Code{CodeGeneratedDelta}, "large unreviewed generated/binary change (payload can hide here)"},
+	{[]Code{CodeGHACaps}, "GitHub Actions runner capability introduced by the bump"},
+	{[]Code{CodeOSVIntroduced}, "CVEs introduced by the upgrade"},
+	{[]Code{CodeOSVStill}, "CVEs still present after the upgrade (bump did not fix them)"},
 	{[]Code{CodeGHAUsing}, "GitHub Actions runtime changed (may raise the minimum runner version)"},
 	{[]Code{CodeCompatChange}, "compatibility changes"},
-	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "COVERAGE GAP: known-CVE scan did not complete for these deps"},
-	{[]Code{CodeOSVFixed}, "advisories FIXED by the upgrade (the merge argument)"},
+	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "coverage gap: known-CVE scan did not complete for these deps"},
+	{[]Code{CodeOSVFixed}, "advisories fixed by the upgrade (the merge argument)"},
 	{[]Code{CodeOSVUnsupported}, "note: known-CVE scan not applicable (OSV has no index for this ecosystem)"},
 }
 
@@ -137,7 +137,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	// a redirect (a trusted name served from elsewhere) is the loudest
 	if len(redirects) > 0 {
 		w("")
-		w("WARNING dependency REDIRECTED off the registry (fork/git/local: trust-laundering shape):")
+		w("dependency redirected off the registry (fork/git/local: trust-laundering shape):")
 		for _, r := range redirects {
 			w("  %s  -> %s", taint(r.Ref), taint(r.Redirect))
 		}
@@ -163,14 +163,14 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	}
 	if len(newDeps) > 0 {
 		w("")
-		w("NEW dependencies (whole footprint unreviewed; adopt-review, not a diff):")
+		w("new dependencies (whole footprint unreviewed; adopt-review, not a diff):")
 		for _, r := range newDeps {
 			w("  %s  %s", taint(r.Ref), taint(censusFootprint(r.Census)))
 		}
 	}
 	if len(clean) > 0 {
 		w("")
-		w("NO FLAGS RAISED (%d): NOT the same as safe. These were not assessed", len(clean))
+		w("no flags raised (%d): NOT the same as safe. These were not assessed", len(clean))
 		w("for reachability, semantics, intent, or test coverage, a starting point:")
 		for _, r := range clean {
 			w("  %s", taint(r.Ref))
@@ -178,7 +178,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	}
 	if len(failed) > 0 {
 		w("")
-		w("FAILED (not analysed):")
+		w("failed (not analysed):")
 		for _, r := range failed {
 			w("  %s: %s", taint(r.Ref), taint(r.Err))
 		}
@@ -188,7 +188,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	// anti-false-security spine, proportionate to a router (one block, not
 	// repeated per dep). CVE scan is named backward-looking, not "security"
 	w("")
-	w("=== COVERAGE: heuristic triage, NOT a verdict ===")
+	w("=== coverage: heuristic triage, NOT a verdict ===")
 	w("checked: artifact diff, file classes, manifest compat, execution surface.")
 	// OSV status is derived from what actually ran, not asserted flat: a
 	// disabled/failed scan is a gap, an unsupported ecosystem is not.
@@ -200,20 +200,20 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 			st = append(st, fmt.Sprintf("run for %d", ran))
 		}
 		if osvGap > 0 {
-			st = append(st, fmt.Sprintf("did NOT complete for %d (see COVERAGE GAP above)", osvGap))
+			st = append(st, fmt.Sprintf("did not complete for %d (see the coverage-gap section above)", osvGap))
 		}
 		if osvNA > 0 {
 			st = append(st, fmt.Sprintf("not applicable for %d (ecosystem unsupported)", osvNA))
 		}
-		w("  KNOWN-CVE scan (OSV, backward-looking; blind to novel/injected code): %s.", strings.Join(st, "; "))
+		w("  known-CVE scan (OSV, backward-looking; blind to novel/injected code): %s.", strings.Join(st, "; "))
 	}
 	if transitive {
-		w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
-		w("  ADDED modules are listed but not diffed; test-only/deeper modules beyond")
+		w("NOT checked: does your code reach each change; what it does; test coverage;")
+		w("  added modules are listed but not diffed; test-only/deeper modules beyond")
 		w("  go.mod's pruned set (go.sum has more); publish provenance. Silence != safe.")
 	} else {
-		w("NOT checked: does your code REACH each change; what it DOES; test coverage;")
-		w("  TRANSITIVE deps these bumps pull in; publish provenance. Silence != safe.")
+		w("NOT checked: does your code reach each change; what it does; test coverage;")
+		w("  transitive deps these bumps pull in; publish provenance. Silence != safe.")
 	}
 	w("next: for each dep you rely on, intersect the diff with your usage ->")
 	w("  depsound surface <eco>:<name> <from> <to> --uses=<your imports>")

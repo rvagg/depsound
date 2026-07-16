@@ -15,11 +15,11 @@ func writeAction(w func(string, ...any), a *stats.ActionSection) {
 		return
 	}
 	w("")
-	w("github action  (runs on a CI RUNNER, not your machine; the risk is the")
-	w("runner's SECRETS, GITHUB_TOKEN and OIDC, plus push/publish powers, and")
+	w("github action  (runs on a CI runner, not your machine; the risk is the")
+	w("runner's secrets, GITHUB_TOKEN and OIDC, plus push/publish powers, and")
 	w("more on self-hosted runners. Running code IS an action's whole job, so")
-	w("the execution model below is CONTEXT, not an alarm; the load-bearing")
-	w("questions are the PIN and what the code REACHES, read the dist bundle.)")
+	w("the execution model below is context, not an alarm; the load-bearing")
+	w("questions are the pin and what the code reaches, read the dist bundle.)")
 	for _, p := range a.Pins {
 		w("  %s", renderPin(p))
 	}
@@ -35,7 +35,7 @@ func writeAction(w func(string, ...any), a *stats.ActionSection) {
 	default:
 		note := "runtime bump, maintenance"
 		if usingClass(a.UsingFrom) != usingClass(a.UsingTo) {
-			note = "MODEL CLASS changed, a bigger shift in what it can do"
+			note = "model class changed, a bigger shift in what it can do"
 		}
 		w("  execution model: %s -> %s (%s)", taint(orNone(a.UsingFrom)), taint(orNone(a.UsingTo)), note)
 	}
@@ -46,7 +46,7 @@ func writeAction(w func(string, ...any), a *stats.ActionSection) {
 		w("  entrypoint %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
 	}
 	if n := len(a.Nested); n > 0 {
-		w("  composite uses %d nested action(s) (TRANSITIVE supply chain, each its own pin to vet):", n)
+		w("  composite uses %d nested action(s) (transitive supply chain, each its own pin to vet):", n)
 		for _, u := range a.Nested {
 			w("    %s", taint(u))
 		}
@@ -64,7 +64,7 @@ func writeCaps(w func(string, ...any), present, introduced []string) {
 		return
 	}
 	if len(introduced) > 0 {
-		w("  WARNING capabilities INTRODUCED by this bump (grep, evadable lead; inspect):")
+		w("  capabilities introduced by this bump (grep, evadable lead; inspect):")
 		for _, c := range introduced {
 			w("    %s", c)
 		}
@@ -107,9 +107,9 @@ func renderPin(p stats.ActionPin) string {
 	case "sha":
 		return fmt.Sprintf("%s: SHA pin %s (immutable, good practice)", p.Side, taint(p.Ref))
 	case "branch":
-		return fmt.Sprintf("WARNING %s: BRANCH pin %q is UNPINNED (moves on EVERY push; you run whatever is there at run time, worst practice). It is %s now, pin a tag or a SHA", p.Side, taint(p.Ref), p.SHA)
+		return fmt.Sprintf("%s: branch pin %q is unpinned (moves on every push; you run whatever is there at run time, worst practice). It is %s now, pin a tag or a SHA", p.Side, taint(p.Ref), p.SHA)
 	default: // tag
-		return fmt.Sprintf("WARNING %s: TAG pin %q is MUTABLE (re-pointable, the tj-actions vector); resolves to %s today, prefer a SHA pin", p.Side, taint(p.Ref), p.SHA)
+		return fmt.Sprintf("%s: tag pin %q is mutable (re-pointable, the tj-actions vector); resolves to %s today, prefer a SHA pin", p.Side, taint(p.Ref), p.SHA)
 	}
 }
 
