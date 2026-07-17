@@ -30,7 +30,7 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 			StillPresent:   []osv.Vuln{{ID: "GHSA-b"}},
 			FixedByUpgrade: []osv.Vuln{{ID: "GHSA-c"}},
 		},
-		Runnable: stats.Runnable{CgoTo: true}, // cgo newly introduced
+		Runnable: stats.Runnable{CgoTo: true, Bin: []manifest.Change{{Key: "mycli"}}}, // cgo newly introduced, a new bin
 		Compat:   stats.Compat{TypeFrom: "commonjs", TypeTo: "module"},
 		Files: stats.FilesSection{Entries: []stats.FileEntry{
 			{Path: "native.node", Status: "A", Excluded: true, Binary: true, BytesTo: 2 << 20},
@@ -49,8 +49,15 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 	collect(Derive("disabled", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}))
 	collect(Derive("failed", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false, Note: "OSV lookup failed"}}))
 	collect(Derive("unsupported", &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false}}))
+	// artifact-hardening facts + integrity/exports degradations (the false-clean holes)
+	collect(Derive("hard", &stats.Stats{
+		Package:  stats.PkgRef{Ecosystem: "npm"},
+		Security: stats.Security{Queried: true},
+		Artifact: stats.Artifact{HostileEntries: []string{"../e"}, SkippedLinks: []string{"l"}, SourceTo: &stats.Source{Verification: "tls-only"}},
+		Compat:   stats.Compat{ExportsError: "bad exports"},
+	}))
 	// census (incl. the biggest-unreviewed-file lead), redirect, failure
-	collect(DeriveCensus("cen", &Census{Files: 10, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
+	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
 	collect(DeriveFailure("bad", "extraction failed"))
 	collect(DeriveUnavailable("gone", &Unavailable{Kind: "absent", Status: 404, URL: "u"}))
@@ -92,6 +99,12 @@ func TestLedgerVerdict(t *testing.T) {
 	// a redirect is the loud tier
 	if v := Assess(DeriveRedirect("r", "fork")); v.Tier != weightLook {
 		t.Errorf("redirect should be the look tier, got %+v", v)
+	}
+
+	// a census whose OSV scan did not run on a covered ecosystem is a coverage
+	// gap, never a silent clean-on-security
+	if v := Assess(DeriveCensus("cg", &Census{Ecosystem: "npm", Files: 5, OSVQueried: false})); v.CoverageComplete {
+		t.Errorf("a census with no OSV scan must not read coverage-complete: %+v", v)
 	}
 }
 

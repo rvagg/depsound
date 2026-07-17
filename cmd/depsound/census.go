@@ -82,7 +82,7 @@ func censusCmd(args []string) error {
 	}
 
 	if !noOSV {
-		c.Vulns, c.OSVFetchedAt, c.OSVQueried = osv.Present(context.Background(), &http.Client{},
+		c.Vulns, c.OSVFetchedAt, c.OSVQueried, c.OSVNote = osv.Present(context.Background(), &http.Client{},
 			censusCacheRoot(cacheDir), c.Ecosystem, c.Name, c.Version)
 	}
 	if transitive {

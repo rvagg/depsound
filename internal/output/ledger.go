@@ -50,29 +50,34 @@ const (
 type Code string
 
 const (
-	CodeOSVIntroduced  Code = "osv.introduced"
-	CodeOSVStill       Code = "osv.still"
-	CodeOSVFixed       Code = "osv.fixed"
-	CodeOSVDisabled    Code = "coverage.osv.disabled"
-	CodeOSVUnsupported Code = "coverage.osv.unsupported"
-	CodeOSVFailed      Code = "coverage.osv.failed"
-	CodeExecIntroduced Code = "exec.introduced"
-	CodeExecPresent    Code = "exec.present"
-	CodeCompatChange   Code = "compat.change"
-	CodeGeneratedDelta Code = "generated.delta"
-	CodeGHACaps        Code = "gha.capsIntroduced"
-	CodeGHAUsing       Code = "gha.using"
-	CodeBinaryAdded    Code = "binary.added"
-	CodeBinaryChanged  Code = "binary.changed"
-	CodeRedirect       Code = "redirect"
-	CodeCensusNew      Code = "census.new"
-	CodeCensusCVE      Code = "census.cve"
-	CodeCensusExec     Code = "census.exec"
-	CodeCensusBig      Code = "census.bigExcluded"
-	CodeAnalysisFailed Code = "analysis.failed"
-	CodeArtifactAbsent Code = "artifact.absent"    // the published bytes are gone (404/410)
-	CodeArtifactDenied Code = "artifact.denied"    // access denied (401/403)
-	CodeArtifactFetch  Code = "artifact.fetchFail" // transient acquisition failure
+	CodeOSVIntroduced     Code = "osv.introduced"
+	CodeOSVStill          Code = "osv.still"
+	CodeOSVFixed          Code = "osv.fixed"
+	CodeOSVDisabled       Code = "coverage.osv.disabled"
+	CodeOSVUnsupported    Code = "coverage.osv.unsupported"
+	CodeOSVFailed         Code = "coverage.osv.failed"
+	CodeExecIntroduced    Code = "exec.introduced"
+	CodeExecPresent       Code = "exec.present"
+	CodeCompatChange      Code = "compat.change"
+	CodeGeneratedDelta    Code = "generated.delta"
+	CodeGHACaps           Code = "gha.capsIntroduced"
+	CodeGHAUsing          Code = "gha.using"
+	CodeBinaryAdded       Code = "binary.added"
+	CodeBinaryChanged     Code = "binary.changed"
+	CodeRedirect          Code = "redirect"
+	CodeCensusNew         Code = "census.new"
+	CodeCensusCVE         Code = "census.cve"
+	CodeCensusExec        Code = "census.exec"
+	CodeCensusBig         Code = "census.bigExcluded"
+	CodeAnalysisFailed    Code = "analysis.failed"
+	CodeArtifactAbsent    Code = "artifact.absent"          // the artifact URL is not retrievable (404/410)
+	CodeArtifactDenied    Code = "artifact.denied"          // access denied (401/403)
+	CodeArtifactFetch     Code = "artifact.fetchFail"       // transient acquisition failure
+	CodeHostileEntry      Code = "artifact.hostile"         // hostile archive member skipped at extraction
+	CodeSkippedLink       Code = "artifact.skippedLink"     // symlink/hardlink not materialized (uninspected)
+	CodeIntegrityWeak     Code = "integrity.tlsOnly"        // TLS-trust-only, no registry integrity/checksum-DB
+	CodeExportsUnresolved Code = "compat.exportsUnresolved" // exports/resolution delta could not be computed
+	CodeBinDelta          Code = "bin.delta"                // installed executable (bin) entries changed
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -89,6 +94,8 @@ var allCodes = []Code{
 	CodeCensusNew, CodeCensusCVE, CodeCensusExec, CodeCensusBig,
 	CodeAnalysisFailed,
 	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
+	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
+	CodeBinDelta,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -113,6 +120,26 @@ type Ledger struct {
 	Signals []Signal
 }
 
+// addOSVGap classifies a not-queried OSV scan into its signal, shared by the
+// diff and census paths so both read a missing scan identically: unsupported (a
+// NOTE, no gap: the ecosystem has no OSV index), failed (a degradation carrying
+// the reason), or disabled (a degradation: OSV was turned off for this run).
+func addOSVGap(add func(Code, SignalKind, Lens, int, string, string), eco, note string) {
+	switch {
+	case !osvSupported(eco):
+		add(CodeOSVUnsupported, KindNote, LensCoverage, weightPositive,
+			"known-CVE scan not applicable", "OSV has no advisory index for the "+eco+" ecosystem")
+	case note != "":
+		add(CodeOSVFailed, KindDegradation, LensCoverage, weightWeigh,
+			"known-CVE scan failed", note)
+	default:
+		add(CodeOSVDisabled, KindDegradation, LensCoverage, weightWeigh,
+			"known-CVE scan not run", "OSV was disabled for this dependency")
+	}
+}
+
+func osvSupported(eco string) bool { _, ok := osv.Ecosystem(eco); return ok }
+
 // Derive turns a diff's Stats into its signal ledger. This is the ONE place
 // that decides what counts; every renderer consumes the result.
 func Derive(ref string, s *stats.Stats) Ledger {
@@ -127,16 +154,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	// degradation that must not read as clean.
 	switch {
 	case !s.Security.Queried:
-		if _, ok := osv.Ecosystem(s.Package.Ecosystem); !ok {
-			add(CodeOSVUnsupported, KindNote, LensCoverage, weightPositive,
-				"known-CVE scan not applicable", "OSV has no advisory index for the "+s.Package.Ecosystem+" ecosystem")
-		} else if s.Security.Note != "" {
-			add(CodeOSVFailed, KindDegradation, LensCoverage, weightWeigh,
-				"known-CVE scan failed", s.Security.Note)
-		} else {
-			add(CodeOSVDisabled, KindDegradation, LensCoverage, weightWeigh,
-				"known-CVE scan not run", "OSV was disabled for this dependency")
-		}
+		addOSVGap(add, s.Package.Ecosystem, s.Security.Note)
 	default:
 		if n := len(s.Security.Introduced); n > 0 {
 			add(CodeOSVIntroduced, KindFact, LensSecurity, weightLook,
@@ -170,13 +188,26 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	if d.compat {
 		add(CodeCompatChange, KindFact, LensCompat, weightWeigh, "compatibility changed", rawCompat(s))
 	}
+	// a bin delta changes what a command on PATH (npx/the .bin shim) runs: a
+	// FACT worth weighing, so a bump that only re-points an executable is not
+	// invisible.
+	if n := len(s.Runnable.Bin); n > 0 {
+		names := make([]string, 0, n)
+		for _, c := range s.Runnable.Bin {
+			names = append(names, c.Key)
+		}
+		add(CodeBinDelta, KindFact, LensCompat, weightWeigh,
+			fmt.Sprintf("installed executable(s) changed: %d bin entry(ies)", n), firstN(names, 5))
+	}
 
 	// GitHub Actions execution model (gha only). CapsIntroduced is the delta
-	// that matters; a runtime move is a real compat fact, not maintenance.
+	// that matters, but it comes from an evadable marker grep, so it is a
+	// HEURISTIC to navigate, never a fact; the runtime move (using) is a real
+	// compat fact.
 	if a := s.Action; a != nil {
 		if len(a.CapsIntroduced) > 0 {
-			add(CodeGHACaps, KindFact, LensSecurity, weightLook,
-				"new runner capability referenced", strings.Join(a.CapsIntroduced, ", "))
+			add(CodeGHACaps, KindHeuristic, LensSecurity, weightWeigh,
+				"new runner capability referenced (grep of the executed code, evadable)", strings.Join(a.CapsIntroduced, ", "))
 		}
 		if a.UsingFrom != a.UsingTo && a.UsingFrom != "" && a.UsingTo != "" {
 			add(CodeGHAUsing, KindFact, LensCompat, weightWeigh,
@@ -209,8 +240,54 @@ func Derive(ref string, s *stats.Stats) Ledger {
 			fmt.Sprintf("%d binary/opaque file(s) changed", len(changedBin)), binaryList(changedBin, true))
 	}
 
+	// Artifact-hardening facts and integrity/coverage degradations that otherwise
+	// live only in Stats.Notes. Without these a change whose ONLY effect is one of
+	// them (a skipped traversal member, a TLS-only fetch, an unresolved exports
+	// delta) would reach Clean(): the false-clean the ledger exists to prevent.
+	if n := len(s.Artifact.HostileEntries); n > 0 {
+		add(CodeHostileEntry, KindFact, LensSecurity, weightLook,
+			fmt.Sprintf("%d hostile archive member(s) skipped at extraction", n), firstN(s.Artifact.HostileEntries, 5))
+	}
+	if n := len(s.Artifact.SkippedLinks); n > 0 {
+		add(CodeSkippedLink, KindDegradation, LensCoverage, weightPositive,
+			fmt.Sprintf("%d symlink/hardlink(s) not materialized; their contents were not inspected", n), firstN(s.Artifact.SkippedLinks, 5))
+	}
+	if integrityTLSOnly(s) {
+		add(CodeIntegrityWeak, KindDegradation, LensCoverage, weightPositive,
+			"artifact verified by TLS trust only (no registry integrity or checksum-DB record)", "")
+	}
+	if s.Compat.ExportsError != "" {
+		add(CodeExportsUnresolved, KindDegradation, LensCoverage, weightWeigh,
+			"exports/resolution compatibility could not be computed", s.Compat.ExportsError)
+	}
+
 	sortSignals(l.Signals)
 	return l
+}
+
+// firstN joins up to n of xs with a "+K more" tail, so a long hostile/skipped
+// list points at examples without becoming a wall.
+func firstN(xs []string, n int) string {
+	if len(xs) <= n {
+		return strings.Join(xs, ", ")
+	}
+	return strings.Join(xs[:n], ", ") + fmt.Sprintf(", +%d more", len(xs)-n)
+}
+
+// integrityTLSOnly reports whether either side was verified by TLS trust alone
+// (no registry integrity or checksum-DB record). gha pins are git refs, not
+// registry artifacts, so the concept does not apply there (matching the note
+// the stats builder already suppresses for gha).
+func integrityTLSOnly(s *stats.Stats) bool {
+	if s.Package.Ecosystem == "gha" {
+		return false
+	}
+	for _, src := range []*stats.Source{s.Artifact.SourceFrom, s.Artifact.SourceTo} {
+		if src != nil && strings.HasPrefix(src.Verification, "tls-only") {
+			return true
+		}
+	}
+	return false
 }
 
 // DeriveCensus turns a newly-adopted version's footprint into its ledger. A new
@@ -222,7 +299,11 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	}
 	add(CodeCensusNew, KindFact, LensCompat, weightWeigh,
 		fmt.Sprintf("new dependency, %s file(s) unreviewed", commas(c.Files)), "")
-	if len(c.Vulns) > 0 {
+	// OSV status honestly: a scan that ran reports its CVEs (or nothing); a scan
+	// that did NOT run is a coverage gap, never a silent clean-on-security.
+	if !c.OSVQueried {
+		addOSVGap(add, c.Ecosystem, c.OSVNote)
+	} else if len(c.Vulns) > 0 {
 		add(CodeCensusCVE, KindFact, LensSecurity, weightLook,
 			fmt.Sprintf("%d known CVE(s) at this version", len(c.Vulns)), joinVulnIDs(c.Vulns, 5))
 	}
@@ -258,7 +339,8 @@ func DeriveFailure(ref, errMsg string) Ledger {
 }
 
 // Unavailable is a classified acquisition failure from the fetch layer: Kind is
-// "absent" (404/410, the bytes are gone), "denied" (401/403), or "transient".
+// "absent" (404/410, the URL is not retrievable now), "denied" (401/403), or
+// "transient".
 type Unavailable struct {
 	Kind   string
 	Status int
@@ -267,8 +349,9 @@ type Unavailable struct {
 }
 
 // DeriveUnavailable turns an acquisition failure into a signal. Absent is a
-// FACT (the published bytes are gone, a takedown-shaped event worth a look, and
-// the contents were not inspected); denied and transient are degradations.
+// FACT (the URL is not retrievable and the contents were not inspected, worth a
+// look); it does NOT establish prior publication, so it never asserts a takedown
+// as fact. Denied and transient are degradations.
 func DeriveUnavailable(ref string, u *Unavailable) Ledger {
 	detail := u.URL
 	if u.Hint != "" {
@@ -278,7 +361,7 @@ func DeriveUnavailable(ref string, u *Unavailable) Ledger {
 	switch u.Kind {
 	case "absent":
 		sig.Code, sig.Kind, sig.Lens, sig.Weight = CodeArtifactAbsent, KindFact, LensSecurity, weightLook
-		sig.Title = fmt.Sprintf("artifact unavailable (HTTP %d): the published bytes are gone; contents not inspected", u.Status)
+		sig.Title = fmt.Sprintf("artifact unavailable (HTTP %d): the URL is not retrievable now and its contents were not inspected; whether it was ever published is not established", u.Status)
 	case "denied":
 		sig.Code, sig.Kind, sig.Weight = CodeArtifactDenied, KindDegradation, weightWeigh
 		sig.Title = fmt.Sprintf("artifact access denied (HTTP %d): authentication or policy", u.Status)

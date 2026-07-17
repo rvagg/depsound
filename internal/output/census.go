@@ -42,9 +42,13 @@ type Census struct {
 	Deps  []manifest.DepChange `json:"dependencies"`
 	Vulns []osv.Vuln           `json:"vulnerabilities,omitempty"`
 
-	OSVQueried   bool     `json:"osvQueried"`
-	OSVFetchedAt string   `json:"osvFetchedAt,omitempty"`
-	Notes        []string `json:"notes,omitempty"`
+	OSVQueried   bool   `json:"osvQueried"`
+	OSVFetchedAt string `json:"osvFetchedAt,omitempty"`
+	// OSVNote is the reason a covered-ecosystem scan did not complete (empty
+	// when the scan ran or was intentionally disabled), so a not-queried census
+	// distinguishes a FAILED scan from a disabled one, like the diff path.
+	OSVNote string   `json:"osvNote,omitempty"`
+	Notes   []string `json:"notes,omitempty"`
 
 	// Resolved reports how a "latest"/omitted request became this concrete
 	// version (and any cooldown note); Tree is the persisted extracted
@@ -393,7 +397,14 @@ func writeSubtreeOSV(w func(string, ...any), c *Census) {
 func writeRootOSV(w func(string, ...any), c *Census) {
 	w("")
 	if !c.OSVQueried {
-		w("OSV known-CVE scan (backward-looking): not queried")
+		switch {
+		case !osvSupported(c.Ecosystem):
+			w("OSV known-CVE scan: not applicable (no OSV index for the %s ecosystem)", c.Ecosystem)
+		case c.OSVNote != "":
+			w("OSV known-CVE scan: did NOT complete (%s); a coverage gap, not a clean result", taint(c.OSVNote))
+		default:
+			w("OSV known-CVE scan: not run (disabled); a coverage gap, not a clean result")
+		}
 	} else if len(c.Vulns) == 0 {
 		w("OSV known-CVE scan (backward-looking), %s: none for this version", c.OSVFetchedAt)
 		w("  (known CVEs only; says nothing about novel or injected code)")
@@ -567,8 +578,13 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 			"the published artifact (files, size, classes)",
 			"execution surface (lifecycle scripts, cgo, build.rs, proc-macro, gyp)",
 			"declared DIRECT dependencies",
-			"known CVEs via OSV (backward-looking)",
 		},
+	}
+	// OSV: checked only when it ran, else stated as a gap (mirrors the diff Guide).
+	if ok, line := osvCoverageLine(c.Ecosystem, c.OSVQueried, c.OSVNote); ok {
+		cov.Checked = append(cov.Checked, line)
+	} else {
+		cov.NotChecked = append(cov.NotChecked, line)
 	}
 	// --transitive resolved the whole subtree, so it is no longer a blind
 	// spot; note it is a deps.dev estimate, not the verified install

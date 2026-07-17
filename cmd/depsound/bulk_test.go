@@ -44,6 +44,20 @@ func TestParseBulkLinesCensusAndRedirect(t *testing.T) {
 	}
 }
 
+// TestParseBulkLinesUnresolved: an `unresolved<TAB>path<TAB>reason` line from
+// detect becomes a failed row (spec is the path, failure the reason), so a
+// manifest that could not be parsed rides the stream instead of vanishing.
+func TestParseBulkLinesUnresolved(t *testing.T) {
+	got, err := parseBulkLines("unresolved\tsub/package-lock.json\tparse new package-lock.json: invalid character 't'\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []bulkItem{{spec: "sub/package-lock.json", failure: "parse new package-lock.json: invalid character 't'"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v want %+v", got, want)
+	}
+}
+
 func TestParseBulkLinesRejectsMalformed(t *testing.T) {
 	for _, bad := range []string{
 		"npm:hono",          // bare spec, no version

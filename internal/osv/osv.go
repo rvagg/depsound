@@ -114,17 +114,20 @@ func Assess(ctx context.Context, client *http.Client, cacheRoot, eco, name, from
 }
 
 // Present looks up the vulnerabilities affecting a SINGLE version (the
-// absolute/census framing, vs Assess's delta). Degrades to nil on
-// failure or unmapped ecosystem; a security lookup must not block a
-// review. queried reports whether the lookup actually ran.
-func Present(ctx context.Context, client *http.Client, cacheRoot, eco, name, version string) (vulns []Vuln, fetchedAt string, queried bool) {
+// absolute/census framing, vs Assess's delta). Degrades to nil on failure or
+// unmapped ecosystem; a security lookup must not block a review. queried reports
+// whether the lookup actually ran; note carries the failure reason when a
+// covered ecosystem's query errored, so a caller can distinguish a FAILED scan
+// from an intentionally disabled one (empty note) or an unsupported ecosystem
+// (Ecosystem returns !ok), mirroring the diff path's Assessment.Note.
+func Present(ctx context.Context, client *http.Client, cacheRoot, eco, name, version string) (vulns []Vuln, fetchedAt string, queried bool, note string) {
 	osvEco, ok := Ecosystem(eco)
 	if !ok {
-		return nil, "", false
+		return nil, "", false, ""
 	}
 	v, ts, err := query(ctx, client, cacheRoot, osvEco, name, osvVersion(osvEco, version))
 	if err != nil {
-		return nil, "", false
+		return nil, "", false, "OSV query failed: " + err.Error()
 	}
 	// dedupe by alias so GHSA+CVE+RUSTSEC of one advisory count once
 	seen := map[string]bool{}
@@ -136,7 +139,7 @@ func Present(ctx context.Context, client *http.Client, cacheRoot, eco, name, ver
 		}
 	}
 	sortVulns(vulns)
-	return vulns, ts.UTC().Format(time.RFC3339), true
+	return vulns, ts.UTC().Format(time.RFC3339), true, ""
 }
 
 // BatchQuery is one package to check in a batch.

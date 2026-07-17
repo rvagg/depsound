@@ -133,6 +133,10 @@ type Compat struct {
 	// go directive, toolchain, rust-version
 	Constraints []manifest.Change       `json:"constraints"`
 	Exports     []manifest.ExportChange `json:"exports"`
+	// ExportsError records a failed exports/resolution computation: a coverage
+	// gap (a breaking exports change may have been missed), typed so the ledger
+	// can refuse to read clean, not just a free-form note.
+	ExportsError string `json:"exportsError,omitempty"`
 }
 
 // Security is the OSV assessment. It is NOT part of the deterministic
@@ -321,6 +325,7 @@ func Build(in Input) (*Stats, error) {
 		s.Compat.Constraints = npmpkg.EnginesDelta(in.OldPkg, in.NewPkg)
 		s.Compat.Exports, err = npmpkg.ExportsDelta(in.OldPkg, in.NewPkg)
 		if err != nil {
+			s.Compat.ExportsError = err.Error()
 			s.Notes = append(s.Notes, "exports resolution failed: "+err.Error())
 		}
 		s.Dependencies = npmpkg.DepsDelta(in.OldPkg, in.NewPkg)

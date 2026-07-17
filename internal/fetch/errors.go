@@ -11,7 +11,7 @@ import (
 // TRANSIENT one is retryable. Collapsing them into one opaque error loses all
 // of that.
 const (
-	Absent    = "absent"    // 404 / 410: the bytes are gone (or never existed)
+	Absent    = "absent"    // 404 / 410: the URL is not retrievable (removed or never published)
 	Denied    = "denied"    // 401 / 403: authentication or policy
 	Transient = "transient" // 5xx, rate limits, and anything else retryable
 )

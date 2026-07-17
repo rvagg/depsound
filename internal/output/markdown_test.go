@@ -96,8 +96,9 @@ func TestMarkdownNewDependency(t *testing.T) {
 
 	c = &Census{
 		Ecosystem: "npm", Name: "evil", Version: "9.9.9", Files: 12,
-		Vulns:     []osv.Vuln{{ID: "GHSA-aaaa-bbbb-cccc"}},
-		Lifecycle: []manifest.Change{{Key: "postinstall", Status: "present"}},
+		OSVQueried: true,
+		Vulns:      []osv.Vuln{{ID: "GHSA-aaaa-bbbb-cccc"}},
+		Lifecycle:  []manifest.Change{{Key: "postinstall", Status: "present"}},
 	}
 	out = Markdown([]BulkResult{{Ref: "npm:evil 9.9.9", Census: c}})
 	if !strings.Contains(out, "look at now") {

@@ -204,6 +204,32 @@ func TestDetectSkipsUnknown(t *testing.T) {
 	}
 }
 
+// TestDetectUnresolvedOnParseFailure: a manifest detect was asked to parse but
+// could not is recorded as Unresolved (a coverage gap the caller surfaces),
+// never a benign skip Note and never silently dropped, so an all-failed run
+// cannot read as "no changes".
+func TestDetectUnresolvedOnParseFailure(t *testing.T) {
+	write := func(content string) string {
+		p := filepath.Join(t.TempDir(), "f")
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	const valid = `{"lockfileVersion":3,"packages":{"":{"dependencies":{"left-pad":"^1.3.0"}},` +
+		`"node_modules/left-pad":{"version":"1.3.0"}}}`
+	res := detectChanges([]detectPair{{path: "package-lock.json", old: write(valid), new: write("{ not json ")}})
+	if len(res.Unresolved) != 1 || res.Unresolved[0].Path != "package-lock.json" {
+		t.Fatalf("a malformed manifest must be recorded as unresolved with its path, got %+v", res.Unresolved)
+	}
+	if len(res.Notes) != 0 {
+		t.Errorf("a parse failure is a coverage gap, not a benign skip note: %v", res.Notes)
+	}
+	if len(res.Changed) != 0 || len(res.Added) != 0 {
+		t.Errorf("nothing should resolve from a failed parse: %+v %+v", res.Changed, res.Added)
+	}
+}
+
 // TestDetectReadPairsRejectsMalformed guards the stdin contract: exactly three
 // tab-separated fields.
 func TestDetectReadPairsRejectsMalformed(t *testing.T) {

@@ -11,12 +11,32 @@ import (
 // tool's capabilities: the boundary that stops "no signals" being read as
 // "safe". Static, because the boundary is the same for every report; the
 // NOT-checked list doubles as a live map of the roadmap.
+// OSV is deliberately NOT here: it can be disabled/unsupported/failed, so it is
+// added to checked or not-checked per report by osvCoverageLine, never claimed
+// unconditionally.
 var coverageChecked = []string{
 	"the published-artifact diff (what installs, not the repo)",
 	"file classification (source vs generated/test/docs, heuristic)",
 	"manifest compatibility: constraints, exports, dependency deltas",
 	"execution surface (lifecycle scripts, cgo, build.rs, proc-macro, gyp)",
-	"known CVEs via OSV (backward-looking)",
+}
+
+// osvCoverageLine states OSV's place in a coverage boundary: whether it belongs
+// under "checked", and the exact line. A scan that ran is checked; one that did
+// not (disabled/failed) or does not apply (unsupported) is stated as a gap, so
+// the boundary never implies OSV ran when it did not. Shared by the diff Guide
+// and CensusGuide so both coverage renderers stay honest identically.
+func osvCoverageLine(eco string, queried bool, note string) (checked bool, line string) {
+	switch {
+	case queried:
+		return true, "known CVEs via OSV (backward-looking)"
+	case !osvSupported(eco):
+		return false, "known CVEs via OSV: not applicable (no OSV index for this ecosystem)"
+	case note != "":
+		return false, "known CVEs via OSV: scan did NOT complete (" + note + ")"
+	default:
+		return false, "known CVEs via OSV: scan disabled for this run"
+	}
 }
 
 var coverageNotChecked = []string{
@@ -61,6 +81,12 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		notChecked = nc
 		checked = append(append([]string(nil), checked...),
 			"provenance deltas (shallow, history-only, not a pass)")
+	}
+	// OSV: claim it checked only when it actually ran, else state the gap.
+	if ok, line := osvCoverageLine(s.Package.Ecosystem, s.Security.Queried, s.Security.Note); ok {
+		checked = append(append([]string(nil), checked...), line)
+	} else {
+		notChecked = append(append([]string(nil), notChecked...), line)
 	}
 	cov := &stats.Coverage{Checked: checked, NotChecked: notChecked}
 

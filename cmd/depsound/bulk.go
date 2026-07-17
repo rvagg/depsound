@@ -79,6 +79,10 @@ func bulkCmd(args []string) error {
 type bulkItem struct {
 	spec, from, to string
 	redirect       string // non-empty: spec is redirected to this target (a flag, no fetch)
+	// failure is non-empty when detect could not resolve a manifest (spec is the
+	// manifest path, not an eco:name): it rides the stream as a failed-analysis
+	// row so a parse failure is a loud coverage gap, never silence.
+	failure string
 }
 
 // readBulkList reads from --file, else a positional file arg, else stdin.
@@ -150,6 +154,13 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// an unresolved manifest from detect: `unresolved<TAB>path<TAB>reason`.
+		// TAB-delimited because the reason is free text; it becomes a failed row.
+		if rest, ok := strings.CutPrefix(line, "unresolved\t"); ok {
+			path, reason, _ := strings.Cut(rest, "\t")
+			items = append(items, bulkItem{spec: path, failure: reason})
+			continue
+		}
 		f := strings.Fields(line)
 		// a redirect line flags a non-registry source: `redirect <eco>:<name> <target>`
 		if len(f) > 0 && f[0] == "redirect" {
@@ -190,7 +201,7 @@ func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.
 		return nil, err
 	}
 	if !noOSV {
-		c.Vulns, c.OSVFetchedAt, c.OSVQueried = osv.Present(context.Background(), &http.Client{},
+		c.Vulns, c.OSVFetchedAt, c.OSVQueried, c.OSVNote = osv.Present(context.Background(), &http.Client{},
 			censusCacheRoot(cacheDir), c.Ecosystem, c.Name, c.Version)
 	}
 	c.Coverage, c.NextActions = output.CensusGuide(c)
@@ -222,6 +233,12 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Durati
 		go func(i int, it bulkItem) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// an unresolved manifest: a parse/read failure detect could not turn
+			// into a change set, surfaced as a failed row (a coverage gap)
+			if it.failure != "" {
+				results[i] = output.BulkResult{Ref: it.spec, Err: it.failure}
+				return
+			}
 			// a redirect is a flag, not an artifact: nothing to fetch or diff,
 			// the signal is that a trusted name points off the registry
 			if it.redirect != "" {

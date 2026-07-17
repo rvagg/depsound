@@ -171,8 +171,6 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 		return "runs code on install/build: " + mdTaint(sig.Detail)
 	case CodeCensusBig:
 		return "largest unreviewed file " + mdTaint(sig.Detail)
-	case CodeArtifactAbsent:
-		return "artifact unavailable: the published bytes are gone (a takedown-shaped event); contents not inspected: " + mdTaint(sig.Detail)
 	case CodeArtifactDenied:
 		return "artifact access denied (auth/policy): " + mdTaint(sig.Detail)
 	case CodeArtifactFetch:

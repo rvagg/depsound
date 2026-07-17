@@ -77,7 +77,8 @@ type bulkSection struct {
 }
 
 var bulkSections = []bulkSection{
-	{[]Code{CodeArtifactAbsent}, "artifact unavailable (published bytes gone: takedown-shaped, contents not inspected)"},
+	{[]Code{CodeArtifactAbsent}, "artifact unavailable (URL not retrievable now; contents not inspected; prior publication not established)"},
+	{[]Code{CodeHostileEntry}, "hostile archive member(s) skipped (traversal/absolute/control-byte name: an attack-shaped artifact)"},
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
@@ -89,7 +90,11 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeOSVIntroduced}, "CVEs introduced by the upgrade"},
 	{[]Code{CodeOSVStill}, "CVEs still present after the upgrade (bump did not fix them)"},
 	{[]Code{CodeGHAUsing}, "GitHub Actions runtime changed (may raise the minimum runner version)"},
+	{[]Code{CodeBinDelta}, "installed executable (bin) entries changed (a new or re-pointed command on PATH)"},
 	{[]Code{CodeCompatChange}, "compatibility changes"},
+	{[]Code{CodeExportsUnresolved}, "coverage gap: exports/resolution compatibility could not be computed"},
+	{[]Code{CodeSkippedLink}, "coverage gap: symlink/hardlink(s) not materialized (contents not inspected)"},
+	{[]Code{CodeIntegrityWeak}, "coverage gap: artifact verified by TLS trust only (no registry integrity or checksum-DB record)"},
 	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "coverage gap: known-CVE scan did not complete for these deps"},
 	{[]Code{CodeOSVFixed}, "advisories fixed by the upgrade (the merge argument)"},
 	{[]Code{CodeOSVUnsupported}, "note: known-CVE scan not applicable (OSV has no index for this ecosystem)"},

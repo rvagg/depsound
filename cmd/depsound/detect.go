@@ -84,6 +84,16 @@ func detectCmd(args []string) error {
 		for _, r := range res.Redirects {
 			fmt.Printf("redirect %s:%s %s\n", r.Eco, r.Name, r.Target)
 		}
+		// a manifest we could not parse rides the stream as an `unresolved` line
+		// (TAB-delimited: reason is free text), which bulk turns into a failed
+		// row, so a parse failure is a loud coverage gap, never an empty-list
+		// silence the caller reads as "no changes".
+		for _, u := range res.Unresolved {
+			fmt.Printf("unresolved\t%s\t%s\n", u.Path, strings.ReplaceAll(u.Reason, "\n", " "))
+		}
+		if len(res.Unresolved) > 0 {
+			fmt.Fprintf(os.Stderr, "depsound: detect: %d manifest(s) could not be parsed (surfaced as coverage gaps in the report)\n", len(res.Unresolved))
+		}
 		if len(res.Added) > 0 {
 			fmt.Fprintf(os.Stderr, "depsound: detect: %d new dependency(ies) in the list (census-shaped)\n", len(res.Added))
 		}
@@ -129,7 +139,17 @@ type detectResult struct {
 	Changed   []detectChange   `json:"changed"`   // bumps (from and to)
 	Added     []detectChange   `json:"added"`     // new deps (census-shaped)
 	Redirects []detectRedirect `json:"redirects"` // non-registry source flags
-	Notes     []string         `json:"notes,omitempty"`
+	// Unresolved are manifests detect was asked to parse but could not (a read
+	// or parse failure), kept separate from the benign Notes (an unwatched base
+	// name) so the caller surfaces a real coverage gap instead of silently
+	// reporting a partial set as if it were complete.
+	Unresolved []detectUnresolved `json:"unresolved,omitempty"`
+	Notes      []string           `json:"notes,omitempty"`
+}
+
+type detectUnresolved struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
 }
 
 // detectChanges parses each pair's two versions, diffs them, and aggregates
@@ -154,12 +174,12 @@ func detectChanges(pairs []detectPair) detectResult {
 		te := transitiveEcos[kind]
 		oldDeps, err := resolveManifest(kind, p.old, te.lockName)
 		if err != nil {
-			res.Notes = append(res.Notes, fmt.Sprintf("%s (old): %v", p.path, err))
+			res.Unresolved = append(res.Unresolved, detectUnresolved{p.path, fmt.Sprintf("parse old %s: %v", base, err)})
 			continue
 		}
 		newDeps, err := resolveManifest(kind, p.new, te.lockName)
 		if err != nil {
-			res.Notes = append(res.Notes, fmt.Sprintf("%s (new): %v", p.path, err))
+			res.Unresolved = append(res.Unresolved, detectUnresolved{p.path, fmt.Sprintf("parse new %s: %v", base, err)})
 			continue
 		}
 		d := diffResolved(oldDeps, newDeps)
