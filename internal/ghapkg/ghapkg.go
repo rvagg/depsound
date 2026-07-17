@@ -8,6 +8,8 @@ package ghapkg
 import (
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -81,6 +83,90 @@ func Load(dir string) (*Action, error) {
 		}
 	}
 	return a, nil
+}
+
+// Use is one `uses:` reference in a workflow or composite action: the action
+// Identity (owner/repo, or owner/repo/sub for a sub-action) and its git Ref (a
+// SHA, tag, or branch). Local (`./path`), docker (`docker://`) and reusable-
+// workflow (`owner/repo/.github/workflows/x.yml`) refs carry an empty Identity;
+// callers skip those (depsound diffs published actions, not those shapes).
+type Use struct {
+	Identity string
+	Ref      string
+	Raw      string
+}
+
+// WorkflowUses extracts the action references a GitHub Actions workflow file or
+// a composite action.yml declares: for a workflow, `jobs.<id>.steps[].uses` and
+// `jobs.<id>.uses` (reusable-workflow calls); for a composite action,
+// `runs.steps[].uses`. It reads a real YAML parse (a crafted file must not hide
+// a `uses:` the runner would honour) and returns them in deterministic order. A
+// parse error is returned so the caller records a coverage gap, never a silent
+// miss. This is the DETECTION analog of the lockfile parsers: the workflow IS
+// the manifest, its pinned refs are the resolved set.
+func WorkflowUses(b []byte) ([]Use, error) {
+	var raw struct {
+		Jobs map[string]struct {
+			Uses  string `yaml:"uses"`
+			Steps []struct {
+				Uses string `yaml:"uses"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+		Runs struct {
+			Steps []struct {
+				Uses string `yaml:"uses"`
+			} `yaml:"steps"`
+		} `yaml:"runs"`
+	}
+	if err := yaml.Unmarshal(b, &raw); err != nil {
+		return nil, err
+	}
+	var uses []Use
+	add := func(v string) {
+		if v != "" {
+			uses = append(uses, parseUse(v))
+		}
+	}
+	names := make([]string, 0, len(raw.Jobs))
+	for n := range raw.Jobs {
+		names = append(names, n)
+	}
+	sort.Strings(names) // maps iterate randomly; a stable resolved set must not
+	for _, n := range names {
+		j := raw.Jobs[n]
+		add(j.Uses) // a reusable-workflow call at the job level
+		for _, s := range j.Steps {
+			add(s.Uses)
+		}
+	}
+	for _, s := range raw.Runs.Steps { // a composite action.yml
+		add(s.Uses)
+	}
+	return uses, nil
+}
+
+// parseUse splits a `uses:` value into (Identity, Ref). A trailing `# comment`
+// is already stripped by the YAML scalar, so a SHA pin with its `# vX` version
+// comment yields the SHA cleanly. Local/docker/reusable-workflow shapes return
+// an empty Identity so callers skip them.
+func parseUse(v string) Use {
+	u := Use{Raw: v}
+	switch {
+	case strings.HasPrefix(v, "./"), strings.HasPrefix(v, "../"): // local action
+		return u
+	case strings.HasPrefix(v, "docker://"): // docker image, not a registry action
+		return u
+	}
+	at := strings.LastIndexByte(v, '@')
+	if at <= 0 { // no ref, or malformed
+		return u
+	}
+	id := v[:at]
+	if strings.Contains(id, "/.github/workflows/") { // reusable workflow (v1: skip)
+		return u
+	}
+	u.Identity, u.Ref = id, v[at+1:]
+	return u
 }
 
 // ExecDelta reports execution-model changes between two versions. pre/post

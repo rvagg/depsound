@@ -29,6 +29,39 @@ var detectManifests = map[string]string{
 	"Cargo.lock":        "crates",
 }
 
+// manifestKind classifies a changed file into a detector KIND, or (,false) to
+// skip it. Lockfiles/go.mod match by base name (they live anywhere); GitHub
+// Actions manifests match by LOCATION instead: a workflow under
+// .github/workflows/, or a composite action's action.yml/action.yaml. Their
+// pinned `uses:` refs are the resolved set the diff reads (the file IS the
+// manifest), so gha rides the same detect flow as a lockfile.
+func manifestKind(p string) (string, bool) {
+	base := path.Base(p)
+	if k, ok := detectManifests[base]; ok {
+		return k, true
+	}
+	if isWorkflowPath(p) || base == "action.yml" || base == "action.yaml" {
+		return "gha", true
+	}
+	return "", false
+}
+
+func isWorkflowPath(p string) bool {
+	base := path.Base(p)
+	return strings.HasSuffix(path.Dir(p), ".github/workflows") &&
+		(strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml"))
+}
+
+// detectEco resolves a detector KIND to its analysis ecosystem and github:
+// default filename. gha is detect-only (no transitive-lockfile mode), so it is
+// not in transitiveEcos; every other kind is.
+func detectEco(kind string) transitiveEco {
+	if kind == "gha" {
+		return transitiveEco{analysis: "gha", lockName: ""}
+	}
+	return transitiveEcos[kind]
+}
+
 // detectCmd reports the dependency changes a PR makes, by parsing the two
 // full versions of each changed manifest and diffing the resolved sets. It is
 // transitive fanned out over the changed-manifest set: the git diff only says
@@ -163,7 +196,7 @@ func detectChanges(pairs []detectPair) detectResult {
 	skipped := map[string]bool{}
 	for _, p := range pairs {
 		base := path.Base(p.path)
-		kind, ok := detectManifests[base]
+		kind, ok := manifestKind(p.path)
 		if !ok {
 			if !skipped[base] {
 				skipped[base] = true
@@ -171,7 +204,7 @@ func detectChanges(pairs []detectPair) detectResult {
 			}
 			continue
 		}
-		te := transitiveEcos[kind]
+		te := detectEco(kind)
 		oldDeps, err := resolveManifest(kind, p.old, te.lockName)
 		if err != nil {
 			res.Unresolved = append(res.Unresolved, detectUnresolved{p.path, fmt.Sprintf("parse old %s: %v", base, err)})

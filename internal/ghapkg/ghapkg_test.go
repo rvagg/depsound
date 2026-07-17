@@ -3,8 +3,63 @@ package ghapkg
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+// TestWorkflowUses: a workflow's action pins are the resolved set; SHA + version
+// comment yields the SHA, tags pass through, and local/docker/reusable are
+// skipped (empty Identity) so a bump of a real action is all that surfaces.
+func TestWorkflowUses(t *testing.T) {
+	wf := `
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/local
+      - uses: docker://alpine:3.20
+      - run: echo hi
+  call:
+    uses: owner/repo/.github/workflows/reusable.yml@v1
+`
+	got, err := WorkflowUses([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Use{
+		{Identity: "actions/checkout", Ref: "11bd71901bbe5b1630ceea73d27597364c9af683", Raw: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"},
+		{Identity: "actions/setup-node", Ref: "v4", Raw: "actions/setup-node@v4"},
+		{Raw: "./.github/actions/local"},
+		{Raw: "docker://alpine:3.20"},
+		{Raw: "owner/repo/.github/workflows/reusable.yml@v1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+}
+
+// TestWorkflowUsesComposite: a composite action.yml's runs.steps[].uses are the
+// resolved set too, so a nested-action bump is detected like any other.
+func TestWorkflowUsesComposite(t *testing.T) {
+	act := `
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+    - run: echo build
+`
+	got, err := WorkflowUses([]byte(act))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Identity != "actions/cache" || got[0].Ref != "v4" {
+		t.Errorf("composite uses: got %+v", got)
+	}
+}
 
 func write(t *testing.T, yml string) *Action {
 	t.Helper()

@@ -204,6 +204,46 @@ func TestDetectSkipsUnknown(t *testing.T) {
 	}
 }
 
+// TestDetectGHAWorkflow: a workflow's pinned `uses:` refs are its resolved set,
+// so a SHA (or tag) bump of an action surfaces as a gha change and an unchanged
+// pin does not. Author-agnostic (reads the file, not Dependabot's word) and it
+// preserves the SHA the pin-grade analysis needs. Recognised by LOCATION
+// (.github/workflows/), not base name.
+func TestDetectGHAWorkflow(t *testing.T) {
+	write := func(content string) string {
+		p := filepath.Join(t.TempDir(), "wf.yml")
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// three actions, three ref kinds: a SHA bump, a tag bump, and a comment-only
+	// change (same SHA, different # vX) that must NOT trip (the comment is
+	// stripped by YAML, so the ref is identical).
+	step := func(sha, node, cache string) string {
+		return "jobs:\n  b:\n    steps:\n" +
+			"      - uses: actions/checkout@" + sha + "\n" +
+			"      - uses: actions/setup-node@" + node + "\n" +
+			"      - uses: actions/cache@" + cache + "\n"
+	}
+	old := step("aaaa # v3", "v3", "cccc # v4.0.0")
+	niu := step("bbbb # v4", "v4", "cccc # v4.2.0")
+	res := detectChanges([]detectPair{{path: ".github/workflows/ci.yml", old: write(old), new: write(niu)}})
+	if len(res.Changed) != 2 {
+		t.Fatalf("want 2 gha changes (checkout sha bump, setup-node tag bump), got %+v", res.Changed)
+	}
+	// sorted by name: actions/checkout before actions/setup-node
+	if g := res.Changed[0]; g.Eco != "gha" || g.Name != "actions/checkout" || g.From != "aaaa" || g.To != "bbbb" {
+		t.Errorf("sha bump: got %+v, want gha:actions/checkout aaaa->bbbb", g)
+	}
+	if g := res.Changed[1]; g.Eco != "gha" || g.Name != "actions/setup-node" || g.From != "v3" || g.To != "v4" {
+		t.Errorf("tag bump: got %+v, want gha:actions/setup-node v3->v4", g)
+	}
+	if len(res.Added) != 0 || len(res.Unresolved) != 0 {
+		t.Errorf("a comment-only change (actions/cache, same SHA) must not surface; added=%+v unresolved=%+v", res.Added, res.Unresolved)
+	}
+}
+
 // TestDetectUnresolvedOnParseFailure: a manifest detect was asked to parse but
 // could not is recorded as Unresolved (a coverage gap the caller surfaces),
 // never a benign skip Note and never silently dropped, so an all-failed run

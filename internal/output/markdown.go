@@ -158,7 +158,7 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 	case CodeCompatChange:
 		return compatPhrase(s)
 	case CodeGHACaps:
-		return "new runner capability referenced: " + mdTaint(sig.Detail)
+		return "new runner capability referenced (grep of the executed code, evadable): " + mdTaint(sig.Detail)
 	case CodeGHAUsing:
 		return "action runtime changed: " + mdTaint(sig.Detail)
 	case CodeBinaryAdded, CodeBinaryChanged:

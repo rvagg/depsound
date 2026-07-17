@@ -11,6 +11,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/cratepkg"
 	"github.com/rvagg/depsound/internal/fetch"
+	"github.com/rvagg/depsound/internal/ghapkg"
 	"github.com/rvagg/depsound/internal/gopkg"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/output"
@@ -152,6 +153,22 @@ func resolveLock(kind, src, lockName string) ([]resolvedDep, error) {
 			return nil, err
 		}
 		return npmLockedToResolved(reg), nil
+	case "gha":
+		// a workflow file (or composite action.yml) IS the gha manifest: its
+		// pinned `uses:` refs are the resolved set, so diffResolved yields the
+		// action bumps just like a lockfile diff yields package bumps.
+		uses, err := ghapkg.WorkflowUses(b)
+		if err != nil {
+			return nil, err
+		}
+		var out []resolvedDep
+		for _, u := range uses {
+			if u.Identity == "" {
+				continue // local/docker/reusable: not a diffable published action
+			}
+			out = append(out, resolvedDep{u.Identity, u.Ref, false})
+		}
+		return out, nil
 	}
 	return nil, fmt.Errorf("unsupported lockfile kind %q", kind)
 }
