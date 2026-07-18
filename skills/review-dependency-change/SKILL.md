@@ -17,6 +17,7 @@ You are the last check before untrusted third-party code enters a tree. Deciding
 
 Resolve whatever arrives into one or more `(<ecosystem>:<name>, from, to)` triples, or a before/after lockfile pair. depsound's `--old`/`--new`/`--against` inputs each accept a local path, an https URL, or `github:owner/repo@ref`, so you rarely need to download anything.
 
+- **A depsound PR comment** (you were pointed here from one) → its reproduce command *is* the resolved Step-1 command; run it, then go to Step 2. The comment is only a summary; the local run and its grep-able workspace are the review.
 - **A name + two versions** ("bump lodash 4.17.20 → 4.17.21") → `depsound npm:lodash 4.17.20 4.17.21`.
 - **A manifest range bump** (`^9.3.0` → `^10.2.0`, npm/crates, the common Dependabot shape) → pass the ranges straight through: `depsound npm:foo '^9.3.0' '^10.2.0'`. depsound resolves each to the install target (highest satisfying version) and reports it. Add `--cooldown=<days>` to review what an install-cooldown selects and flag the newer versions an uncooled consumer installs instead. The Dependabot title's target isn't necessarily what installs; the range plus any lockfile/install policy decides, and a Dependabot cooldown only gates when the PR opens, not what installs.
 - **A new dep being adopted** (a name, maybe one version, no "from") → a census: `depsound npm:<name> [version]`.
