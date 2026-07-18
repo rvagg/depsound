@@ -183,7 +183,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	}
 	if d.genDelta > 0 {
 		add(CodeGeneratedDelta, KindHeuristic, LensCompat, weightWeigh,
-			"generated/bundled code changed", fmt.Sprintf("%s, +/-%d lines", d.genFile, d.genDelta))
+			"generated/bundled code changed", fmt.Sprintf("%s, +/-%s lines", d.genFile, commas(d.genDelta)))
 	}
 	if d.compat {
 		add(CodeCompatChange, KindFact, LensCompat, weightWeigh, "compatibility changed", rawCompat(s))

@@ -115,7 +115,11 @@ func Markdown(results []BulkResult) string {
 		}
 		bullets = append(bullets, r.bullet())
 	}
-	if len(bullets) > 0 || nClean > 0 {
+	// The bullets section lists only what tripped; the "N others" line is its
+	// footer accounting for the clean deps NOT listed. With nothing tripped
+	// there are no bullets, so the headline already carries "no signals
+	// tripped" and the line would just repeat it: skip the whole section.
+	if len(bullets) > 0 {
 		w("")
 		for _, bl := range bullets {
 			w("%s", bl)

@@ -21,10 +21,35 @@ func cleanStats() *stats.Stats {
 	}
 }
 
+// TestMarkdownGeneratedDeltaGrouped: a large generated/bundled line delta (the
+// dist/index.js case) is comma-grouped like the other counts, not a raw run of
+// digits.
+func TestMarkdownGeneratedDeltaGrouped(t *testing.T) {
+	s := &stats.Stats{
+		Package:  stats.PkgRef{Ecosystem: "gha", Name: "actions/checkout"},
+		Security: stats.Security{Queried: true},
+		Files: stats.FilesSection{Entries: []stats.FileEntry{
+			{Path: "dist/index.js", Status: "M", Class: "generated", Added: 74909},
+		}},
+	}
+	out := Markdown([]BulkResult{{Ref: "gha:actions/checkout a b", Stats: s}})
+	if !strings.Contains(out, "74,909") {
+		t.Errorf("generated-delta line count should be comma-grouped:\n%s", out)
+	}
+	if strings.Contains(out, "74909") {
+		t.Errorf("ungrouped line count leaked:\n%s", out)
+	}
+}
+
 func TestMarkdownHeadlineTiers(t *testing.T) {
 	out := Markdown([]BulkResult{{Ref: "npm:ms 2.1.2 -> 2.1.3", Stats: cleanStats()}})
 	if !strings.Contains(out, "no signals tripped") {
 		t.Errorf("clean set should read 'no signals tripped':\n%s", out)
+	}
+	// the headline already says "no signals tripped"; an all-clean set must not
+	// also append a redundant "N others: no signals tripped." line
+	if strings.Contains(out, "other") {
+		t.Errorf("all-clean set must not append the redundant 'others' line:\n%s", out)
 	}
 	if !strings.HasSuffix(strings.TrimSpace(out), "<!-- depsound -->") {
 		t.Error("missing trailing upsert marker")
