@@ -1,0 +1,16 @@
+# depsound reviews its own dependency-update PRs (go.mod bumps and github-actions
+# uses: bumps), dogfooding depsound-action. The COMPUTE half: on every PR it
+# diffs the changed manifests, runs depsound, and uploads the report as an
+# artifact. Paired with depsound-post.yml.
+name: depsound
+on:
+  pull_request:
+
+permissions:
+  contents: read # checkout + diff the PR's manifests; no write, never posts
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: rvagg/depsound-action@3bb221b099eff222f698c735d239450ea0bba68d # master

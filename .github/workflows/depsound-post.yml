@@ -1,0 +1,21 @@
+# depsound reviews its own dependency-update PRs, dogfooding depsound-action.
+# The POST half: runs after depsound.yml completes, downloads the report
+# artifact, and upserts the sticky comment + neutral check from a workflow_run
+# context (the write token stays away from PR code). Paired with depsound.yml.
+name: depsound-post
+on:
+  workflow_run:
+    workflows: [depsound]
+    types: [completed]
+
+permissions:
+  pull-requests: write # upsert the sticky comment
+  checks: write        # set the neutral check
+  actions: read        # download the report artifact from the compute run
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    steps:
+      - uses: rvagg/depsound-action/post@3bb221b099eff222f698c735d239450ea0bba68d # master
