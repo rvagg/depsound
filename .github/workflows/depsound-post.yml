@@ -18,4 +18,4 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.event == 'pull_request' }}
     steps:
-      - uses: rvagg/depsound-action/post@cae3f58d212f5761ae6ea256acb15441ec5dcd6a # v0.2.2
+      - uses: rvagg/depsound-action/post@ede16b27369b65e89cf589bfaf4849be5d91a25c # v0.2.3
