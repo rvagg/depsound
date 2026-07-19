@@ -129,7 +129,7 @@ func Markdown(results []BulkResult) string {
 		}
 	}
 	w("")
-	notChecked := "reachability, runtime behaviour, your tests, transitive depth"
+	notChecked := "reachability, runtime behaviour, your tests"
 	if !anyProvenanceQueried(results) {
 		notChecked += ", publish provenance" // provenance ran in bulk; only listed when it did not
 	}
