@@ -129,8 +129,8 @@ func Markdown(results []BulkResult) string {
 		}
 	}
 	w("")
-	w("<sub>Not checked: reachability, runtime behaviour, your tests, " +
-		"transitive depth, publish provenance. Silence is not safety.</sub>")
+	w("<i>Not checked: reachability, runtime behaviour, your tests, " +
+		"transitive depth, publish provenance.</i>")
 	w("<!-- depsound -->")
 	return b.String()
 }
