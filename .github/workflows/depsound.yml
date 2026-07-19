@@ -13,4 +13,4 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: rvagg/depsound-action@bbabaf9e00c0b558bb1950b7437b3069cc9cfe6d # v0.2.5
+      - uses: rvagg/depsound-action@d86adc19cac7e91855d5d9ee7e3b6462de306c54 # v0.2.6
