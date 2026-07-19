@@ -92,8 +92,8 @@ func transitiveCmd(args []string) error {
 	tr := output.TransitiveResult{
 		Ecosystem:       te.analysis,
 		Kind:            kind,
-		Flat:            te.analysis != "go",                // only go.mod carries direct/indirect
-		Changed:         runBulk(cacheDir, items, noOSV, 0), // lockfile versions are already resolved
+		Flat:            te.analysis != "go",                      // only go.mod carries direct/indirect
+		Changed:         runBulk(cacheDir, items, noOSV, true, 0), // versions resolved; provenance off (subtree too large to hammer deps.dev)
 		Added:           res.added,
 		Removed:         res.removed,
 		DirectChanged:   res.directChanged,

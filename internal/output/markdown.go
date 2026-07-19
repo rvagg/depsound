@@ -129,8 +129,11 @@ func Markdown(results []BulkResult) string {
 		}
 	}
 	w("")
-	w("<i>Not checked: reachability, runtime behaviour, your tests, " +
-		"transitive depth, publish provenance.</i>")
+	notChecked := "reachability, runtime behaviour, your tests, transitive depth"
+	if !anyProvenanceQueried(results) {
+		notChecked += ", publish provenance" // provenance ran in bulk; only listed when it did not
+	}
+	w("<i>Not checked: %s.</i>", notChecked)
 	w("<!-- depsound -->")
 	return b.String()
 }

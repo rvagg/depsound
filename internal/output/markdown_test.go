@@ -6,6 +6,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -38,6 +39,25 @@ func TestMarkdownGeneratedDeltaGrouped(t *testing.T) {
 	}
 	if strings.Contains(out, "74909") {
 		t.Errorf("ungrouped line count leaked:\n%s", out)
+	}
+}
+
+// TestMarkdownProvenanceCoverageFlip: the coverage footer stops listing "publish
+// provenance" as not-checked once provenance actually ran for a dep, and keeps
+// listing it when nothing ran.
+func TestMarkdownProvenanceCoverageFlip(t *testing.T) {
+	ran := Markdown([]BulkResult{{Ref: "npm:x 1 -> 2", Stats: &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+		Provenance: &provenance.Result{Queried: true},
+	}}})
+	if strings.Contains(ran, "publish provenance") {
+		t.Errorf("provenance ran; footer must not call it not-checked:\n%s", ran)
+	}
+	none := Markdown([]BulkResult{{Ref: "gha:x v1 -> v2", Stats: &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
+	}}})
+	if !strings.Contains(none, "publish provenance") {
+		t.Errorf("no provenance run; footer must still list it:\n%s", none)
 	}
 }
 

@@ -79,6 +79,7 @@ type bulkSection struct {
 var bulkSections = []bulkSection{
 	{[]Code{CodeArtifactAbsent}, "artifact unavailable (URL not retrievable now; contents not inspected; prior publication not established)"},
 	{[]Code{CodeHostileEntry}, "hostile archive member(s) skipped (traversal/absolute/control-byte name: an attack-shaped artifact)"},
+	{[]Code{CodeProvenanceAnomaly}, "provenance anomaly: account-takeover shape (publisher/attestation/repo/yank)"},
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
@@ -98,6 +99,18 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "coverage gap: known-CVE scan did not complete for these deps"},
 	{[]Code{CodeOSVFixed}, "advisories fixed by the upgrade (the merge argument)"},
 	{[]Code{CodeOSVUnsupported}, "note: known-CVE scan not applicable (OSV has no index for this ecosystem)"},
+}
+
+// anyProvenanceQueried reports whether provenance ran for at least one diffed
+// dep, so the coverage boundary stops listing it as not-checked. bulk runs
+// provenance; transitive turns it off, so a transitive report keeps the caveat.
+func anyProvenanceQueried(results []BulkResult) bool {
+	for _, r := range results {
+		if r.Stats != nil && r.Stats.Provenance != nil && r.Stats.Provenance.Queried {
+			return true
+		}
+	}
+	return false
 }
 
 // writeRouter renders the prioritised signal sections + coverage boundary over
@@ -217,8 +230,12 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w("  added modules are listed but not diffed; test-only/deeper modules beyond")
 		w("  go.mod's pruned set (go.sum has more); publish provenance. Silence != safe.")
 	} else {
+		prov := "; publish provenance"
+		if anyProvenanceQueried(results) {
+			prov = "" // bulk ran provenance, so do not list it as not-checked
+		}
 		w("NOT checked: does your code reach each change; what it does; test coverage;")
-		w("  transitive deps these bumps pull in; publish provenance. Silence != safe.")
+		w("  transitive deps these bumps pull in%s. Silence != safe.", prov)
 	}
 	w("next: for each dep you rely on, intersect the diff with your usage ->")
 	w("  depsound surface <eco>:<name> <from> <to> --uses=<your imports>")

@@ -78,6 +78,7 @@ const (
 	CodeIntegrityWeak     Code = "integrity.tlsOnly"        // TLS-trust-only, no registry integrity/checksum-DB
 	CodeExportsUnresolved Code = "compat.exportsUnresolved" // exports/resolution delta could not be computed
 	CodeBinDelta          Code = "bin.delta"                // installed executable (bin) entries changed
+	CodeProvenanceAnomaly Code = "provenance.anomaly"       // publisher/attestation/repo/yank account-takeover shape
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -95,7 +96,7 @@ var allCodes = []Code{
 	CodeAnalysisFailed,
 	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
-	CodeBinDelta,
+	CodeBinDelta, CodeProvenanceAnomaly,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -259,6 +260,33 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	if s.Compat.ExportsError != "" {
 		add(CodeExportsUnresolved, KindDegradation, LensCoverage, weightWeigh,
 			"exports/resolution compatibility could not be computed", s.Compat.ExportsError)
+	}
+
+	// provenance anomaly (npm/crates): the account-takeover shape, a hard prior-
+	// version delta (publisher change, dropped/mismatched attestation, repo
+	// mismatch, yank), so no per-package baseline is needed. Install-script and
+	// bin deltas are excluded here: they already surface as exec + bin.delta.
+	if p := s.Provenance; p != nil && p.Queried {
+		var shapes []string
+		if p.MaintainerChanged {
+			shapes = append(shapes, "publisher changed")
+		}
+		if p.AttestationDropped {
+			shapes = append(shapes, "build attestation dropped")
+		}
+		if p.AttestedMismatch {
+			shapes = append(shapes, "attested from a different repo")
+		}
+		if p.RepoMismatch {
+			shapes = append(shapes, "claimed repo != source repo")
+		}
+		if p.Yanked {
+			shapes = append(shapes, "version yanked")
+		}
+		if len(shapes) > 0 {
+			add(CodeProvenanceAnomaly, KindFact, LensSecurity, weightLook,
+				"provenance anomaly (account-takeover shape)", strings.Join(shapes, ", "))
+		}
 	}
 
 	sortSignals(l.Signals)

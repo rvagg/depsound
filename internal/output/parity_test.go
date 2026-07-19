@@ -6,6 +6,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -58,6 +59,7 @@ func markdownMarkers() map[Code]string {
 		CodeIntegrityWeak:     "TLS trust only",
 		CodeExportsUnresolved: "could not be computed",
 		CodeBinDelta:          "installed executable",
+		CodeProvenanceAnomaly: "provenance anomaly",
 	}
 }
 
@@ -91,6 +93,7 @@ func bulkMarkers() map[Code]string {
 		CodeIntegrityWeak:     "TLS trust only",
 		CodeExportsUnresolved: "could not be computed",
 		CodeBinDelta:          "installed executable",
+		CodeProvenanceAnomaly: "provenance anomaly",
 	}
 }
 
@@ -127,6 +130,7 @@ func parityFixture() []BulkResult {
 			},
 			Compat: stats.Compat{ExportsError: "malformed exports map"},
 		}},
+		{Ref: "npm:takeover 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, AttestationDropped: true}}},
 		{Ref: "npm:new 1.0.0", Census: &Census{Files: 12, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}},
 		{Ref: "go:trusted/x", Redirect: "github.com/fork/x@v1.0.0"},
 		{Ref: "npm:broke 1 -> 2", Err: "extraction failed"},

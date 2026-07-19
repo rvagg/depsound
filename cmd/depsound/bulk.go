@@ -15,6 +15,7 @@ import (
 	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/spec"
 )
 
@@ -27,7 +28,7 @@ const bulkConcurrency = 4
 // the PR/diff); depsound does the analysis, not the extraction.
 func bulkCmd(args []string) error {
 	cacheDir, format, inputFile := "", "stats", ""
-	noOSV := false
+	noOSV, noProv := false, false
 	var cooldown time.Duration
 	var pos []string
 	for _, a := range args {
@@ -46,6 +47,8 @@ func bulkCmd(args []string) error {
 			cooldown = d
 		case a == "--no-osv":
 			noOSV = true
+		case a == "--no-provenance":
+			noProv = true
 		case strings.HasPrefix(a, "-"):
 			return fmt.Errorf("unknown flag %q", a)
 		default:
@@ -61,7 +64,7 @@ func bulkCmd(args []string) error {
 		return fmt.Errorf("bulk needs `<eco>:<name> <from> <to>` lines (or a JSON array) on stdin or --file=")
 	}
 
-	results := runBulk(cacheDir, items, noOSV, cooldown)
+	results := runBulk(cacheDir, items, noOSV, noProv, cooldown)
 
 	if format == "json" {
 		enc := json.NewEncoder(os.Stdout)
@@ -221,9 +224,9 @@ func bulkFail(ref string, err error) output.BulkResult {
 	return output.BulkResult{Ref: ref, Err: err.Error()}
 }
 
-// runBulk fans analyze()+OSV over the list, bounded-parallel, preserving
-// input order in the results.
-func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Duration) []output.BulkResult {
+// runBulk fans analyze()+OSV+provenance over the list, bounded-parallel,
+// preserving input order in the results.
+func runBulk(cacheDir string, items []bulkItem, noOSV, noProv bool, cooldown time.Duration) []output.BulkResult {
 	results := make([]output.BulkResult, len(items))
 	sem := make(chan struct{}, bulkConcurrency)
 	var wg sync.WaitGroup
@@ -266,6 +269,12 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool, cooldown time.Durati
 			if !noOSV {
 				r.st.Security = osv.Assess(context.Background(), &http.Client{}, r.cacheRoot,
 					r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.From, r.st.Package.To)
+			}
+			// provenance deltas vs the prior version (the account-takeover shape);
+			// Assess is a no-op for ecosystems deps.dev does not cover
+			if !noProv {
+				r.st.Provenance = provenance.Assess(context.Background(),
+					r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.To, r.st.Package.From)
 			}
 			r.st.Coverage, r.st.NextActions = output.Guide(r.st)
 			results[i] = output.BulkResult{Ref: ref, Stats: r.st}

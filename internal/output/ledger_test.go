@@ -5,6 +5,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -57,6 +58,7 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 		Compat:   stats.Compat{ExportsError: "bad exports"},
 	}))
 	// census (incl. the biggest-unreviewed-file lead), redirect, failure
+	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: &provenance.Result{Queried: true, MaintainerChanged: true}}))
 	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
 	collect(DeriveFailure("bad", "extraction failed"))
