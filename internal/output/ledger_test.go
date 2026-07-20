@@ -42,6 +42,7 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 			CapsIntroduced: []string{"id-token"},
 			UsingFrom:      "node20", UsingTo: "node24",
 		},
+		MovedRefs: []stats.MovedRef{{Side: "to", Ref: "v2.0.1", Prev: "aaaa", SHA: "bbbb"}},
 	}))
 	// exec present-in-both (not introduced), and the three not-queried OSV
 	// states: disabled (covered eco, no scan), failed (scan errored),
@@ -124,6 +125,23 @@ func TestLedgerDeterministicOrder(t *testing.T) {
 	for i := 1; i < len(l.Signals); i++ {
 		if l.Signals[i-1].Weight < l.Signals[i].Weight {
 			t.Errorf("signals not weight-descending: %+v", l.Signals)
+		}
+	}
+}
+
+// looksExactRelease drives the moved-ref weight: an exact release tag
+// re-pointing is the tj-actions vector, a floating tag re-points routinely.
+func TestLooksExactRelease(t *testing.T) {
+	exact := []string{"v4.2.1", "4.2.1", "v1.0.0.1"}
+	floating := []string{"v4", "v4.2", "main", "release/v4", "v4.x", ""}
+	for _, ref := range exact {
+		if !looksExactRelease(ref) {
+			t.Errorf("looksExactRelease(%q) = false, want true", ref)
+		}
+	}
+	for _, ref := range floating {
+		if looksExactRelease(ref) {
+			t.Errorf("looksExactRelease(%q) = true, want false", ref)
 		}
 	}
 }

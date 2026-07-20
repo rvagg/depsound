@@ -168,6 +168,8 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 		return "new runner capability referenced (grep of the executed code, evadable): " + mdTaint(sig.Detail)
 	case CodeGHAUsing:
 		return "action runtime changed: " + mdTaint(sig.Detail)
+	case CodeGHARefMoved:
+		return sig.Title + ": " + mdTaint(sig.Detail)
 	case CodeBinaryAdded, CodeBinaryChanged:
 		return sig.Title + " (ranked by size): " + mdTaint(sig.Detail)
 	case CodeCensusNew:

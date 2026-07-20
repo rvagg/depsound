@@ -87,6 +87,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeBinaryAdded}, "binary/opaque file(s) added (zero line delta, an ideal payload channel; ranked by bytes)"},
 	{[]Code{CodeBinaryChanged}, "binary/opaque file(s) changed (zero line delta; ranked by byte delta)"},
 	{[]Code{CodeGeneratedDelta}, "large unreviewed generated/binary change (payload can hide here)"},
+	{[]Code{CodeGHARefMoved}, "GitHub Actions ref re-pointed to a different commit since last fetch"},
 	{[]Code{CodeGHACaps}, "GitHub Actions runner capability introduced by the bump"},
 	{[]Code{CodeOSVIntroduced}, "CVEs introduced by the upgrade"},
 	{[]Code{CodeOSVStill}, "CVEs still present after the upgrade (bump did not fix them)"},

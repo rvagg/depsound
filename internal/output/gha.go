@@ -8,9 +8,10 @@ import (
 )
 
 // writeAction renders the GitHub Actions section: pinning (escalating
-// sha < tag < branch) and the action.yml execution model + delta. Consumes
-// the tool-computed ActionSection; embedded strings stay tainted.
-func writeAction(w func(string, ...any), a *stats.ActionSection) {
+// sha < tag < branch), any observed ref movement, and the action.yml
+// execution model + delta. Consumes the tool-computed ActionSection;
+// embedded strings stay tainted.
+func writeAction(w func(string, ...any), a *stats.ActionSection, moved []stats.MovedRef) {
 	if a == nil {
 		return
 	}
@@ -22,6 +23,14 @@ func writeAction(w func(string, ...any), a *stats.ActionSection) {
 	w("matter are the pin and what the code reaches, read the dist bundle.)")
 	for _, p := range a.Pins {
 		w("  %s", renderPin(p))
+	}
+	for _, m := range moved {
+		vector := "floating refs re-point routinely; noted for the record"
+		if looksExactRelease(m.Ref) {
+			vector = "an exact release tag re-pointing is the tj-actions vector, look at the new commit"
+		}
+		w("  moved: %s ref %q re-pointed since last fetch, %.12s -> %.12s (%s)",
+			m.Side, taint(m.Ref), m.Prev, m.SHA, vector)
 	}
 
 	// execution model is context, never a red flag (running code is the

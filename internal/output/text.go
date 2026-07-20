@@ -74,7 +74,7 @@ func Text(s *stats.Stats) string {
 	// GitHub Actions has no npm/go/crates manifest; its execution model and
 	// pinning live in a dedicated section, so skip the manifest-shaped ones.
 	if s.Action != nil {
-		writeAction(w, s.Action)
+		writeAction(w, s.Action, s.MovedRefs)
 		w("")
 		writeSecurity(w, s.Security)
 		for _, n := range s.Notes {

@@ -62,6 +62,7 @@ const (
 	CodeGeneratedDelta    Code = "generated.delta"
 	CodeGHACaps           Code = "gha.capsIntroduced"
 	CodeGHAUsing          Code = "gha.using"
+	CodeGHARefMoved       Code = "gha.refMoved" // mutable ref resolves to a different commit than last fetch
 	CodeBinaryAdded       Code = "binary.added"
 	CodeBinaryChanged     Code = "binary.changed"
 	CodeRedirect          Code = "redirect"
@@ -89,7 +90,7 @@ var allCodes = []Code{
 	CodeOSVDisabled, CodeOSVUnsupported, CodeOSVFailed,
 	CodeExecIntroduced, CodeExecPresent,
 	CodeCompatChange, CodeGeneratedDelta,
-	CodeGHACaps, CodeGHAUsing,
+	CodeGHACaps, CodeGHAUsing, CodeGHARefMoved,
 	CodeBinaryAdded, CodeBinaryChanged,
 	CodeRedirect,
 	CodeCensusNew, CodeCensusCVE, CodeCensusExec, CodeCensusBig,
@@ -216,6 +217,21 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		}
 	}
 
+	// a mutable gha ref observed re-pointing between runs. Re-pointing an
+	// exact-release tag is the tj-actions vector (look now); a floating major
+	// tag (v4) re-points on every release (weigh, still worth knowing what
+	// the new commit is).
+	for _, m := range s.MovedRefs {
+		w := weightWeigh
+		title := "floating ref re-pointed since last fetch"
+		if looksExactRelease(m.Ref) {
+			w = weightLook
+			title = "release tag re-pointed since last fetch (the tj-actions vector)"
+		}
+		add(CodeGHARefMoved, KindFact, LensSecurity, w, title,
+			fmt.Sprintf("%s %q now %.12s, was %.12s; re-analysed at the new commit", m.Side, m.Ref, m.SHA, m.Prev))
+	}
+
 	// binaries carry a ZERO line delta (git -/-), so line-based ranking hides
 	// them; rank by BYTES and name every one. A newly-added opaque file is
 	// fact-grade regardless of size (an ideal payload channel); a changed one
@@ -300,6 +316,26 @@ func firstN(xs []string, n int) string {
 		return strings.Join(xs, ", ")
 	}
 	return strings.Join(xs[:n], ", ") + fmt.Sprintf(", +%d more", len(xs)-n)
+}
+
+// looksExactRelease reports whether a gha ref is shaped like an exact release
+// tag (vX.Y.Z), which convention treats as pointing at one release forever, as
+// opposed to a floating major/minor tag (v4, v4.2) or a branch, which move
+// routinely. Shape is the only distinction available: a tag carries no
+// declared mutability policy.
+func looksExactRelease(ref string) bool {
+	parts := strings.Split(strings.TrimPrefix(ref, "v"), ".")
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return len(parts) >= 3
 }
 
 // integrityTLSOnly reports whether either side was verified by TLS trust alone

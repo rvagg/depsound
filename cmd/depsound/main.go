@@ -177,6 +177,15 @@ func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (
 		}
 		return nil, fmt.Errorf("from and to are the same version (%s); nothing to diff", from)
 	}
+	// gha refs resolve to commits fresh on every run (a moved tag must never
+	// hide behind a cache); the resolved shas key the artifacts and validate
+	// any cached workspace below
+	var ghaPins map[string]ghaPin
+	if sp.Eco == spec.GHA {
+		if ghaPins, err = resolveGHAPins(sp.Name, from, to); err != nil {
+			return nil, err
+		}
+	}
 	c, err := cache.Open(cacheDir)
 	if err != nil {
 		return nil, err
@@ -189,11 +198,20 @@ func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (
 	}
 	ws := c.WorkspacePath(string(sp.Eco), wsKey, from, to)
 	st, err := loadWorkspace(ws)
+	var moved []stats.MovedRef
+	if err == nil && sp.Eco == spec.GHA {
+		// a cached workspace built from commits a mutable ref no longer
+		// points at is stale bytes wearing a current label: rebuild
+		if moved = ghaMovedRefs(st, from, to, ghaPins); len(moved) > 0 {
+			err = fmt.Errorf("gha ref moved; workspace stale")
+		}
+	}
 	if err != nil {
-		if st, err = materialize(c, sp, from, to, ws); err != nil {
+		if st, err = materialize(c, sp, from, to, ws, ghaPins); err != nil {
 			return nil, err
 		}
 	}
+	st.MovedRefs = moved
 	idx, err := loadIndex(ws)
 	if err != nil {
 		return nil, err
@@ -334,7 +352,49 @@ func writeJSON(path string, v any) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
-func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stats, error) {
+// ghaPin is a gha ref's resolved identity for one run: the commit that keys
+// the artifact cache and the pin kind that grades it.
+type ghaPin struct {
+	sha, kind string
+}
+
+// resolveGHAPins resolves both sides of a gha diff, keyed by ref.
+func resolveGHAPins(name string, refs ...string) (map[string]ghaPin, error) {
+	ctx, client := context.Background(), &http.Client{}
+	pins := make(map[string]ghaPin, len(refs))
+	for _, ref := range refs {
+		if _, ok := pins[ref]; ok {
+			continue
+		}
+		sha, kind, err := fetch.ResolveGHAPin(ctx, client, name, ref)
+		if err != nil {
+			return nil, err
+		}
+		pins[ref] = ghaPin{sha, kind}
+	}
+	return pins, nil
+}
+
+// ghaMovedRefs compares a cached workspace's recorded source commits against
+// a fresh resolution. A mismatch on a mutable ref means the ref re-pointed
+// since the workspace was built; the caller rebuilds and reports the move.
+func ghaMovedRefs(st *stats.Stats, from, to string, pins map[string]ghaPin) []stats.MovedRef {
+	var moved []stats.MovedRef
+	check := func(side, ref string, src *stats.Source) {
+		if src == nil || src.RefKind == "sha" {
+			return
+		}
+		prev := strings.TrimPrefix(src.Digest, "git-")
+		if pin, ok := pins[ref]; ok && prev != "" && prev != pin.sha {
+			moved = append(moved, stats.MovedRef{Side: side, Ref: ref, Prev: prev, SHA: pin.sha})
+		}
+	}
+	check("from", from, st.Artifact.SourceFrom)
+	check("to", to, st.Artifact.SourceTo)
+	return moved
+}
+
+func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[string]ghaPin) (*stats.Stats, error) {
 	ctx := context.Background()
 	// no total timeout: fetch applies a metadata deadline and a download
 	// stall watchdog, so slow links with big artifacts are never killed
@@ -345,7 +405,13 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 	arts := map[string]string{}
 	srcs := map[string]*stats.Source{}
 	for _, v := range []string{from, to} {
-		dest := c.ArtifactPath(string(sp.Eco), sp.Name, v, ext)
+		// gha artifacts are keyed by resolved commit, not the (possibly
+		// mutable) ref, so the cached bytes are genuinely immutable
+		artKey := v
+		if sp.Eco == spec.GHA {
+			artKey = ghaPins[v].sha
+		}
+		dest := c.ArtifactPath(string(sp.Eco), sp.Name, artKey, ext)
 		if _, err := os.Stat(dest); err != nil {
 			fmt.Fprintf(os.Stderr, "depsound: fetching %s@%s\n", sp, v)
 		}
@@ -360,7 +426,8 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string) (*stats.Stat
 		case spec.Crates:
 			err = fetch.Crate(ctx, client, sp.Name, v, dest)
 		case spec.GHA:
-			err = fetch.GHA(ctx, client, sp.Name, v, dest)
+			p := ghaPins[v]
+			err = fetch.GHA(ctx, client, sp.Name, v, p.sha, p.kind, dest)
 		}
 		if err != nil {
 			return nil, err

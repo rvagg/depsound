@@ -60,6 +60,7 @@ func markdownMarkers() map[Code]string {
 		CodeExportsUnresolved: "could not be computed",
 		CodeBinDelta:          "installed executable",
 		CodeProvenanceAnomaly: "provenance anomaly",
+		CodeGHARefMoved:       "since last fetch",
 	}
 }
 
@@ -94,6 +95,7 @@ func bulkMarkers() map[Code]string {
 		CodeExportsUnresolved: "could not be computed",
 		CodeBinDelta:          "installed executable",
 		CodeProvenanceAnomaly: "provenance anomaly",
+		CodeGHARefMoved:       "since last fetch",
 	}
 }
 
@@ -119,7 +121,8 @@ func parityFixture() []BulkResult {
 		{Ref: "go:b v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}},
 		{Ref: "npm:c 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}},                            // disabled
 		{Ref: "npm:f 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false, Note: "OSV lookup failed"}}}, // failed
-		{Ref: "gha:u v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false}}},                          // unsupported
+		{Ref: "gha:u v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
+			MovedRefs: []stats.MovedRef{{Side: "to", Ref: "v2.0.1", Prev: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}, // osv-unsupported + moved ref
 		{Ref: "npm:hard 1 -> 2", Stats: &stats.Stats{
 			Package:  stats.PkgRef{Ecosystem: "npm"},
 			Security: stats.Security{Queried: true},

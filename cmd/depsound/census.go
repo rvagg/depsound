@@ -285,8 +285,20 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		}
 	}
 
+	// gha refs resolve to a commit fresh on every run, and the artifact and
+	// tree are keyed by that commit, so a mutable ref (tag/branch) that
+	// re-points gets a fresh fetch instead of a stale cache hit
+	var pin ghaPin
+	artKey := v
+	if sp.Eco == spec.GHA {
+		pin.sha, pin.kind, err = fetch.ResolveGHAPin(ctx, client, sp.Name, v)
+		if err != nil {
+			return nil, err
+		}
+		artKey = pin.sha
+	}
 	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate", spec.GHA: ".tar.gz"}[sp.Eco]
-	art := c.ArtifactPath(string(sp.Eco), sp.Name, v, ext)
+	art := c.ArtifactPath(string(sp.Eco), sp.Name, artKey, ext)
 	if _, err := os.Stat(art); err != nil {
 		fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", sp, v)
 	}
@@ -298,7 +310,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	case spec.Crates:
 		err = fetch.Crate(ctx, client, sp.Name, v, art)
 	case spec.GHA:
-		err = fetch.GHA(ctx, client, sp.Name, v, art)
+		err = fetch.GHA(ctx, client, sp.Name, v, pin.sha, pin.kind, art)
 	}
 	if err != nil {
 		return nil, err
@@ -308,8 +320,9 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	}
 
 	// persist the tree so the agent can search it; re-extract only if the
-	// cached tree is missing (the artifact is immutable)
-	tree := c.CensusPath(string(sp.Eco), sp.Name, v)
+	// cached tree is missing (keyed like the artifact: by resolved commit
+	// for gha, so the immutability assumption holds for mutable refs too)
+	tree := c.CensusPath(string(sp.Eco), sp.Name, artKey)
 	if _, err := os.Stat(tree); err != nil {
 		tmp := tree + ".tmp"
 		os.RemoveAll(tmp)

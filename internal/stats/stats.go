@@ -51,6 +51,7 @@ type Stats struct {
 	Action      *ActionSection     `json:"action,omitempty"` // gha only
 	Provenance  *provenance.Result `json:"provenance,omitempty"`
 	Resolution  *Resolution        `json:"resolution,omitempty"`
+	MovedRefs   []MovedRef         `json:"movedRefs,omitempty"` // gha only, report-time
 	Workspace   string             `json:"workspace"`
 	Notes       []string           `json:"notes,omitempty"`
 	// Coverage and NextActions are the anti-false-security spine: what
@@ -108,6 +109,18 @@ type Source struct {
 	Verification string `json:"verification,omitempty"`
 	// RefKind is the GitHub Actions pin tier (sha|tag|branch).
 	RefKind string `json:"refKind,omitempty"`
+}
+
+// MovedRef records a mutable GitHub Actions ref observed resolving to a
+// different commit than a cached analysis was built from; the workspace is
+// rebuilt at the new commit before reporting. Report-time observation
+// (depends on local cache state), attached after load, never persisted in
+// the workspace.
+type MovedRef struct {
+	Side string `json:"side"` // from|to
+	Ref  string `json:"ref"`
+	Prev string `json:"prev"` // commit the stale analysis was built from
+	SHA  string `json:"sha"`  // commit the ref resolves to now
 }
 
 type Runnable struct {

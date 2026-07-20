@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -45,6 +46,18 @@ func ResolveGHARef(ctx context.Context, client *http.Client, name, ref string) (
 	return sha, "branch", nil
 }
 
+// ResolveGHAPin resolves a ref to its immutable identity for fetching. A
+// full-sha ref needs no network (it is already the identity; a bogus one
+// fails at download). Mutable refs (tag/branch) hit the API fresh on every
+// call, by design: a moved tag must never hide behind a cache, so resolution
+// is never reused between runs.
+func ResolveGHAPin(ctx context.Context, client *http.Client, name, ref string) (sha, kind string, err error) {
+	if isHexSHA(ref) {
+		return strings.ToLower(ref), "sha", nil
+	}
+	return ResolveGHARef(ctx, client, name, ref)
+}
+
 func githubRefExists(ctx context.Context, client *http.Client, name, kind, ref string) bool {
 	ctx, cancel := context.WithTimeout(ctx, metaTimeout)
 	defer cancel()
@@ -78,23 +91,28 @@ func isHexSHA(s string) bool {
 	return true
 }
 
-// GHA fetches the repo tree tarball for owner/repo at ref. Unlike a registry
-// artifact there is no byte checksum to verify against; the trust anchor is
-// the resolved commit SHA (recorded in the sidecar Digest), and the tarball
-// bytes rest on TLS trust, so the verification is recorded as tls-only.
-func GHA(ctx context.Context, client *http.Client, name, ref, dest string) error {
+// GHA fetches the repo tree tarball for owner/repo at an already-resolved
+// commit. It downloads by sha, never by the caller's ref: a mutable ref can
+// re-point between resolution and download, and the sidecar Digest must name
+// the bytes actually fetched. dest must be keyed by sha too, so the cached
+// artifact is genuinely immutable and a cache hit needs no rehash (no
+// registry checksum exists; the sha is the identity, bytes rest on TLS
+// trust, recorded as tls-only). ref is the caller's spelling, kept for
+// error messages; kind (sha|tag|branch) rides into the sidecar.
+func GHA(ctx context.Context, client *http.Client, name, ref, sha, kind, dest string) error {
 	if _, err := os.Stat(dest); err == nil && ReadMeta(dest) != nil {
-		return nil // cached; GHA has no byte checksum to rehash
+		return nil
 	}
-	sha, kind, err := ResolveGHARef(ctx, client, name, ref)
-	if err != nil {
-		return err
-	}
-	u := fmt.Sprintf("https://codeload.github.com/%s/tar.gz/%s", name, ref)
+	u := GHATarballURL(name, sha)
 	if err := downloadPlain(ctx, client, u, dest); err != nil {
-		return fmt.Errorf("gha:%s@%s: %w", name, ref, err)
+		return fmt.Errorf("gha:%s@%s (commit %s): %w", name, ref, sha, err)
 	}
 	return writeMeta(dest, Meta{URL: u, Digest: "git-" + sha, Verification: VerifyTLSOnly, RefKind: kind})
+}
+
+// GHATarballURL is the immutable download address for a resolved commit.
+func GHATarballURL(name, sha string) string {
+	return fmt.Sprintf("https://codeload.github.com/%s/tar.gz/%s", name, sha)
 }
 
 func getGitHubJSON(ctx context.Context, client *http.Client, u string, v any) error {
