@@ -50,7 +50,7 @@ func Text(s *stats.Stats) string {
 	}
 	writeEntrypoints(w, s.Entrypoints)
 	if s.Artifact.SourceTo != nil {
-		writeIntegrity(w, s.Artifact.SourceTo.Verification)
+		writeIntegrity(w, s.Artifact.SourceTo.Verification, s.Package.Ecosystem)
 	}
 	for _, e := range s.Embedded {
 		// a lead, not a verdict: the upstream identity this vendored blob

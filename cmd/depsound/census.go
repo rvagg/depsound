@@ -411,6 +411,7 @@ func censusGHA(cen *output.Census, scoped, art, ref, sub string) error {
 		kind = m.RefKind
 	}
 	cen.Resolved = fmt.Sprintf("%s (%s) -> %s", ref, orUnknown(kind), sha)
+	cen.GHAPinKind, cen.GHAPinSHA = kind, sha
 	switch kind {
 	case "sha":
 		cen.Notes = append(cen.Notes, "SHA pin (immutable, good practice)")

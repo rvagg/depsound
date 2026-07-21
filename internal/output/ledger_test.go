@@ -41,9 +41,15 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 		Action: &stats.ActionSection{
 			CapsIntroduced: []string{"id-token"},
 			UsingFrom:      "node20", UsingTo: "node24",
+			Pins: []stats.ActionPin{{Side: "from", Kind: "sha", Ref: "aaaa"}, {Side: "to", Kind: "tag", Ref: "v2"}}, // weakened
 		},
 		MovedRefs: []stats.MovedRef{{Side: "to", Ref: "v2.0.1", Prev: "aaaa", SHA: "bbbb"}},
 	}))
+	// the other pin-delta shapes: strengthened, and same-grade standing context
+	collect(Derive("pinup", &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
+		Action: &stats.ActionSection{Pins: []stats.ActionPin{{Side: "from", Kind: "tag", Ref: "v1"}, {Side: "to", Kind: "sha", Ref: "bbbb"}}}}))
+	collect(Derive("pinsame", &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
+		Action: &stats.ActionSection{Pins: []stats.ActionPin{{Side: "from", Kind: "tag", Ref: "v1"}, {Side: "to", Kind: "tag", Ref: "v2"}}}}))
 	// exec present-in-both (not introduced), and the three not-queried OSV
 	// states: disabled (covered eco, no scan), failed (scan errored),
 	// unsupported (no OSV index for the eco).
@@ -165,5 +171,74 @@ func TestDeriveCensusExtractionEvidence(t *testing.T) {
 	}
 	if Assess(l).Clean() {
 		t.Error("a census with hostile entries must not read clean")
+	}
+}
+
+// The pin-grade delta doctrine: a downgrade is the re-point-enabling move
+// (look), an upgrade is a positive note, tag->tag is standing context that
+// must NOT weigh (a Dependabot tag bump every cycle tripping the headline is
+// exactly the stale-noise this tool exists to kill), and a branch pin weighs
+// every time.
+func TestDerivePinDelta(t *testing.T) {
+	derive := func(fromKind, toKind string) Ledger {
+		return Derive("p", &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
+			Action: &stats.ActionSection{Pins: []stats.ActionPin{
+				{Side: "from", Kind: fromKind, Ref: "a"}, {Side: "to", Kind: toKind, Ref: "b"}}}})
+	}
+	find := func(l Ledger, code Code) *Signal {
+		for i := range l.Signals {
+			if l.Signals[i].Code == code {
+				return &l.Signals[i]
+			}
+		}
+		return nil
+	}
+
+	if s := find(derive("sha", "tag"), CodeGHAPinWeakened); s == nil || s.Weight != weightLook {
+		t.Errorf("sha->tag: want look-tier weakened, got %+v", s)
+	}
+	if s := find(derive("tag", "branch"), CodeGHAPinWeakened); s == nil || s.Weight != weightLook {
+		t.Errorf("tag->branch: want look-tier weakened, got %+v", s)
+	}
+	if s := find(derive("tag", "sha"), CodeGHAPinRaised); s == nil || s.Weight != weightPositive {
+		t.Errorf("tag->sha: want positive raised, got %+v", s)
+	}
+	tagBoth := derive("tag", "tag")
+	if s := find(tagBoth, CodeGHAPinGrade); s == nil || s.Weight != weightPositive {
+		t.Errorf("tag->tag: want positive context, got %+v", s)
+	}
+	if !Assess(tagBoth).Clean() {
+		t.Error("a tag->tag bump must stay clean (context, not a headline flip)")
+	}
+	if s := find(derive("branch", "branch"), CodeGHAPinGrade); s == nil || s.Weight != weightWeigh {
+		t.Errorf("branch->branch: want weigh, got %+v", s)
+	}
+	if s := find(derive("sha", "sha"), CodeGHAPinGrade); s != nil {
+		t.Errorf("sha->sha: immutable both sides needs no grade line, got %+v", s)
+	}
+}
+
+// Adoption is the moment the pin is chosen: the same tag grade that is quiet
+// context in a diff weighs in a census, and capabilities present are a
+// context heuristic.
+func TestDeriveCensusGHA(t *testing.T) {
+	l := DeriveCensus("cen", &Census{Ecosystem: "gha", Files: 3, GHAPinKind: "tag", GHACaps: []string{"network egress"}})
+	var pin, caps *Signal
+	for i := range l.Signals {
+		switch l.Signals[i].Code {
+		case CodeGHAPinGrade:
+			pin = &l.Signals[i]
+		case CodeGHACaps:
+			caps = &l.Signals[i]
+		}
+	}
+	if pin == nil || pin.Weight != weightWeigh {
+		t.Errorf("census tag pin: want weigh, got %+v", pin)
+	}
+	if caps == nil || caps.Weight != weightPositive || caps.Kind != KindHeuristic {
+		t.Errorf("census caps: want positive heuristic, got %+v", caps)
+	}
+	if l2 := DeriveCensus("cen2", &Census{Ecosystem: "gha", Files: 3, GHAPinKind: "branch"}); Assess(l2).Tier != weightLook {
+		t.Errorf("census branch pin: want look tier, got %+v", Assess(l2))
 	}
 }

@@ -62,7 +62,10 @@ const (
 	CodeGeneratedDelta    Code = "generated.delta"
 	CodeGHACaps           Code = "gha.capsIntroduced"
 	CodeGHAUsing          Code = "gha.using"
-	CodeGHARefMoved       Code = "gha.refMoved" // mutable ref resolves to a different commit than last fetch
+	CodeGHARefMoved       Code = "gha.refMoved"    // mutable ref resolves to a different commit than last fetch
+	CodeGHAPinWeakened    Code = "gha.pinWeakened" // pin grade dropped (sha->tag/branch, tag->branch): the re-point enabling move
+	CodeGHAPinRaised      Code = "gha.pinRaised"   // pin grade rose toward sha
+	CodeGHAPinGrade       Code = "gha.pinGrade"    // the standing grade: same-grade context in a diff, adoption fact in a census
 	CodeBinaryAdded       Code = "binary.added"
 	CodeBinaryChanged     Code = "binary.changed"
 	CodeRedirect          Code = "redirect"
@@ -91,6 +94,7 @@ var allCodes = []Code{
 	CodeExecIntroduced, CodeExecPresent,
 	CodeCompatChange, CodeGeneratedDelta,
 	CodeGHACaps, CodeGHAUsing, CodeGHARefMoved,
+	CodeGHAPinWeakened, CodeGHAPinRaised, CodeGHAPinGrade,
 	CodeBinaryAdded, CodeBinaryChanged,
 	CodeRedirect,
 	CodeCensusNew, CodeCensusCVE, CodeCensusExec, CodeCensusBig,
@@ -215,6 +219,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 			add(CodeGHAUsing, KindFact, LensCompat, weightWeigh,
 				"action runtime changed", a.UsingFrom+" -> "+a.UsingTo)
 		}
+		derivePinDelta(add, a.Pins)
 	}
 
 	// a mutable gha ref observed re-pointing between runs. Re-pointing an
@@ -318,6 +323,57 @@ func firstN(xs []string, n int) string {
 	return strings.Join(xs[:n], ", ") + fmt.Sprintf(", +%d more", len(xs)-n)
 }
 
+// pinGrade orders gha pin kinds: sha (immutable) > tag (mutable, re-pointable)
+// > branch (unpinned, moves on every push). Unknown reads as tag (the pinOf
+// fallback for pre-RefKind sidecars).
+func pinGrade(kind string) int {
+	switch kind {
+	case "sha":
+		return 2
+	case "branch":
+		return 0
+	}
+	return 1
+}
+
+// derivePinDelta applies the delta doctrine to the pin grade of a gha bump: a
+// DOWNGRADE is the re-point-enabling move (look now); an upgrade is worth a
+// positive note; the same mutable grade on both sides is standing context (a
+// tag bump every Dependabot cycle must not trip the headline), except a
+// branch pin, which weighs every time (there is no stable thing under review).
+func derivePinDelta(add func(Code, SignalKind, Lens, int, string, string), pins []stats.ActionPin) {
+	var pf, pt *stats.ActionPin
+	for i := range pins {
+		switch pins[i].Side {
+		case "from":
+			pf = &pins[i]
+		case "to":
+			pt = &pins[i]
+		}
+	}
+	if pf == nil || pt == nil {
+		return
+	}
+	refs := fmt.Sprintf("%q -> %q", pf.Ref, pt.Ref)
+	switch gf, gt := pinGrade(pf.Kind), pinGrade(pt.Kind); {
+	case gt < gf:
+		add(CodeGHAPinWeakened, KindFact, LensSecurity, weightLook,
+			"pin weakened: "+pf.Kind+" -> "+pt.Kind,
+			refs+"; the move that enables a later re-point, verify it is intentional")
+	case gt > gf:
+		add(CodeGHAPinRaised, KindFact, LensSecurity, weightPositive,
+			"pin strengthened: "+pf.Kind+" -> "+pt.Kind, refs)
+	case pt.Kind == "branch":
+		add(CodeGHAPinGrade, KindFact, LensSecurity, weightWeigh,
+			"branch-pinned on both sides (unpinned; you run whatever is there)",
+			refs+"; pin a tag or, better, a sha")
+	case pt.Kind == "tag":
+		add(CodeGHAPinGrade, KindFact, LensSecurity, weightPositive,
+			"tag-pinned on both sides (mutable, re-pointable)",
+			refs+"; resolved shas recorded, prefer a sha pin")
+	}
+}
+
 // looksExactRelease reports whether a gha ref is shaped like an exact release
 // tag (vX.Y.Z), which convention treats as pointing at one release forever, as
 // opposed to a floating major/minor tag (v4, v4.2) or a branch, which move
@@ -374,6 +430,24 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	if c.hasExec() {
 		add(CodeCensusExec, KindFact, LensSecurity, weightLook,
 			"runs code on install/build", strings.Join(censusExecWhat(c), ", "))
+	}
+	// adoption is the moment the pin is chosen, so the grade weighs here even
+	// though the same grade is quiet context in a diff (delta doctrine): the
+	// agent can still choose the resolved sha instead.
+	switch c.GHAPinKind {
+	case "tag":
+		add(CodeGHAPinGrade, KindFact, LensSecurity, weightWeigh,
+			"adopting at a mutable tag pin (re-pointable)", "pin the resolved sha instead")
+	case "branch":
+		add(CodeGHAPinGrade, KindFact, LensSecurity, weightLook,
+			"adopting at an unpinned branch (moves on every push)", "pin a sha")
+	case "sha":
+		add(CodeGHAPinGrade, KindFact, LensSecurity, weightPositive,
+			"adopting at an immutable sha pin", "")
+	}
+	if len(c.GHACaps) > 0 {
+		add(CodeGHACaps, KindHeuristic, LensSecurity, weightPositive,
+			"runner capability references present (grep of the executed code, evadable)", strings.Join(c.GHACaps, ", "))
 	}
 	// extraction evidence carries the same weight as in a diff: an adoption
 	// whose artifact needed hostile-member skips is the one to read closest

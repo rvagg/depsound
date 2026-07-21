@@ -121,10 +121,35 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 			fmt.Sprintf("depsound transitive %s --old=<base %s> --new=<PR %s>", s.Package.Ecosystem, lock, lock))
 	}
 
-	// Always last, and always present: reachability is the tool's blind
-	// spot, so the standing next-step is to intersect the diff with actual
-	// usage. This is the anti-closure nudge on an otherwise-quiet result.
-	add("reachability and semantics are not assessed; if you rely on this dependency, intersect the diff with your usage",
-		"depsound surface "+ref+" --uses=<your import paths>")
+	// The standing anti-closure nudge differs by threat model. An action runs
+	// on the runner, not in your code, so import-path intersection (surface)
+	// is meaningless there; the gha next-steps are the pin and the payload.
+	if a := s.Action; a != nil {
+		if sha := pinSHA(a.Pins, "to"); sha != "" {
+			add("a tag can re-point after this review; pin the commit the review actually covered",
+				fmt.Sprintf("uses: %s@%s # %s", s.Package.Name, sha, s.Package.To))
+		}
+		add("the dist bundle is what executes on the runner; read the changed entrypoint files in the workspace diff", "")
+		if len(a.Nested) > 0 {
+			add(fmt.Sprintf("%d nested action(s) are their own supply chain; vet each pin", len(a.Nested)),
+				"depsound gha:<owner/repo> <ref>   (census each nested pin)")
+		}
+	} else {
+		// Always last, and always present: reachability is the tool's blind
+		// spot, so the standing next-step is to intersect the diff with actual
+		// usage. This is the anti-closure nudge on an otherwise-quiet result.
+		add("reachability and semantics are not assessed; if you rely on this dependency, intersect the diff with your usage",
+			"depsound surface "+ref+" --uses=<your import paths>")
+	}
 	return cov, na
+}
+
+// pinSHA returns the resolved commit of the named side's pin, "" if absent.
+func pinSHA(pins []stats.ActionPin, side string) string {
+	for _, p := range pins {
+		if p.Side == side {
+			return p.SHA
+		}
+	}
+	return ""
 }

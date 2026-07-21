@@ -38,6 +38,12 @@ type Census struct {
 	GHAExec   []manifest.Change `json:"ghaExec,omitempty"`
 	GHANested []string          `json:"ghaNested,omitempty"`
 	GHACaps   []string          `json:"ghaCaps,omitempty"`
+	// GHAPinKind grades the adopted ref (sha|tag|branch): adoption is the
+	// moment the pin is chosen, so the grade is a first-class census fact.
+	// GHAPinSHA is the commit the ref resolved to at census time, the value
+	// a pin-it-down next step can hand straight to the consumer.
+	GHAPinKind string `json:"ghaPinKind,omitempty"`
+	GHAPinSHA  string `json:"ghaPinSha,omitempty"`
 
 	// SkippedLinks/HostileEntries mirror the diff-side artifact evidence:
 	// members the hardened extractor refused to materialize. Persisted with
@@ -223,7 +229,7 @@ func writeSubtree(w func(string, ...any), c *Census) {
 // values) to a human line and whether it is WEAK: the strong checksum anchor
 // (Go's sumdb, the registry hash) was unavailable and only TLS/sha1 covered
 // the download.
-func integrityText(v string) (text string, weak bool) {
+func integrityText(v, eco string) (text string, weak bool) {
 	switch v {
 	case "sumdb-lookup":
 		// an independent, append-only, globally-witnessed log: a real anchor
@@ -234,6 +240,12 @@ func integrityText(v string) (text string, weak bool) {
 	case "registry-sha256":
 		return "registry sha256 (artifact integrity, self-attested; not an independent anchor)", false
 	case "tls-only":
+		// tls-only means different things per ecosystem: gha has no registry
+		// checksum to miss (the resolved commit sha is the anchor); for Go it
+		// marks a failed sumdb lookup, a real degradation
+		if eco == "gha" {
+			return "TLS transport (git tarball; no registry checksum exists, the resolved commit sha is the anchor)", false
+		}
 		return "TLS transport only, no integrity hash (Go sumdb lookup failed)", true
 	case "tls-only-sha1":
 		return "TLS + weak sha1 hash only", true
@@ -253,14 +265,8 @@ func writeEntrypoints(w func(string, ...any), eps []string) {
 
 // writeIntegrity shows how the fetched artifact was verified: Go's sumdb
 // anchor, the registry hash, or a WEAK TLS-only fallback worth flagging.
-func writeIntegrity(w func(string, ...any), verification string) {
-	text, weak := integrityText(verification)
-	if text == "" {
-		return
-	}
-	if weak {
-		w("integrity: %s", text)
-	} else {
+func writeIntegrity(w func(string, ...any), verification, eco string) {
+	if text, _ := integrityText(verification, eco); text != "" {
 		w("integrity: %s", text)
 	}
 }
@@ -445,7 +451,7 @@ func CensusText(c *Census) string {
 		w("  %-10s %d %s", cl.Class, cl.Files, plu(cl.Files))
 	}
 	writeEntrypoints(w, c.Entrypoints)
-	writeIntegrity(w, c.Integrity)
+	writeIntegrity(w, c.Integrity, c.Ecosystem)
 	// same wording as the diff surface: this is the extractor's refusal
 	// evidence, and an adoption is the read that must not lose it
 	if n := len(c.SkippedLinks); n > 0 {
@@ -594,6 +600,12 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 			"declared DIRECT dependencies",
 		},
 	}
+	// a gha census checks an action.yml, not a package manifest; claiming the
+	// npm/Go/Rust execution surfaces here would be a false coverage claim
+	if c.Ecosystem == "gha" {
+		cov.Checked[1] = "action.yml execution model (using, entrypoints) + capability references (grep of the executed code, evadable)"
+		cov.Checked[2] = "nested `uses:` pins (listed, not walked)"
+	}
 	// OSV: checked only when it ran, else stated as a gap (mirrors the diff Guide).
 	if ok, line := osvCoverageLine(c.Ecosystem, c.OSVQueried, c.OSVNote); ok {
 		cov.Checked = append(cov.Checked, line)
@@ -601,10 +613,14 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 		cov.NotChecked = append(cov.NotChecked, line)
 	}
 	// --transitive resolved the whole subtree, so it is no longer a blind
-	// spot; note it is a deps.dev estimate, not the verified install
-	if c.Subtree != nil {
+	// spot; note it is a deps.dev estimate, not the verified install. gha has
+	// no resolver (its transitive graph is the nested actions, stated above).
+	switch {
+	case c.Subtree != nil:
 		cov.Checked[2] = "full transitive subtree (via deps.dev estimate)"
-	} else {
+	case c.Ecosystem == "gha":
+		cov.NotChecked = append(cov.NotChecked, "the nested actions' own trees (each nested pin is its own supply chain)")
+	default:
 		cov.NotChecked = append(cov.NotChecked, "the full transitive subtree you adopt (only direct deps shown here)")
 	}
 	// provenance runs by default; when it answered, its blind spot flips
@@ -629,7 +645,24 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 	if len(c.Vulns) > 0 {
 		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known CVEs in this version; consider a patched version or alternative", len(c.Vulns))})
 	}
-	if c.Subtree == nil {
+	if c.Ecosystem == "gha" {
+		// --transitive (deps.dev) does not cover actions; the transitive
+		// surface is the nested pins, and the pin itself is the next move
+		if len(c.GHANested) > 0 {
+			na = append(na, stats.NextAction{
+				Reason:  fmt.Sprintf("%d nested action(s) are their own supply chain; vet each pin", len(c.GHANested)),
+				Command: "depsound gha:<owner/repo> <ref>   (census each nested pin)"})
+		}
+		if c.GHAPinKind == "tag" || c.GHAPinKind == "branch" {
+			sha := c.GHAPinSHA
+			if sha == "" {
+				sha = "<resolved sha above>"
+			}
+			na = append(na, stats.NextAction{
+				Reason:  "the ref is mutable; adopt the commit this census actually covered",
+				Command: fmt.Sprintf("uses: %s@%s # %s", c.Name, sha, c.Version)})
+		}
+	} else if c.Subtree == nil {
 		na = append(na, stats.NextAction{Reason: "only the direct deps are shown; resolve the full transitive footprint you would adopt",
 			Command: "depsound " + c.Ecosystem + ":" + c.Name + " " + c.Version + " --transitive  (npm/crates; go uses go.mod)"})
 	} else {
