@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -279,5 +280,52 @@ func TestDetectReadPairsRejectsMalformed(t *testing.T) {
 	}
 	if _, err := readDetectPairs(p); err == nil {
 		t.Fatal("want error on a non-3-field line")
+	}
+}
+
+// TestDetectGHAUnsupportedUses: a changed docker image or reusable-workflow
+// call cannot be fetched, so it must ride the unresolved stream as a loud
+// coverage gap, never vanish. Unchanged ones stay quiet (delta doctrine),
+// and a newly added one surfaces too.
+func TestDetectGHAUnsupportedUses(t *testing.T) {
+	write := func(content string) string {
+		p := filepath.Join(t.TempDir(), "wf.yml")
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	wf := func(img, reuse, extra string) string {
+		s := "jobs:\n  b:\n    steps:\n" +
+			"      - uses: docker://" + img + "\n" +
+			"      - uses: docker://redis:7\n" + // unchanged: must stay quiet
+			extra +
+			"  call:\n    uses: owner/repo/.github/workflows/ci.yml@" + reuse + "\n"
+		return s
+	}
+	old := wf("alpine:3.19", "v1", "")
+	niu := wf("alpine:3.20", "v2", "      - uses: docker://busybox:1.36\n")
+	res := detectChanges([]detectPair{{path: ".github/workflows/ci.yml", old: write(old), new: write(niu)}})
+	if len(res.Changed) != 0 || len(res.Added) != 0 {
+		t.Errorf("unsupported kinds must not enter the analysable lists: changed=%+v added=%+v", res.Changed, res.Added)
+	}
+	if len(res.Unresolved) != 3 {
+		t.Fatalf("want 3 unresolved rows (image bump, reusable bump, image added), got %+v", res.Unresolved)
+	}
+	joined := ""
+	for _, u := range res.Unresolved {
+		joined += u.Reason + "\n"
+	}
+	for _, want := range []string{
+		"docker://alpine changed 3.19 -> 3.20",
+		"owner/repo/.github/workflows/ci.yml changed v1 -> v2",
+		"docker://busybox added at 1.36",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("unresolved rows missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "redis") {
+		t.Errorf("unchanged docker image must not surface:\n%s", joined)
 	}
 }

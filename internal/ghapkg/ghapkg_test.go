@@ -8,8 +8,9 @@ import (
 )
 
 // TestWorkflowUses: a workflow's action pins are the resolved set; SHA + version
-// comment yields the SHA, tags pass through, and local/docker/reusable are
-// skipped (empty Identity) so a bump of a real action is all that surfaces.
+// comment yields the SHA, tags pass through, docker/reusable keep an identity
+// and ref (they cannot be fetched but a change must surface), and local `./`
+// actions are the repo's own code.
 func TestWorkflowUses(t *testing.T) {
 	wf := `
 name: ci
@@ -31,11 +32,11 @@ jobs:
 		t.Fatal(err)
 	}
 	want := []Use{
-		{Identity: "actions/checkout", Ref: "11bd71901bbe5b1630ceea73d27597364c9af683", Raw: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"},
-		{Identity: "actions/setup-node", Ref: "v4", Raw: "actions/setup-node@v4"},
-		{Raw: "./.github/actions/local"},
-		{Raw: "docker://alpine:3.20"},
-		{Raw: "owner/repo/.github/workflows/reusable.yml@v1"},
+		{Identity: "actions/checkout", Ref: "11bd71901bbe5b1630ceea73d27597364c9af683", Raw: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683", Kind: "action"},
+		{Identity: "actions/setup-node", Ref: "v4", Raw: "actions/setup-node@v4", Kind: "action"},
+		{Raw: "./.github/actions/local", Kind: "local"},
+		{Identity: "docker://alpine", Ref: "3.20", Raw: "docker://alpine:3.20", Kind: "docker"},
+		{Identity: "owner/repo/.github/workflows/reusable.yml", Ref: "v1", Raw: "owner/repo/.github/workflows/reusable.yml@v1", Kind: "reusable"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got  %+v\nwant %+v", got, want)
@@ -139,5 +140,22 @@ func TestMissingAndUnparseable(t *testing.T) {
 	a := write(t, "runs: [this is: not valid: yaml")
 	if len(a.Warnings) == 0 {
 		t.Errorf("unparseable action.yml should warn: %+v", a)
+	}
+}
+
+// Docker uses: shapes: tag, digest, untagged (implicit latest), and a
+// registry port that must not be mistaken for a tag separator.
+func TestParseUseDocker(t *testing.T) {
+	cases := []struct{ raw, id, ref string }{
+		{"docker://alpine:3.20", "docker://alpine", "3.20"},
+		{"docker://alpine@sha256:abc123", "docker://alpine", "sha256:abc123"},
+		{"docker://alpine", "docker://alpine", ""},
+		{"docker://ghcr.io:443/owner/img:v1", "docker://ghcr.io:443/owner/img", "v1"},
+	}
+	for _, c := range cases {
+		u := parseUse(c.raw)
+		if u.Kind != "docker" || u.Identity != c.id || u.Ref != c.ref {
+			t.Errorf("parseUse(%q) = %+v, want id %q ref %q", c.raw, u, c.id, c.ref)
+		}
 	}
 }

@@ -117,15 +117,16 @@ func detectCmd(args []string) error {
 		for _, r := range res.Redirects {
 			fmt.Printf("redirect %s:%s %s\n", r.Eco, r.Name, r.Target)
 		}
-		// a manifest we could not parse rides the stream as an `unresolved` line
-		// (TAB-delimited: reason is free text), which bulk turns into a failed
-		// row, so a parse failure is a loud coverage gap, never an empty-list
-		// silence the caller reads as "no changes".
+		// anything detect saw but could not turn into an analysable change (a
+		// manifest that failed to parse, an unsupported uses: kind) rides the
+		// stream as an `unresolved` line (TAB-delimited: reason is free text),
+		// which bulk turns into a failed row, so it is a loud coverage gap,
+		// never an empty-list silence the caller reads as "no changes".
 		for _, u := range res.Unresolved {
 			fmt.Printf("unresolved\t%s\t%s\n", u.Path, strings.ReplaceAll(u.Reason, "\n", " "))
 		}
 		if len(res.Unresolved) > 0 {
-			fmt.Fprintf(os.Stderr, "depsound: detect: %d manifest(s) could not be parsed (surfaced as coverage gaps in the report)\n", len(res.Unresolved))
+			fmt.Fprintf(os.Stderr, "depsound: detect: %d change(s) could not be analysed (surfaced as coverage gaps in the report)\n", len(res.Unresolved))
 		}
 		if len(res.Added) > 0 {
 			fmt.Fprintf(os.Stderr, "depsound: detect: %d new dependency(ies) in the list (census-shaped)\n", len(res.Added))
@@ -217,9 +218,26 @@ func detectChanges(pairs []detectPair) detectResult {
 		}
 		d := diffResolved(oldDeps, newDeps)
 		for _, c := range d.changed {
+			// a changed docker image or reusable workflow cannot be fetched or
+			// analysed; it rides the unresolved stream so the change is a loud
+			// coverage gap in the report, never a silent drop
+			if kind == "gha" {
+				if k := ghaUnsupportedKind(c.Path); k != "" {
+					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
+						fmt.Sprintf("unsupported uses (%s): %s changed %s -> %s; not analysed, review the workflow diff", k, c.Path, c.From, c.To)})
+					continue
+				}
+			}
 			mergeDetect(&res.Changed, changedIdx, te.analysis, c.Path, c.From, c.To, c.Indirect, p.path)
 		}
 		for _, c := range d.added {
+			if kind == "gha" {
+				if k := ghaUnsupportedKind(c.Path); k != "" {
+					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
+						fmt.Sprintf("unsupported uses (%s): %s added at %s; not analysed, review the workflow diff", k, c.Path, c.To)})
+					continue
+				}
+			}
 			mergeDetect(&res.Added, addedIdx, te.analysis, c.Path, "", c.To, c.Indirect, p.path)
 		}
 		// redirects: a replace/patch/override pointing a dependency off the

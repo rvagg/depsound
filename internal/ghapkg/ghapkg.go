@@ -85,15 +85,18 @@ func Load(dir string) (*Action, error) {
 	return a, nil
 }
 
-// Use is one `uses:` reference in a workflow or composite action: the action
-// Identity (owner/repo, or owner/repo/sub for a sub-action) and its git Ref (a
-// SHA, tag, or branch). Local (`./path`), docker (`docker://`) and reusable-
-// workflow (`owner/repo/.github/workflows/x.yml`) refs carry an empty Identity;
-// callers skip those (depsound diffs published actions, not those shapes).
+// Use is one `uses:` reference in a workflow or composite action. Kind
+// classifies the shape: "action" (owner/repo[/sub]@ref, fetchable and
+// diffable), "docker" (a container image; identity/ref split so a changed
+// image still surfaces, though depsound cannot fetch it), "reusable" (a
+// remote workflow call, same deal), "local" (`./path`, the repo's own code,
+// reviewed in its own PR diff), or "" (no ref / malformed; GitHub itself
+// rejects those workflows).
 type Use struct {
 	Identity string
 	Ref      string
 	Raw      string
+	Kind     string
 }
 
 // WorkflowUses extracts the action references a GitHub Actions workflow file or
@@ -145,16 +148,27 @@ func WorkflowUses(b []byte) ([]Use, error) {
 	return uses, nil
 }
 
-// parseUse splits a `uses:` value into (Identity, Ref). A trailing `# comment`
-// is already stripped by the YAML scalar, so a SHA pin with its `# vX` version
-// comment yields the SHA cleanly. Local/docker/reusable-workflow shapes return
-// an empty Identity so callers skip them.
+// parseUse splits a `uses:` value into (Identity, Ref) and classifies its
+// Kind. A trailing `# comment` is already stripped by the YAML scalar, so a
+// SHA pin with its `# vX` version comment yields the SHA cleanly.
 func parseUse(v string) Use {
 	u := Use{Raw: v}
 	switch {
 	case strings.HasPrefix(v, "./"), strings.HasPrefix(v, "../"): // local action
+		u.Kind = "local"
 		return u
-	case strings.HasPrefix(v, "docker://"): // docker image, not a registry action
+	case strings.HasPrefix(v, "docker://"):
+		// docker://image[:tag] or docker://image@digest; the identity/ref
+		// split keeps a changed or retargeted image pairable in a diff
+		u.Kind = "docker"
+		img := strings.TrimPrefix(v, "docker://")
+		if at := strings.LastIndexByte(img, '@'); at > 0 {
+			u.Identity, u.Ref = "docker://"+img[:at], img[at+1:]
+		} else if c := strings.LastIndexByte(img, ':'); c > strings.LastIndexByte(img, '/') {
+			u.Identity, u.Ref = "docker://"+img[:c], img[c+1:]
+		} else {
+			u.Identity = v // no tag: implicit latest
+		}
 		return u
 	}
 	at := strings.LastIndexByte(v, '@')
@@ -162,9 +176,12 @@ func parseUse(v string) Use {
 		return u
 	}
 	id := v[:at]
-	if strings.Contains(id, "/.github/workflows/") { // reusable workflow (v1: skip)
+	if strings.Contains(id, "/.github/workflows/") {
+		u.Kind = "reusable"
+		u.Identity, u.Ref = id, v[at+1:]
 		return u
 	}
+	u.Kind = "action"
 	u.Identity, u.Ref = id, v[at+1:]
 	return u
 }

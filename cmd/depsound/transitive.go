@@ -156,21 +156,41 @@ func resolveLock(kind, src, lockName string) ([]resolvedDep, error) {
 	case "gha":
 		// a workflow file (or composite action.yml) IS the gha manifest: its
 		// pinned `uses:` refs are the resolved set, so diffResolved yields the
-		// action bumps just like a lockfile diff yields package bumps.
+		// action bumps just like a lockfile diff yields package bumps. Docker
+		// images and reusable workflows are kept in the set (a change must
+		// surface even though depsound cannot fetch them); local `./` actions
+		// are the repo's own code, reviewed in its own PR diff.
 		uses, err := ghapkg.WorkflowUses(b)
 		if err != nil {
 			return nil, err
 		}
 		var out []resolvedDep
 		for _, u := range uses {
-			if u.Identity == "" {
-				continue // local/docker/reusable: not a diffable published action
+			switch u.Kind {
+			case "action", "docker", "reusable":
+				ref := u.Ref
+				if ref == "" {
+					ref = "?" // untagged docker image: implicit latest
+				}
+				out = append(out, resolvedDep{u.Identity, ref, false})
 			}
-			out = append(out, resolvedDep{u.Identity, u.Ref, false})
 		}
 		return out, nil
 	}
 	return nil, fmt.Errorf("unsupported lockfile kind %q", kind)
+}
+
+// ghaUnsupportedKind labels a resolved gha dependency depsound cannot fetch
+// and analyse, recognized by identity shape (both shapes are disjoint from
+// owner/repo action identities). Empty for analysable actions.
+func ghaUnsupportedKind(name string) string {
+	switch {
+	case strings.HasPrefix(name, "docker://"):
+		return "docker image"
+	case strings.Contains(name, "/.github/workflows/"):
+		return "reusable workflow"
+	}
+	return ""
 }
 
 func lockedToResolved(crates []cratepkg.LockedCrate) []resolvedDep {
