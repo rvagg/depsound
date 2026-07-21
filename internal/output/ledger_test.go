@@ -1,6 +1,7 @@
 package output
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rvagg/depsound/internal/manifest"
@@ -65,7 +66,8 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 		Compat:   stats.Compat{ExportsError: "bad exports"},
 	}))
 	// census (incl. the biggest-unreviewed-file lead), redirect, failure
-	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: &provenance.Result{Queried: true, MaintainerChanged: true}}))
+	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}))
 	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
 	collect(DeriveFailure("bad", "extraction failed"))
@@ -240,5 +242,40 @@ func TestDeriveCensusGHA(t *testing.T) {
 	}
 	if l2 := DeriveCensus("cen2", &Census{Ecosystem: "gha", Files: 3, GHAPinKind: "branch"}); Assess(l2).Tier != weightLook {
 		t.Errorf("census branch pin: want look tier, got %+v", Assess(l2))
+	}
+}
+
+// A provenance source that failed is lost coverage: the gap signal fires, and
+// a partial answer can never read Clean().
+func TestProvenanceGapSignal(t *testing.T) {
+	partial := Derive("p", &stats.Stats{Security: stats.Security{Queried: true},
+		Provenance: &provenance.Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}})
+	var gap *Signal
+	for i := range partial.Signals {
+		if partial.Signals[i].Code == CodeProvenanceGap {
+			gap = &partial.Signals[i]
+		}
+	}
+	if gap == nil || gap.Kind != KindDegradation || !strings.Contains(gap.Detail, "registry") {
+		t.Errorf("want a degradation naming the failed source, got %+v", gap)
+	}
+	if Assess(partial).Clean() {
+		t.Error("a partial provenance answer must not read clean")
+	}
+
+	full := Derive("f", &stats.Stats{Security: stats.Security{Queried: true},
+		Provenance: &provenance.Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "complete"}}})
+	for _, s := range full.Signals {
+		if s.Code == CodeProvenanceGap {
+			t.Errorf("full coverage must not emit a gap: %+v", s)
+		}
+	}
+	// unsupported sources are not lost coverage (go has no registry concept)
+	goP := Derive("g", &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true},
+		Provenance: &provenance.Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "unsupported"}}})
+	for _, s := range goP.Signals {
+		if s.Code == CodeProvenanceGap {
+			t.Errorf("unsupported source must not emit a gap: %+v", s)
+		}
 	}
 }

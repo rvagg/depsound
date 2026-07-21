@@ -69,9 +69,12 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 			"whether the referenced capabilities are used maliciously (grep finds references, not intent; an obfuscated payload evades it)",
 		}, coverageNotChecked...)
 	}
-	// provenance runs by default; when it answered, flip its blind-spot line
-	// to checked (copying, never mutating the shared slices)
-	if s.Provenance != nil && s.Provenance.Queried {
+	// provenance runs by default; when EVERY source answered, flip its
+	// blind-spot line to checked (copying, never mutating the shared
+	// slices). A partial answer keeps the line, naming exactly what failed:
+	// partial coverage is a gap, not a discount on the claim.
+	switch p := s.Provenance; {
+	case p != nil && p.Complete():
 		nc := make([]string, 0, len(notChecked))
 		for _, x := range notChecked {
 			if !strings.HasPrefix(x, "how the release was published") {
@@ -81,6 +84,15 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		notChecked = nc
 		checked = append(append([]string(nil), checked...),
 			"provenance deltas (shallow, history-only, not a pass)")
+	case p != nil && p.Queried:
+		nc := make([]string, 0, len(notChecked))
+		for _, x := range notChecked {
+			if strings.HasPrefix(x, "how the release was published") {
+				x += " (partially checked; failed: " + strings.Join(p.FailedSources(), "; ") + ")"
+			}
+			nc = append(nc, x)
+		}
+		notChecked = nc
 	}
 	// OSV: claim it checked only when it actually ran, else state the gap.
 	if ok, line := osvCoverageLine(s.Package.Ecosystem, s.Security.Queried, s.Security.Note); ok {

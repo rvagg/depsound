@@ -83,6 +83,7 @@ const (
 	CodeExportsUnresolved Code = "compat.exportsUnresolved" // exports/resolution delta could not be computed
 	CodeBinDelta          Code = "bin.delta"                // installed executable (bin) entries changed
 	CodeProvenanceAnomaly Code = "provenance.anomaly"       // publisher/attestation/repo/yank account-takeover shape
+	CodeProvenanceGap     Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -101,7 +102,7 @@ var allCodes = []Code{
 	CodeAnalysisFailed,
 	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
-	CodeBinDelta, CodeProvenanceAnomaly,
+	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -307,6 +308,15 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		if len(shapes) > 0 {
 			add(CodeProvenanceAnomaly, KindFact, LensSecurity, weightLook,
 				"provenance anomaly (account-takeover shape)", strings.Join(shapes, ", "))
+		}
+	}
+	// a provenance source that failed is lost coverage, exactly like a failed
+	// OSV scan: the fields it carries are silently absent, so their absence
+	// must not read as "no anomalies"
+	if p := s.Provenance; p != nil {
+		if failed := p.FailedSources(); len(failed) > 0 {
+			add(CodeProvenanceGap, KindDegradation, LensCoverage, weightWeigh,
+				"publish provenance incomplete", "lookup failed: "+strings.Join(failed, "; "))
 		}
 	}
 

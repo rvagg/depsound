@@ -281,6 +281,11 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 		return
 	}
 	w("")
+	// a failed source leaves its fields silently absent; name the loss so
+	// their absence cannot read as "no anomalies"
+	for _, f := range p.FailedSources() {
+		w("  coverage gap: %s lookup failed; those fields are absent, not clean", f)
+	}
 
 	// true deltas a compromise disturbs: worth a WARNING
 	var warn []string
@@ -623,10 +628,14 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 	default:
 		cov.NotChecked = append(cov.NotChecked, "the full transitive subtree you adopt (only direct deps shown here)")
 	}
-	// provenance runs by default; when it answered, its blind spot flips
-	if c.Provenance != nil && c.Provenance.Queried {
+	// provenance runs by default; only a FULLY answered panel flips its blind
+	// spot to checked. A partial answer stays a gap, naming what failed.
+	switch p := c.Provenance; {
+	case p != nil && p.Complete():
 		cov.Checked = append(cov.Checked, "provenance deltas (shallow, history-only, NOT a pass)")
-	} else {
+	case p != nil && p.Queried:
+		cov.NotChecked = append(cov.NotChecked, "how it was published, partially (failed: "+strings.Join(p.FailedSources(), "; ")+")")
+	default:
 		cov.NotChecked = append(cov.NotChecked, "how it was published (provenance, maintainer, anomaly)")
 	}
 	cov.NotChecked = append(cov.NotChecked,

@@ -29,6 +29,12 @@ var ddSystem = map[string]string{"npm": "npm", "crates": "cargo", "go": "go"}
 // Result is the provenance panel: facts plus the anomaly flags (the signal).
 type Result struct {
 	Queried bool `json:"queried"`
+	// Sources records each source's outcome (complete | failed | unsupported)
+	// so a partial answer can never read as full coverage: "depsdev" carries
+	// cadence, source repo and scorecard; "registry" carries publisher,
+	// attestation and the delta history. Queried stays true when ANY source
+	// answered; consumers needing full coverage check Complete().
+	Sources map[string]string `json:"sources,omitempty"`
 
 	PublishedAt   string `json:"publishedAt,omitempty"`
 	AgeDays       int    `json:"ageDays,omitempty"`
@@ -81,12 +87,13 @@ type Result struct {
 // security lookup that fails must not block a review; Queried reports whether
 // anything came back.
 func Assess(ctx context.Context, eco, name, ver, prevVer string) *Result {
-	r := &Result{}
+	r := &Result{Sources: map[string]string{}}
 	client := &http.Client{}
 
 	if sys, ok := ddSystem[eco]; ok {
 		if vi, err := depsdev.Version(ctx, client, sys, name, ver); err == nil && vi != nil {
 			r.Queried = true
+			r.Sources["depsdev"] = "complete"
 			if !vi.PublishedAt.IsZero() {
 				r.PublishedAt = vi.PublishedAt.UTC().Format("2006-01-02")
 				r.AgeDays = int(time.Since(vi.PublishedAt).Hours() / 24)
@@ -98,16 +105,23 @@ func Assess(ctx context.Context, eco, name, ver, prevVer string) *Result {
 				r.Scorecard = pi.ScorecardOverall
 				r.ScorecardLow = lowChecks(pi.ScorecardChecks)
 			}
+		} else {
+			r.Sources["depsdev"] = "failed"
 		}
+	} else {
+		r.Sources["depsdev"] = "unsupported"
 	}
 
 	switch eco {
 	case "npm":
-		assessNPM(ctx, client, name, ver, prevVer, r)
+		r.Sources["registry"] = sourceState(assessNPM(ctx, client, name, ver, prevVer, r))
 	case "crates":
-		assessCrates(ctx, client, name, ver, prevVer, r)
+		r.Sources["registry"] = sourceState(assessCrates(ctx, client, name, ver, prevVer, r))
 	case "go":
+		r.Sources["registry"] = "unsupported"
 		r.Note = "Go has no publisher/provenance (module path IS the repo; sumdb/zip-vs-tag is the anchor), so only cadence + scorecard apply"
+	default:
+		r.Sources["registry"] = "unsupported"
 	}
 
 	r.RepoMismatch = repoMismatch(r.ClaimedRepo, r.SourceRepo)
@@ -121,16 +135,58 @@ func Assess(ctx context.Context, eco, name, ver, prevVer string) *Result {
 	return r
 }
 
+func sourceState(ok bool) string {
+	if ok {
+		return "complete"
+	}
+	return "failed"
+}
+
+// sourceScope names what a source carries, so a failure states exactly which
+// coverage was lost.
+var sourceScope = map[string]string{
+	"depsdev":  "cadence, source repo, scorecard",
+	"registry": "publisher, attestation, install-script/bin deltas",
+}
+
+// FailedSources lists the sources that errored, with what each carries.
+// Unsupported sources are excluded: a source that does not exist for the
+// ecosystem is not lost coverage.
+func (r *Result) FailedSources() []string {
+	var out []string
+	for _, src := range []string{"depsdev", "registry"} {
+		if r.Sources[src] == "failed" {
+			out = append(out, src+" ("+sourceScope[src]+")")
+		}
+	}
+	return out
+}
+
+// Complete reports whether every applicable source answered: the bar for a
+// coverage claim ("provenance checked"). Queried alone means only that
+// SOMETHING answered.
+func (r *Result) Complete() bool {
+	if !r.Queried {
+		return false
+	}
+	for _, state := range r.Sources {
+		if state == "failed" {
+			return false
+		}
+	}
+	return true
+}
+
 // --- npm -------------------------------------------------------------------
 
-func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer string, r *Result) {
+func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer string, r *Result) bool {
 	var doc struct {
 		Repository json.RawMessage            `json:"repository"`
 		Time       map[string]string          `json:"time"`
 		Versions   map[string]json.RawMessage `json:"versions"`
 	}
 	if err := getJSON(ctx, client, "https://registry.npmjs.org/"+url.PathEscape(name), &doc); err != nil {
-		return
+		return false
 	}
 	r.Queried = true
 	r.ClaimedRepo = repoURL(doc.Repository)
@@ -192,11 +248,12 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 			}
 		}
 	}
+	return true
 }
 
 // --- crates ----------------------------------------------------------------
 
-func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer string, r *Result) {
+func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer string, r *Result) bool {
 	var doc struct {
 		Crate struct {
 			Repository string `json:"repository"`
@@ -212,7 +269,7 @@ func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer s
 		} `json:"versions"`
 	}
 	if err := getJSON(ctx, client, "https://crates.io/api/v1/crates/"+url.PathEscape(name), &doc); err != nil {
-		return
+		return false
 	}
 	r.Queried = true
 	r.ClaimedRepo = trimRepo(doc.Crate.Repository)
@@ -226,7 +283,7 @@ func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer s
 		}
 	}
 	if idx < 0 {
-		return
+		return true // the registry answered; this version is just not listed
 	}
 	cur := doc.Versions[idx]
 	r.Publisher = cur.PublishedBy.Login
@@ -257,6 +314,7 @@ func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer s
 			r.MaintainerChanged = cur.PublishedBy.Login != prev.PublishedBy.Login
 		}
 	}
+	return true
 }
 
 // --- helpers ---------------------------------------------------------------

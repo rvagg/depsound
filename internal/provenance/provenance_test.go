@@ -1,6 +1,9 @@
 package provenance
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTrimRepo(t *testing.T) {
 	cases := map[string]string{
@@ -112,5 +115,29 @@ func TestBinNamesAndDelta(t *testing.T) {
 	// delta: only the newly-appearing command
 	if got := addedBins([]string{"foo"}, []string{"foo", "bar"}); len(got) != 1 || got[0] != "bar" {
 		t.Errorf("addedBins = %v", got)
+	}
+}
+
+// Complete is the bar for a coverage claim: any failed source breaks it,
+// unsupported sources do not (they are not lost coverage), and FailedSources
+// names what each failure cost.
+func TestSourceStates(t *testing.T) {
+	full := &Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "complete"}}
+	if !full.Complete() || full.FailedSources() != nil {
+		t.Errorf("all-complete should be Complete with no failures: %+v", full)
+	}
+	partial := &Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}
+	if partial.Complete() {
+		t.Error("a failed source must break Complete")
+	}
+	if f := partial.FailedSources(); len(f) != 1 || !strings.Contains(f[0], "registry") || !strings.Contains(f[0], "attestation") {
+		t.Errorf("failure should name the source and its scope: %v", f)
+	}
+	goStyle := &Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "unsupported"}}
+	if !goStyle.Complete() || goStyle.FailedSources() != nil {
+		t.Errorf("unsupported is not lost coverage: %+v", goStyle)
+	}
+	if (&Result{Queried: false}).Complete() {
+		t.Error("not-queried is never Complete")
 	}
 }

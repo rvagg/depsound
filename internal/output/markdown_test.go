@@ -299,3 +299,24 @@ func TestMdTaint(t *testing.T) {
 		t.Errorf("scoped name should display but not mention: %q", mdTaint("@scope/pkg"))
 	}
 }
+
+// The footer's publish-provenance gap counts per-row coverage: one dep
+// answering must not clear the gap for the rest, and partial coverage reads
+// as an N-of-M gap, never as checked.
+func TestMarkdownProvenanceFooterCounts(t *testing.T) {
+	full := &provenance.Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "complete"}}
+	failed := &provenance.Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}
+	row := func(ref string, p *provenance.Result) BulkResult {
+		return BulkResult{Ref: ref, Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: p}}
+	}
+
+	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", full), row("npm:b 1 -> 2", full)}); strings.Contains(out, "publish provenance") {
+		t.Errorf("all-complete must drop the provenance gap:\n%s", out)
+	}
+	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", full), row("npm:b 1 -> 2", failed)}); !strings.Contains(out, "publish provenance (1 of 2 changes)") {
+		t.Errorf("partial coverage must count the gap:\n%s", out)
+	}
+	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", nil), row("npm:b 1 -> 2", nil)}); !strings.Contains(out, "publish provenance") {
+		t.Errorf("no provenance at all must keep the gap:\n%s", out)
+	}
+}

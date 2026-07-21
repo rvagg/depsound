@@ -80,6 +80,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeArtifactAbsent}, "artifact unavailable (URL not retrievable now; contents not inspected; prior publication not established)"},
 	{[]Code{CodeHostileEntry}, "hostile archive member(s) skipped (traversal/absolute/control-byte name: an attack-shaped artifact)"},
 	{[]Code{CodeProvenanceAnomaly}, "provenance anomaly: account-takeover shape (publisher/attestation/repo/yank)"},
+	{[]Code{CodeProvenanceGap}, "coverage gap: publish provenance incomplete (a source lookup failed)"},
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
@@ -105,16 +106,29 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeOSVUnsupported}, "note: known-CVE scan not applicable (OSV has no index for this ecosystem)"},
 }
 
-// anyProvenanceQueried reports whether provenance ran for at least one diffed
-// dep, so the coverage boundary stops listing it as not-checked. bulk runs
-// provenance; transitive turns it off, so a transitive report keeps the caveat.
-func anyProvenanceQueried(results []BulkResult) bool {
+// provenanceGap phrases the coverage footer's publish-provenance entry: empty
+// when every diffed dep had FULL provenance coverage, the whole gap when none
+// did, and an N-of-M count when partial, one dep answering must never clear
+// the gap for the rest (and a partial answer is not coverage).
+func provenanceGap(results []BulkResult) string {
+	total, complete := 0, 0
 	for _, r := range results {
-		if r.Stats != nil && r.Stats.Provenance != nil && r.Stats.Provenance.Queried {
-			return true
+		if r.Stats == nil {
+			continue
+		}
+		total++
+		if p := r.Stats.Provenance; p != nil && p.Complete() {
+			complete++
 		}
 	}
-	return false
+	switch {
+	case total == 0 || complete == 0:
+		return "publish provenance"
+	case complete == total:
+		return ""
+	default:
+		return fmt.Sprintf("publish provenance (%d of %d changes)", total-complete, total)
+	}
 }
 
 // writeRouter renders the prioritised signal sections + coverage boundary over
@@ -234,9 +248,9 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w("  added modules are listed but not diffed; test-only/deeper modules beyond")
 		w("  go.mod's pruned set (go.sum has more); publish provenance. Silence != safe.")
 	} else {
-		prov := "; publish provenance"
-		if anyProvenanceQueried(results) {
-			prov = "" // bulk ran provenance, so do not list it as not-checked
+		prov := ""
+		if g := provenanceGap(results); g != "" {
+			prov = "; " + g
 		}
 		w("NOT checked: does your code reach each change; what it does; test coverage;")
 		w("  transitive deps these bumps pull in%s. Silence != safe.", prov)
