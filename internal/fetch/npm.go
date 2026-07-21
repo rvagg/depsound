@@ -137,6 +137,33 @@ func (s *stallReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// maxArtifactBytes bounds any single artifact download. It is a resource
+// ceiling, not a judgement: legitimate registry artifacts sit far below it
+// (the Go proxy caps module zips at 500 MiB), and a stream that exceeds it
+// can exhaust the runner's disk before extraction limits ever apply.
+const maxArtifactBytes = 2 << 30 // 2 GiB
+
+// capped wraps a download body so an oversized stream aborts loudly with the
+// ceiling named, never fills the disk.
+func capped(r io.Reader) io.Reader { return &cappedReader{r: r, remaining: maxArtifactBytes} }
+
+type cappedReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, fmt.Errorf("download exceeds the %d byte artifact ceiling; aborted (resource guard, not a judgement)", int64(maxArtifactBytes))
+	}
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.r.Read(p)
+	c.remaining -= int64(n)
+	return n, err
+}
+
 // verifyArtifact rehashes a file against a sidecar digest of either
 // "sha512-<base64>" or "sha1-<hex>" form.
 func verifyArtifact(path, digest string) bool {
@@ -226,7 +253,7 @@ func download(ctx context.Context, client *http.Client, u, dest, integrity, shas
 
 	h512 := sha512.New()
 	h1 := sha1.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h512, h1), body); err != nil {
+	if _, err := io.Copy(io.MultiWriter(tmp, h512, h1), capped(body)); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err)
 		}

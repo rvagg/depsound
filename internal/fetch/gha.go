@@ -181,7 +181,7 @@ func downloadPlain(ctx context.Context, client *http.Client, u, dest string) err
 		tmp.Close()
 		os.Remove(tmp.Name())
 	}()
-	if _, err := io.Copy(tmp, body); err != nil {
+	if _, err := io.Copy(tmp, capped(body)); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err)
 		}

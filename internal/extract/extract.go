@@ -44,6 +44,32 @@ type Report struct {
 	Prefix         string // common root stripped from all entries, e.g. "package"
 }
 
+// maxReportEntries caps each report list: a hostile archive can carry
+// millions of bad members, and the report must name examples, never mirror
+// the flood. The overflow is summarised, not dropped.
+const maxReportEntries = 100
+
+// cappedList records up to maxReportEntries then counts the rest.
+type cappedList struct {
+	entries    []string
+	suppressed int
+}
+
+func (c *cappedList) add(s string) {
+	if len(c.entries) < maxReportEntries {
+		c.entries = append(c.entries, s)
+		return
+	}
+	c.suppressed++
+}
+
+func (c *cappedList) list() []string {
+	if c.suppressed > 0 {
+		return append(c.entries, fmt.Sprintf("(+%d more suppressed)", c.suppressed))
+	}
+	return c.entries
+}
+
 // TarGz extracts src into dest. A common root directory shared by every
 // entry (npm's package/, crates' name-version/) is stripped so trees from
 // different versions diff cleanly. That requires knowing the common root
@@ -51,7 +77,7 @@ type Report struct {
 // twice: commonRoot walks headers only, then the loop below extracts.
 // Decompressing twice is cheaper than buffering the whole archive.
 func TarGz(src, dest string, lim Limits) (*Report, error) {
-	prefix, err := commonRoot(src) // pass 1: headers only
+	prefix, err := commonRoot(src, lim) // pass 1: headers only
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +93,13 @@ func TarGz(src, dest string, lim Limits) (*Report, error) {
 	defer gz.Close()
 
 	rep := &Report{Prefix: prefix}
+	var links, hostile cappedList
+	entries := 0 // files AND dirs: a directory flood exhausts inodes too
 	tr := tar.NewReader(gz)
 	for { // pass 2: extract
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			rep.SkippedLinks, rep.HostileEntries = links.list(), hostile.list()
 			return rep, nil
 		}
 		if err != nil {
@@ -78,7 +107,7 @@ func TarGz(src, dest string, lim Limits) (*Report, error) {
 		}
 		name, err := sanitize(hdr.Name)
 		if err != nil {
-			rep.HostileEntries = append(rep.HostileEntries, fmt.Sprintf("%q: %v", hdr.Name, err))
+			hostile.add(fmt.Sprintf("%q: %v", hdr.Name, err))
 			continue
 		}
 		if prefix != "" {
@@ -92,18 +121,21 @@ func TarGz(src, dest string, lim Limits) (*Report, error) {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if entries++; entries > lim.MaxFiles {
+				return nil, fmt.Errorf("%s: exceeds %d entry limit", src, lim.MaxFiles)
+			}
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return nil, err
 			}
 		case tar.TypeReg:
 			rep.Files++
-			if rep.Files > lim.MaxFiles {
-				return nil, fmt.Errorf("%s: exceeds %d file limit", src, lim.MaxFiles)
+			if entries++; entries > lim.MaxFiles {
+				return nil, fmt.Errorf("%s: exceeds %d entry limit", src, lim.MaxFiles)
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return nil, err
 			}
-			n, err := writeCapped(target, tr, lim.MaxFileBytes)
+			n, err := writeCapped(target, tr, fileBudget(lim, rep.TotalBytes))
 			if err != nil {
 				return nil, fmt.Errorf("%s: %s: %w", src, name, err)
 			}
@@ -112,16 +144,28 @@ func TarGz(src, dest string, lim Limits) (*Report, error) {
 				return nil, fmt.Errorf("%s: exceeds %d byte total limit", src, lim.MaxTotalBytes)
 			}
 		case tar.TypeSymlink, tar.TypeLink:
-			rep.SkippedLinks = append(rep.SkippedLinks, hdr.Name)
+			links.add(hdr.Name)
 		default:
 			// char/block/fifo/etc have no business in a package; skip
 		}
 	}
 }
 
+// fileBudget bounds one file's write to the smaller of the per-file cap and
+// what remains of the total budget, so the on-disk total can never overshoot
+// MaxTotalBytes by a stray MaxFileBytes.
+func fileBudget(lim Limits, written int64) int64 {
+	if rem := lim.MaxTotalBytes - written; rem < lim.MaxFileBytes {
+		return rem
+	}
+	return lim.MaxFileBytes
+}
+
 // commonRoot returns the first path segment if every regular file and
-// directory entry shares it, otherwise "".
-func commonRoot(src string) (string, error) {
+// directory entry shares it, otherwise "". Skipping bodies still decompresses
+// them, so the scan carries its own ceiling: an archive pass 2 would reject
+// on size anyway aborts here instead of burning unbounded CPU first.
+func commonRoot(src string, lim Limits) (string, error) {
 	f, err := os.Open(src)
 	if err != nil {
 		return "", err
@@ -135,7 +179,9 @@ func commonRoot(src string) (string, error) {
 
 	root := ""
 	sawAny := false
-	tr := tar.NewReader(gz)
+	ceiling := lim.MaxTotalBytes + lim.MaxFileBytes
+	cr := &countReader{r: gz}
+	tr := tar.NewReader(cr)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -143,6 +189,9 @@ func commonRoot(src string) (string, error) {
 		}
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", src, err)
+		}
+		if cr.n > ceiling {
+			return "", fmt.Errorf("%s: decompresses past %d bytes during the root scan; refusing (decompression bomb guard)", src, ceiling)
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir {
 			continue
@@ -164,6 +213,20 @@ func commonRoot(src string) (string, error) {
 	return root, nil
 }
 
+// countReader counts decompressed bytes flowing through it.
+type countReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// writeCapped writes at most max bytes (the per-file cap, or the remaining
+// total budget when that is smaller) and errors past it.
 func writeCapped(target string, r io.Reader, max int64) (int64, error) {
 	f, err := os.Create(target)
 	if err != nil {
@@ -175,7 +238,7 @@ func writeCapped(target string, r io.Reader, max int64) (int64, error) {
 		return n, err
 	}
 	if n > max {
-		return n, fmt.Errorf("exceeds %d byte file limit", max)
+		return n, fmt.Errorf("exceeds the %d byte extraction budget", max)
 	}
 	return n, nil
 }

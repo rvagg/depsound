@@ -2,7 +2,9 @@ package fetch
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -30,4 +32,26 @@ func TestGHATarballURLBySHA(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+}
+
+// The download cap aborts an oversized stream with the ceiling named,
+// instead of filling the runner's disk.
+func TestCappedReader(t *testing.T) {
+	r := &cappedReader{r: neverEnding{}, remaining: 1000}
+	n, err := io.Copy(io.Discard, r)
+	if err == nil || n > 1000 {
+		t.Errorf("cap not enforced: n=%d err=%v", n, err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "artifact ceiling") {
+		t.Errorf("error does not name the ceiling: %v", err)
+	}
+}
+
+type neverEnding struct{}
+
+func (neverEnding) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'A'
+	}
+	return len(p), nil
 }

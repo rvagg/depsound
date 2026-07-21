@@ -148,7 +148,7 @@ func fetchToTemp(ctx context.Context, client *http.Client, u, dir string) (strin
 	}
 	watchdog := time.AfterFunc(stallTimeout, cancel)
 	defer watchdog.Stop()
-	_, err = io.Copy(tmp, &stallReader{r: resp.Body, watchdog: watchdog})
+	_, err = io.Copy(tmp, capped(&stallReader{r: resp.Body, watchdog: watchdog}))
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}

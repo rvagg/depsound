@@ -170,3 +170,79 @@ func TestBombLimits(t *testing.T) {
 		t.Error("MaxFiles not enforced")
 	}
 }
+
+// Directory entries count toward the entry limit: an archive of a million
+// empty dirs is an inode flood, not a package.
+func TestDirEntriesCounted(t *testing.T) {
+	src := makeTarGz(t, []entry{
+		{name: "package/a/", typ: tar.TypeDir},
+		{name: "package/b/", typ: tar.TypeDir},
+		{name: "package/c/", typ: tar.TypeDir},
+	})
+	lim := DefaultLimits
+	lim.MaxFiles = 2
+	if _, err := TarGz(src, t.TempDir(), lim); err == nil || !strings.Contains(err.Error(), "entry limit") {
+		t.Errorf("dir flood not caught: %v", err)
+	}
+}
+
+// The per-file write is clamped to the REMAINING total budget, so the bytes
+// on disk can never overshoot MaxTotalBytes by a stray MaxFileBytes.
+func TestTotalBudgetNoOvershoot(t *testing.T) {
+	src := makeTarGz(t, []entry{
+		{name: "package/a", typ: tar.TypeReg, content: strings.Repeat("A", 80)},
+		{name: "package/b", typ: tar.TypeReg, content: strings.Repeat("B", 80)},
+	})
+	lim := DefaultLimits
+	lim.MaxTotalBytes = 100
+	dest := t.TempDir()
+	if _, err := TarGz(src, dest, lim); err == nil {
+		t.Fatal("total budget not enforced")
+	}
+	var onDisk int64
+	filepath.Walk(dest, func(_ string, info os.FileInfo, _ error) error {
+		if info != nil && info.Mode().IsRegular() {
+			onDisk += info.Size()
+		}
+		return nil
+	})
+	if onDisk > lim.MaxTotalBytes+1 {
+		t.Errorf("disk overshoot: %d bytes written against a %d budget", onDisk, lim.MaxTotalBytes)
+	}
+}
+
+// Report lists are capped with the overflow counted, never silently dropped
+// and never an unbounded mirror of a hostile flood.
+func TestReportListsCapped(t *testing.T) {
+	var entries []entry
+	for range maxReportEntries + 50 {
+		entries = append(entries, entry{name: "package/link", typ: tar.TypeSymlink, linkname: "/etc"})
+	}
+	entries = append(entries, entry{name: "package/ok", typ: tar.TypeReg, content: "x"})
+	src := makeTarGz(t, entries)
+	rep, err := TarGz(src, t.TempDir(), DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.SkippedLinks) != maxReportEntries+1 {
+		t.Errorf("want %d entries + 1 summary, got %d", maxReportEntries, len(rep.SkippedLinks))
+	}
+	last := rep.SkippedLinks[len(rep.SkippedLinks)-1]
+	if !strings.Contains(last, "+50 more suppressed") {
+		t.Errorf("overflow not summarised: %q", last)
+	}
+}
+
+// The root scan refuses to decompress unboundedly: a small archive that
+// inflates past what pass 2 could ever accept aborts in pass 1.
+func TestRootScanCeiling(t *testing.T) {
+	src := makeTarGz(t, []entry{
+		{name: "package/big", typ: tar.TypeReg, content: strings.Repeat("A", 4000)},
+		{name: "package/more", typ: tar.TypeReg, content: "x"},
+	})
+	lim := DefaultLimits
+	lim.MaxTotalBytes, lim.MaxFileBytes = 1000, 1000
+	if _, err := TarGz(src, t.TempDir(), lim); err == nil || !strings.Contains(err.Error(), "bomb guard") {
+		t.Errorf("root-scan ceiling not enforced: %v", err)
+	}
+}

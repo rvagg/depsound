@@ -26,10 +26,12 @@ func Zip(src, dest, requiredPrefix string, lim Limits) (*Report, error) {
 	// ecosystem would never install: record as hostile, extract first
 	// occurrence only.
 	seen := map[string]string{}
+	var links, hostile cappedList
+	entries := 0 // files AND dirs: a directory flood exhausts inodes too
 	for _, f := range zr.File {
 		name, err := sanitize(f.Name)
 		if err != nil {
-			rep.HostileEntries = append(rep.HostileEntries, fmt.Sprintf("%q: %v", f.Name, err))
+			hostile.add(fmt.Sprintf("%q: %v", f.Name, err))
 			continue
 		}
 		if name == "" || name == requiredPrefix {
@@ -37,7 +39,7 @@ func Zip(src, dest, requiredPrefix string, lim Limits) (*Report, error) {
 		}
 		rel, ok := strings.CutPrefix(name, prefix)
 		if !ok || rel == "" {
-			rep.HostileEntries = append(rep.HostileEntries, fmt.Sprintf("%q: outside module prefix %q", f.Name, requiredPrefix))
+			hostile.add(fmt.Sprintf("%q: outside module prefix %q", f.Name, requiredPrefix))
 			continue
 		}
 		target := filepath.Join(dest, filepath.FromSlash(rel))
@@ -45,20 +47,23 @@ func Zip(src, dest, requiredPrefix string, lim Limits) (*Report, error) {
 		mode := f.Mode()
 		switch {
 		case mode.IsDir() || strings.HasSuffix(f.Name, "/"):
+			if entries++; entries > lim.MaxFiles {
+				return nil, fmt.Errorf("%s: exceeds %d entry limit", src, lim.MaxFiles)
+			}
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return nil, err
 			}
 		case mode&os.ModeSymlink != 0:
-			rep.SkippedLinks = append(rep.SkippedLinks, f.Name)
+			links.add(f.Name)
 		case mode.IsRegular():
 			if prior, dup := seen[strings.ToLower(rel)]; dup {
-				rep.HostileEntries = append(rep.HostileEntries, fmt.Sprintf("%q: duplicate or case-colliding entry (collides with %q); go toolchain would reject this zip", f.Name, prior))
+				hostile.add(fmt.Sprintf("%q: duplicate or case-colliding entry (collides with %q); go toolchain would reject this zip", f.Name, prior))
 				continue
 			}
 			seen[strings.ToLower(rel)] = f.Name
 			rep.Files++
-			if rep.Files > lim.MaxFiles {
-				return nil, fmt.Errorf("%s: exceeds %d file limit", src, lim.MaxFiles)
+			if entries++; entries > lim.MaxFiles {
+				return nil, fmt.Errorf("%s: exceeds %d entry limit", src, lim.MaxFiles)
 			}
 			// declared size is attacker-controlled; compare in uint64
 			// (an int64 cast could overflow negative and bypass), and
@@ -73,7 +78,7 @@ func Zip(src, dest, requiredPrefix string, lim Limits) (*Report, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s: %s: %w", src, rel, err)
 			}
-			n, err := writeCapped(target, rc, lim.MaxFileBytes)
+			n, err := writeCapped(target, rc, fileBudget(lim, rep.TotalBytes))
 			rc.Close()
 			if err != nil {
 				return nil, fmt.Errorf("%s: %s: %w", src, rel, err)
@@ -86,5 +91,6 @@ func Zip(src, dest, requiredPrefix string, lim Limits) (*Report, error) {
 			// char/block/fifo/etc have no business in a package; skip
 		}
 	}
+	rep.SkippedLinks, rep.HostileEntries = links.list(), hostile.list()
 	return rep, nil
 }
