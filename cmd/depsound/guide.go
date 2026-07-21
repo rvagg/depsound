@@ -49,6 +49,16 @@ but a payload hides best exactly there (a bundled dist/, a vendored C blob).
 depsound names the biggest excluded file; open it. The full totals still count
 everything.
 
+== Unreviewable mass is a standing risk, not a one-bump event ==
+A package that ships megabytes of bundled or minified code is structurally
+hard to review on every bump: the diff can only say "the blob changed".
+Treat recurring unreviewable mass as a property of the dependency and a fair
+reason to prefer a leaner alternative; the pressure belongs on authors who
+publish like that. depsound measures the mass (bytes by class, a heuristic
+basis) and flags the flip to bundle-dominated; whether to keep carrying the
+surface is your call. The bases are heuristic (class by path and markers,
+line shape, file size); the byte counts are real.
+
 == Execution surface ==
 npm/Go/Rust: install/build scripts, cgo, build.rs, proc-macro run code on
 install or at build time; new surface deserves a hard look. Even with none,

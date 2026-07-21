@@ -84,6 +84,7 @@ const (
 	CodeBinDelta          Code = "bin.delta"                // installed executable (bin) entries changed
 	CodeProvenanceAnomaly Code = "provenance.anomaly"       // publisher/attestation/repo/yank account-takeover shape
 	CodeProvenanceGap     Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
+	CodeUnreviewable      Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -103,6 +104,7 @@ var allCodes = []Code{
 	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
+	CodeUnreviewable,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -310,6 +312,32 @@ func Derive(ref string, s *stats.Stats) Ledger {
 				"provenance anomaly (account-takeover shape)", strings.Join(shapes, ", "))
 		}
 	}
+	// structural reviewability: a tree dominated by unreviewable bytes is a
+	// property of the package's publishing practice, not of this bump. Delta
+	// doctrine: present in both versions is one calm context line (never a
+	// headline flip: that would trip every bump of a bundle-shipping package
+	// forever); the flip to dominated is the event, a maintainer adopting
+	// the practice, or a release swapping sources for a blob.
+	domFrom := unreviewableDominant(s.Artifact.UnreviewableFrom, s.Artifact.BytesFrom)
+	domTo := unreviewableDominant(s.Artifact.UnreviewableTo, s.Artifact.BytesTo)
+	unrevDetail := fmt.Sprintf("%s of %s (%d%%) generated/binary/minified/oversized",
+		bytes(s.Artifact.UnreviewableTo), bytes(s.Artifact.BytesTo), pctOf(s.Artifact.UnreviewableTo, s.Artifact.BytesTo))
+	switch {
+	case domTo && !domFrom:
+		add(CodeUnreviewable, KindFact, LensSecurity, weightWeigh,
+			"artifact became mostly unreviewable in this bump",
+			unrevDetail+"; sources may have been swapped for a bundle, read the payload")
+	case domTo && domFrom:
+		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
+			"mostly unreviewable at rest (both versions)",
+			unrevDetail+"; every bump of this package carries this surface")
+	case domFrom && !domTo:
+		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
+			"no longer mostly unreviewable",
+			fmt.Sprintf("was %s of %s (%d%%) generated/binary/minified/oversized",
+				bytes(s.Artifact.UnreviewableFrom), bytes(s.Artifact.BytesFrom), pctOf(s.Artifact.UnreviewableFrom, s.Artifact.BytesFrom)))
+	}
+
 	// a provenance source that failed is lost coverage, exactly like a failed
 	// OSV scan: the fields it carries are silently absent, so their absence
 	// must not read as "no anomalies"
@@ -331,6 +359,21 @@ func firstN(xs []string, n int) string {
 		return strings.Join(xs, ", ")
 	}
 	return strings.Join(xs[:n], ", ") + fmt.Sprintf(", +%d more", len(xs)-n)
+}
+
+// unreviewableDominant is the threshold for the structural-reviewability
+// signal: at least a megabyte of generated/binary mass, and at least half
+// the artifact's bytes. Both bounds together keep small dist/ folders and
+// big mostly-source packages quiet.
+func unreviewableDominant(unrev, total int64) bool {
+	return unrev >= 1<<20 && total > 0 && unrev*2 >= total
+}
+
+func pctOf(part, total int64) int {
+	if total <= 0 {
+		return 0
+	}
+	return int(part * 100 / total)
 }
 
 // pinGrade orders gha pin kinds: sha (immutable) > tag (mutable, re-pointable)
@@ -472,6 +515,24 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	if c.BigExcluded != "" {
 		add(CodeCensusBig, KindHeuristic, LensCompat, weightPositive,
 			"largest unreviewed file", c.BigExcluded)
+	}
+	// adoption is the one moment the structural-unreviewability cost is still
+	// avoidable, so dominance weighs here where a same-shape bump stays calm.
+	// The measured field includes minified-by-shape mass; the class sum is the
+	// fallback for producers that predate it.
+	unrev := c.UnreviewableBytes
+	if unrev == 0 {
+		for _, a := range c.ByClass {
+			if a.Class == "generated" || a.Class == "binary" {
+				unrev += a.Bytes
+			}
+		}
+	}
+	if unreviewableDominant(unrev, c.Bytes) {
+		add(CodeUnreviewable, KindFact, LensSecurity, weightWeigh,
+			"mostly unreviewable at rest",
+			fmt.Sprintf("%s of %s (%d%%) generated/binary/minified/oversized; structurally hard to review now and on every future bump",
+				bytes(unrev), bytes(c.Bytes), pctOf(unrev, c.Bytes)))
 	}
 	sortSignals(l.Signals)
 	return l

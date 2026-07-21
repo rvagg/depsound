@@ -62,8 +62,9 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 	collect(Derive("hard", &stats.Stats{
 		Package:  stats.PkgRef{Ecosystem: "npm"},
 		Security: stats.Security{Queried: true},
-		Artifact: stats.Artifact{HostileEntries: []string{"../e"}, SkippedLinks: []string{"l"}, SourceTo: &stats.Source{Verification: "tls-only"}},
-		Compat:   stats.Compat{ExportsError: "bad exports"},
+		Artifact: stats.Artifact{HostileEntries: []string{"../e"}, SkippedLinks: []string{"l"}, SourceTo: &stats.Source{Verification: "tls-only"},
+			BytesFrom: 4 << 20, BytesTo: 4 << 20, UnreviewableTo: 3 << 20}, // became bundle-dominated
+		Compat: stats.Compat{ExportsError: "bad exports"},
 	}))
 	// census (incl. the biggest-unreviewed-file lead), redirect, failure
 	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
@@ -277,5 +278,61 @@ func TestProvenanceGapSignal(t *testing.T) {
 		if s.Code == CodeProvenanceGap {
 			t.Errorf("unsupported source must not emit a gap: %+v", s)
 		}
+	}
+}
+
+// Structural unreviewability follows the delta doctrine: the flip to
+// bundle-dominated weighs, present-in-both is calm context that must stay
+// Clean() (tripping every typescript/wrangler bump forever is the noise this
+// tool exists to kill), and adoption weighs because the cost is still
+// avoidable there.
+func TestUnreviewableMassDoctrine(t *testing.T) {
+	derive := func(fromUnrev, toUnrev int64) Ledger {
+		return Derive("u", &stats.Stats{Security: stats.Security{Queried: true},
+			Artifact: stats.Artifact{BytesFrom: 4 << 20, BytesTo: 4 << 20,
+				UnreviewableFrom: fromUnrev, UnreviewableTo: toUnrev}})
+	}
+	find := func(l Ledger) *Signal {
+		for i := range l.Signals {
+			if l.Signals[i].Code == CodeUnreviewable {
+				return &l.Signals[i]
+			}
+		}
+		return nil
+	}
+
+	if s := find(derive(0, 3<<20)); s == nil || s.Weight != weightWeigh {
+		t.Errorf("flip to dominated: want weigh, got %+v", s)
+	}
+	both := derive(3<<20, 3<<20)
+	if s := find(both); s == nil || s.Weight != weightPositive {
+		t.Errorf("dominated both sides: want positive context, got %+v", s)
+	}
+	if !Assess(both).Clean() {
+		t.Error("present-in-both must stay clean (context, not a headline flip)")
+	}
+	if s := find(derive(3<<20, 0)); s == nil || s.Weight != weightPositive {
+		t.Errorf("flip away from dominated: want positive note, got %+v", s)
+	}
+	if s := find(derive(0, 0)); s != nil {
+		t.Errorf("source-dominated artifact needs no line, got %+v", s)
+	}
+	// below the floor: half the bytes but under a megabyte stays quiet
+	small := Derive("s", &stats.Stats{Security: stats.Security{Queried: true},
+		Artifact: stats.Artifact{BytesFrom: 400 << 10, BytesTo: 400 << 10, UnreviewableTo: 300 << 10}})
+	if s := find(small); s != nil {
+		t.Errorf("small artifacts stay quiet, got %+v", s)
+	}
+
+	cen := DeriveCensus("c", &Census{Ecosystem: "npm", Files: 50, OSVQueried: true, Bytes: 10 << 20,
+		ByClass: []stats.ClassAgg{{Class: "generated", Bytes: 6 << 20}, {Class: "source", Bytes: 4 << 20}}})
+	var cs *Signal
+	for i := range cen.Signals {
+		if cen.Signals[i].Code == CodeUnreviewable {
+			cs = &cen.Signals[i]
+		}
+	}
+	if cs == nil || cs.Weight != weightWeigh {
+		t.Errorf("census dominance: want weigh at adoption, got %+v", cs)
 	}
 }

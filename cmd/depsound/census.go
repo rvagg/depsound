@@ -366,7 +366,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		cen.Name = sp.Name + "/" + sp.Sub
 	}
 	cen.Tree = scoped
-	cen.ByClass, cen.Bytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(scoped)
+	cen.ByClass, cen.Bytes, cen.UnreviewableBytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(scoped)
 	if sp.Eco == spec.GHA {
 		if err := censusGHA(cen, scoped, art, v, sp.Sub); err != nil {
 			return nil, err
@@ -497,7 +497,7 @@ func censusManifest(eco spec.Ecosystem, tree string, cen *output.Census) error {
 // also names the biggest EXCLUDED (generated/binary) file by size, so the
 // unreviewed majority a census often carries cannot hide a payload
 // anonymously (a package like hono is ~99% dist/).
-func classifyTree(root string) (agg []stats.ClassAgg, total int64, files int, bigExcl string, bigExclBytes int64) {
+func classifyTree(root string) (agg []stats.ClassAgg, total, unrev int64, files int, bigExcl string, bigExclBytes int64) {
 	byClass := map[string]*stats.ClassAgg{}
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
@@ -516,8 +516,15 @@ func classifyTree(root string) (agg []stats.ClassAgg, total int64, files int, bi
 			byClass[string(res.Class)] = a
 		}
 		a.Files++
+		a.Bytes += info.Size()
 		total += info.Size()
 		files++
+		// unreviewable includes the oversized and minified-by-shape mass a
+		// path/marker classification misses (a bundle in a non-dist path)
+		if res.Class == classify.Generated || isBin || info.Size() >= stats.HugeFileBytes ||
+			stats.MinifiedShape(p, head, info.Size()) {
+			unrev += info.Size()
+		}
 		if (res.Class == classify.Generated || isBin) && info.Size() > bigExclBytes {
 			bigExcl = filepath.ToSlash(rel)
 			bigExclBytes = info.Size()
@@ -528,7 +535,7 @@ func classifyTree(root string) (agg []stats.ClassAgg, total int64, files int, bi
 		agg = append(agg, *a)
 	}
 	sortClassAgg(agg)
-	return agg, total, files, bigExcl, bigExclBytes
+	return agg, total, unrev, files, bigExcl, bigExclBytes
 }
 
 // readHead reads the first 4KB and flags binary via a NUL byte (no diff to

@@ -21,6 +21,10 @@ type Census struct {
 	Bytes   int64            `json:"bytes"`
 	Files   int              `json:"files"`
 	ByClass []stats.ClassAgg `json:"byClass"`
+	// UnreviewableBytes sums the files no reviewer reads at rest: generated/
+	// binary by class, minified by line shape, or a single file too large to
+	// review in practice. Heuristic bases, approximate by construction.
+	UnreviewableBytes int64 `json:"unreviewableBytes,omitempty"`
 
 	// BigExcluded names the largest generated/binary file, the unreviewed
 	// surface where a payload can hide (a census is often mostly dist/).

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -90,6 +91,12 @@ type Artifact struct {
 	BytesTo   int64 `json:"bytesTo"`
 	FilesFrom int   `json:"filesFrom"`
 	FilesTo   int   `json:"filesTo"`
+	// UnreviewableFrom/To sum the bytes across each whole tree of files no
+	// reviewer reads: generated/binary by class, minified by line shape, or
+	// a single file too large to review in practice. Heuristic bases (paths,
+	// markers, line lengths, size), so approximate by construction.
+	UnreviewableFrom int64 `json:"unreviewableBytesFrom,omitempty"`
+	UnreviewableTo   int64 `json:"unreviewableBytesTo,omitempty"`
 	// SkippedLinks are symlink/hardlink entries never materialized; the
 	// trees diverge from the install-time artifact by exactly this list.
 	SkippedLinks []string `json:"skippedLinks,omitempty"`
@@ -182,6 +189,10 @@ type ClassAgg struct {
 	Files   int    `json:"files"`
 	Added   int    `json:"linesAdded"`
 	Removed int    `json:"linesRemoved"`
+	// Bytes is the class's at-rest total where the producer walked a whole
+	// tree (census); zero in diff class tables, which aggregate changed
+	// files by line delta.
+	Bytes int64 `json:"bytes,omitempty"`
 }
 
 type FileEntry struct {
@@ -286,6 +297,8 @@ func Build(in Input) (*Stats, error) {
 	}
 
 	var err error
+	s.Artifact.UnreviewableFrom = treeUnreviewable(in.OldTree)
+	s.Artifact.UnreviewableTo = treeUnreviewable(in.NewTree)
 	s.Artifact.BytesFrom, s.Artifact.FilesFrom, err = treeSize(in.OldTree)
 	if err != nil {
 		return nil, err
@@ -607,6 +620,83 @@ func binaryBytes(oldTree, newTree, oldPath, path, status string) (from, to int64
 		}
 	}
 	return
+}
+
+// HugeFileBytes is the single-file size past which review does not happen
+// in practice, whatever the line shape: a multi-megabyte bundle can carry
+// ordinary line lengths and no generated markers, and nobody reads it. Size
+// is the bluntest and most honest of the unreviewability criteria.
+const HugeFileBytes = 1 << 20
+
+// treeUnreviewable sums the bytes of files no reviewer reads at rest:
+// generated/binary by class, a single file at or past hugeFileBytes, or
+// minified by line shape. A walk or read hiccup undercounts, so the signal
+// only ever fires on what was measured.
+func treeUnreviewable(root string) int64 {
+	var n int64
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		var head []byte
+		if f, err := os.Open(p); err == nil {
+			buf := make([]byte, maxHeadBytes)
+			r, _ := f.Read(buf)
+			f.Close()
+			head = buf[:r]
+		}
+		isBin := bytesIndexNul(head)
+		rel, _ := filepath.Rel(root, p)
+		res := classify.File(filepath.ToSlash(rel), head, isBin)
+		if res.Class == classify.Generated || isBin || info.Size() >= HugeFileBytes ||
+			MinifiedShape(p, head, info.Size()) {
+			n += info.Size()
+		}
+		return nil
+	})
+	return n
+}
+
+func bytesIndexNul(b []byte) bool { return slices.Contains(b, 0) }
+
+// MinifiedShape reports whether a file reads as minified/bundled: a line at
+// or past the minified threshold in the head window or, for larger files, in
+// a window sampled from the middle. Bundles often open with a normal-lined
+// preamble (a banner, bundler helpers), so the head alone lies; the middle
+// does not.
+func MinifiedShape(path string, head []byte, size int64) bool {
+	if longLine(head) {
+		return true
+	}
+	if size < 64<<10 {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, maxHeadBytes)
+	n, _ := f.ReadAt(buf, size/2)
+	return longLine(buf[:n])
+}
+
+func longLine(b []byte) bool {
+	run := 0
+	for _, c := range b {
+		if c == '\n' {
+			run = 0
+			continue
+		}
+		if run++; run >= minifiedLineLen {
+			return true
+		}
+	}
+	return false
 }
 
 func treeSize(root string) (bytes int64, files int, err error) {

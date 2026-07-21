@@ -81,6 +81,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeHostileEntry}, "hostile archive member(s) skipped (traversal/absolute/control-byte name: an attack-shaped artifact)"},
 	{[]Code{CodeProvenanceAnomaly}, "provenance anomaly: account-takeover shape (publisher/attestation/repo/yank)"},
 	{[]Code{CodeProvenanceGap}, "coverage gap: publish provenance incomplete (a source lookup failed)"},
+	{[]Code{CodeUnreviewable}, "structurally unreviewable mass (generated/binary dominates the artifact bytes)"},
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
