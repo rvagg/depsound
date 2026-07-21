@@ -1,16 +1,26 @@
-# depsound reviews its own dependency-update PRs (go.mod bumps and github-actions
-# uses: bumps), dogfooding depsound-action. The COMPUTE half: on every PR it
-# diffs the changed manifests, runs depsound, and uploads the report as an
-# artifact. Paired with depsound-post.yml.
+# depsound reviews its own dependency-update PRs (go.mod bumps and
+# github-actions uses: bumps), dogfooding depsound-action. One workflow, two
+# jobs; the security-model notes live in depsound-action's examples/.
 name: depsound
 on:
-  pull_request:
+  pull_request_target:
 
-permissions:
-  contents: read # checkout + diff the PR's manifests; no write, never posts
+permissions: {} # scopes are granted per job below
 
 jobs:
   review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # diff the PR's manifests; this job never sees a write token
     steps:
       - uses: rvagg/depsound-action@e1e774682c78f837dce621d0d67f028e65f2afe8 # v0.2.7
+  post:
+    needs: review
+    if: ${{ always() && needs.review.result != 'cancelled' }} # a failed review still posts its failure marker
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write # upsert the sticky comment
+      checks: write        # set the neutral check
+      actions: read        # download the report artifact
+    steps:
+      - uses: rvagg/depsound-action/post@e1e774682c78f837dce621d0d67f028e65f2afe8 # v0.2.7
