@@ -39,6 +39,12 @@ type Census struct {
 	GHANested []string          `json:"ghaNested,omitempty"`
 	GHACaps   []string          `json:"ghaCaps,omitempty"`
 
+	// SkippedLinks/HostileEntries mirror the diff-side artifact evidence:
+	// members the hardened extractor refused to materialize. Persisted with
+	// the cached tree so the evidence survives reuse.
+	SkippedLinks   []string `json:"skippedLinks,omitempty"`
+	HostileEntries []string `json:"hostileEntries,omitempty"`
+
 	Deps  []manifest.DepChange `json:"dependencies"`
 	Vulns []osv.Vuln           `json:"vulnerabilities,omitempty"`
 
@@ -440,6 +446,14 @@ func CensusText(c *Census) string {
 	}
 	writeEntrypoints(w, c.Entrypoints)
 	writeIntegrity(w, c.Integrity)
+	// same wording as the diff surface: this is the extractor's refusal
+	// evidence, and an adoption is the read that must not lose it
+	if n := len(c.SkippedLinks); n > 0 {
+		w("  %d symlink/hardlink entries not materialized; the tree diverges from the install artifact (see json skippedLinks)", n)
+	}
+	if n := len(c.HostileEntries); n > 0 {
+		w("  %d archive members with hostile names (traversal/control bytes) skipped; treat this artifact as actively suspicious (see json hostileEntries)", n)
+	}
 	// the census equivalent of the diff's payload-highway note: name the
 	// biggest excluded file and how much of the artifact is unreviewed, so
 	// a mostly-generated package (hono is ~99% dist/) cannot read as small

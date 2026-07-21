@@ -145,3 +145,25 @@ func TestLooksExactRelease(t *testing.T) {
 		}
 	}
 }
+
+// A census must carry the extractor's refusal evidence with the same weight
+// as a diff: hostile members are the look tier, skipped links a coverage
+// degradation, and neither can reach a clean verdict.
+func TestDeriveCensusExtractionEvidence(t *testing.T) {
+	l := DeriveCensus("cen", &Census{Files: 3, OSVQueried: true,
+		HostileEntries: []string{"../evil", "/abs"}, SkippedLinks: []string{"l -> /etc"}})
+	byCode := map[Code]Signal{}
+	for _, s := range l.Signals {
+		byCode[s.Code] = s
+	}
+	h, ok := byCode[CodeHostileEntry]
+	if !ok || h.Weight != weightLook || h.Kind != KindFact {
+		t.Errorf("hostile entries: want look-tier fact, got %+v", h)
+	}
+	if _, ok := byCode[CodeSkippedLink]; !ok {
+		t.Errorf("skipped links missing from census ledger: %+v", l.Signals)
+	}
+	if Assess(l).Clean() {
+		t.Error("a census with hostile entries must not read clean")
+	}
+}

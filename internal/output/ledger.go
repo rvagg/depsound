@@ -375,6 +375,16 @@ func DeriveCensus(ref string, c *Census) Ledger {
 		add(CodeCensusExec, KindFact, LensSecurity, weightLook,
 			"runs code on install/build", strings.Join(censusExecWhat(c), ", "))
 	}
+	// extraction evidence carries the same weight as in a diff: an adoption
+	// whose artifact needed hostile-member skips is the one to read closest
+	if n := len(c.HostileEntries); n > 0 {
+		add(CodeHostileEntry, KindFact, LensSecurity, weightLook,
+			fmt.Sprintf("%d hostile archive member(s) skipped at extraction", n), firstN(c.HostileEntries, 5))
+	}
+	if n := len(c.SkippedLinks); n > 0 {
+		add(CodeSkippedLink, KindDegradation, LensCoverage, weightPositive,
+			fmt.Sprintf("%d symlink/hardlink(s) not materialized; their contents were not inspected", n), firstN(c.SkippedLinks, 5))
+	}
 	if c.BigExcluded != "" {
 		add(CodeCensusBig, KindHeuristic, LensCompat, weightPositive,
 			"largest unreviewed file", c.BigExcluded)

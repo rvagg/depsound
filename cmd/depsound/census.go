@@ -321,16 +321,22 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 
 	// persist the tree so the agent can search it; re-extract only if the
 	// cached tree is missing (keyed like the artifact: by resolved commit
-	// for gha, so the immutability assumption holds for mutable refs too)
+	// for gha, so the immutability assumption holds for mutable refs too).
+	// The extractor's refusal evidence (hostile members, skipped links) is
+	// persisted in a sidecar so a cached census keeps it; a legacy tree
+	// without one re-extracts once to regenerate it.
 	tree := c.CensusPath(string(sp.Eco), sp.Name, artKey)
-	if _, err := os.Stat(tree); err != nil {
+	evPath := tree + ".extract.json"
+	rep := readExtractReport(evPath)
+	if !exists(tree) || rep == nil {
+		hadTree := exists(tree)
 		tmp := tree + ".tmp"
 		os.RemoveAll(tmp)
 		switch sp.Eco {
 		case spec.NPM, spec.Crates, spec.GHA:
-			_, err = extract.TarGz(art, tmp, extract.DefaultLimits)
+			rep, err = extract.TarGz(art, tmp, extract.DefaultLimits)
 		case spec.Go:
-			_, err = extract.Zip(art, tmp, sp.Name+"@"+v, extract.DefaultLimits)
+			rep, err = extract.Zip(art, tmp, sp.Name+"@"+v, extract.DefaultLimits)
 		}
 		if err != nil {
 			return nil, err
@@ -338,10 +344,16 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		if err := os.MkdirAll(filepath.Dir(tree), 0o755); err != nil {
 			return nil, err
 		}
-		if err := os.Rename(tmp, tree); err != nil && !exists(tree) {
+		if err := writeExtractReport(evPath, rep); err != nil {
+			return nil, err
+		}
+		if hadTree {
+			os.RemoveAll(tmp) // evidence regenerated; the tree itself is fine
+		} else if err := os.Rename(tmp, tree); err != nil && !exists(tree) {
 			return nil, err
 		}
 	}
+	cen.SkippedLinks, cen.HostileEntries = rep.SkippedLinks, rep.HostileEntries
 
 	// a GHA sub-path action is scoped to what you adopt (owner/repo/SUB),
 	// not the whole repo; census the sub-tree and note the scoping.
@@ -363,6 +375,30 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		return nil, err
 	}
 	return cen, nil
+}
+
+// readExtractReport loads a census tree's persisted extraction evidence;
+// nil (never an error) when absent or unreadable, which the caller treats
+// as "re-extract to regenerate", so corrupt evidence can only cost work,
+// never silently read as clean.
+func readExtractReport(path string) *extract.Report {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var rep extract.Report
+	if json.Unmarshal(b, &rep) != nil {
+		return nil
+	}
+	return &rep
+}
+
+func writeExtractReport(path string, rep *extract.Report) error {
+	b, err := json.Marshal(rep)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
 }
 
 // censusGHA fills a GHA census: the pin (sha/tag/branch, from the sidecar),

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"os"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/extract"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -53,4 +55,28 @@ func TestGHAMovedRefs(t *testing.T) {
 			t.Errorf("want no moved refs without recorded sources, got %+v", moved)
 		}
 	})
+}
+
+// The census evidence sidecar: what the extractor refused must survive tree
+// reuse, and a missing/corrupt sidecar reads as nil (regenerate), never as
+// no-evidence.
+func TestExtractReportSidecar(t *testing.T) {
+	p := t.TempDir() + "/tree.extract.json"
+	if rep := readExtractReport(p); rep != nil {
+		t.Errorf("missing sidecar should read nil, got %+v", rep)
+	}
+	want := &extract.Report{Files: 2, HostileEntries: []string{"../evil"}, SkippedLinks: []string{"l"}}
+	if err := writeExtractReport(p, want); err != nil {
+		t.Fatal(err)
+	}
+	got := readExtractReport(p)
+	if got == nil || got.Files != 2 || len(got.HostileEntries) != 1 || len(got.SkippedLinks) != 1 {
+		t.Errorf("round trip lost evidence: %+v", got)
+	}
+	if err := os.WriteFile(p, []byte("{corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rep := readExtractReport(p); rep != nil {
+		t.Errorf("corrupt sidecar should read nil, got %+v", rep)
+	}
 }
