@@ -329,3 +329,93 @@ func TestDetectGHAUnsupportedUses(t *testing.T) {
 		t.Errorf("unchanged docker image must not surface:\n%s", joined)
 	}
 }
+
+// TestDetectDeclarationFallback: a lockfile-less repo's dependency changes
+// live only in package.json / Cargo.toml; the declaration fallback reads
+// them (dev deps included: a repo's devDependencies install for its CI),
+// passes ranges through for review-time resolution, routes off-registry
+// values as redirects, and defers to a changed lockfile in the same
+// directory.
+func TestDetectDeclarationFallback(t *testing.T) {
+	write := func(name, content string) string {
+		p := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	t.Run("npm ranges, dev deps, added, redirect, compound", func(t *testing.T) {
+		old := `{"dependencies":{"a":"^1.0.0","weird":"^1.0.0","multi":"^1.0.0"},"devDependencies":{"typescript":"^6.0.0"}}`
+		niu := `{"dependencies":{"a":"^1.2.0","weird":"github:evil/fork","multi":">=1.2.0 <2.0.0","sneaked":"^3.0.0"},"devDependencies":{"typescript":"^7.0.0"}}`
+		res := detectChanges([]detectPair{{path: "package.json", old: write("o.json", old), new: write("n.json", niu)}})
+
+		if c := findChange(res.Changed, "a", "^1.0.0", "^1.2.0"); c == nil {
+			t.Errorf("range bump missed: %+v", res.Changed)
+		}
+		if c := findChange(res.Changed, "typescript", "^6.0.0", "^7.0.0"); c == nil {
+			t.Errorf("devDependency bump missed (the lockfile-less typescript-7 shape): %+v", res.Changed)
+		}
+		if len(res.Added) != 1 || res.Added[0].Name != "sneaked" || res.Added[0].To != "^3.0.0" {
+			t.Errorf("sneaked-in dep missed: %+v", res.Added)
+		}
+		if len(res.Redirects) != 1 || res.Redirects[0].Name != "weird" || res.Redirects[0].Target != "github:evil/fork" {
+			t.Errorf("off-registry value must route as a redirect: %+v", res.Redirects)
+		}
+		if len(res.Unresolved) != 1 || !strings.Contains(res.Unresolved[0].Reason, "multi") {
+			t.Errorf("compound range must ride the unresolved stream: %+v", res.Unresolved)
+		}
+	})
+
+	t.Run("crates ranges and path redirect", func(t *testing.T) {
+		old := "[dependencies]\nserde = \"1.0.100\"\n[dev-dependencies]\nrand = \"0.8\"\n"
+		niu := "[dependencies]\nserde = \"1.0.200\"\nlocal = { path = \"../x\" }\n[dev-dependencies]\nrand = \"0.9\"\n"
+		res := detectChanges([]detectPair{{path: "Cargo.toml", old: write("o.toml", old), new: write("n.toml", niu)}})
+		if c := findChange(res.Changed, "serde", "1.0.100", "1.0.200"); c == nil {
+			t.Errorf("crates range bump missed: %+v", res.Changed)
+		}
+		if c := findChange(res.Changed, "rand", "0.8", "0.9"); c == nil {
+			t.Errorf("crates dev-dep bump missed: %+v", res.Changed)
+		}
+		if len(res.Redirects) != 1 || res.Redirects[0].Name != "local" {
+			t.Errorf("path dep must route as a redirect: %+v", res.Redirects)
+		}
+	})
+
+	t.Run("lockfile beside it wins", func(t *testing.T) {
+		declOld := `{"dependencies":{"a":"^1.0.0"}}`
+		declNew := `{"dependencies":{"a":"^1.2.0"}}`
+		lockOld := `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.0.0"}}}`
+		lockNew := `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.2.3"}}}`
+		res := detectChanges([]detectPair{
+			{path: "package.json", old: write("do.json", declOld), new: write("dn.json", declNew)},
+			{path: "package-lock.json", old: write("lo.json", lockOld), new: write("ln.json", lockNew)},
+		})
+		if len(res.Changed) != 1 || res.Changed[0].From != "1.0.0" || res.Changed[0].To != "1.2.3" {
+			t.Errorf("want only the exact lockfile change, got %+v", res.Changed)
+		}
+		found := false
+		for _, n := range res.Notes {
+			if strings.Contains(n, "superseded") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the deferred declaration pair should be noted: %+v", res.Notes)
+		}
+	})
+
+	t.Run("declaration in a different directory stands", func(t *testing.T) {
+		declOld := `{"dependencies":{"b":"^1.0.0"}}`
+		declNew := `{"dependencies":{"b":"^2.0.0"}}`
+		lockOld := `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.0.0"}}}`
+		lockNew := `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.2.3"}}}`
+		res := detectChanges([]detectPair{
+			{path: "pkgs/lib/package.json", old: write("do.json", declOld), new: write("dn.json", declNew)},
+			{path: "package-lock.json", old: write("lo.json", lockOld), new: write("ln.json", lockNew)},
+		})
+		if len(res.Changed) != 2 {
+			t.Errorf("want the lockfile change AND the sibling-dir declaration change, got %+v", res.Changed)
+		}
+	})
+}

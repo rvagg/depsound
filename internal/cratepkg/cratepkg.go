@@ -66,13 +66,24 @@ func Load(dir string) (*Crate, error) {
 			"; every published crate must ship one, so this artifact is anomalous, treat with suspicion")
 		return c, nil
 	}
+	return parseInto(c, dir, b), nil
+}
+
+// Parse reads Cargo.toml bytes (Load's file-free form, for callers holding a
+// manifest that is not on disk, e.g. detect's git-blob pairs). Build-script
+// paths cannot be resolved without a tree, so BuildScript stays empty.
+func Parse(b []byte) (*Crate, error) {
+	return parseInto(&Crate{Features: map[string][]string{}}, "", b), nil
+}
+
+func parseInto(c *Crate, dir string, b []byte) *Crate {
 	var raw rawManifest
 	md, err := toml.Decode(string(b), &raw)
 	if err != nil {
 		// Parses-not: either a format we don't understand or a crafted
 		// manifest; either way we cannot vouch for its contents.
 		c.Warnings = append(c.Warnings, "Cargo.toml present but unparseable, ignored (treat manifest-derived fields as unknown): "+err.Error())
-		return c, nil
+		return c
 	}
 	c.Edition = editionString(raw.Package.Edition)
 	c.RustVersion = raw.Package.RustVersion
@@ -87,7 +98,7 @@ func Load(dir string) (*Crate, error) {
 	c.Deps = renderDeps(md, raw.Dependencies)
 	c.DevDeps = renderDeps(md, raw.DevDeps)
 	c.BuildDeps = renderDeps(md, raw.BuildDeps)
-	return c, nil
+	return c
 }
 
 func editionString(v any) string {
@@ -128,7 +139,7 @@ func renderDeps(md toml.MetaData, deps map[string]toml.Primitive) map[string]str
 			parts = append(parts, "package="+t.Package)
 		}
 		if t.Path != "" {
-			parts = append(parts, "path")
+			parts = append(parts, "path="+t.Path)
 		}
 		if t.Git != "" {
 			parts = append(parts, "git="+t.Git)

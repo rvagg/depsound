@@ -221,6 +221,9 @@ func bulkFail(ref string, err error) output.BulkResult {
 			Kind: he.Kind(), Status: he.Status, URL: he.URL, Hint: he.Hint,
 		}}
 	}
+	if sre, ok := errors.AsType[*sameResolvedError](err); ok {
+		return output.BulkResult{Ref: ref, Note: sre.Error()}
+	}
 	return output.BulkResult{Ref: ref, Err: err.Error()}
 }
 

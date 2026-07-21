@@ -173,7 +173,10 @@ func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (
 	}
 	if from == to {
 		if fromRes.Range != "" || toRes.Range != "" {
-			return nil, fmt.Errorf("%q and %q both resolve to %s; nothing to diff", fromArg, toArg, from)
+			// a benign finding, not a failure: the ranges admit the same
+			// version, so a fresh install is unchanged by this bump. Typed so
+			// bulk renders it as the non-event it is.
+			return nil, &sameResolvedError{fromArg, toArg, from}
 		}
 		return nil, fmt.Errorf("from and to are the same version (%s); nothing to diff", from)
 	}
@@ -350,6 +353,16 @@ func writeJSON(path string, v any) error {
 		return err
 	}
 	return os.WriteFile(path, b, 0o644)
+}
+
+// sameResolvedError reports two range endpoints resolving to one version:
+// nothing to diff, and nothing wrong either.
+type sameResolvedError struct {
+	fromArg, toArg, version string
+}
+
+func (e *sameResolvedError) Error() string {
+	return fmt.Sprintf("%q and %q both resolve to %s; nothing to diff", e.fromArg, e.toArg, e.version)
 }
 
 // ghaPin is a gha ref's resolved identity for one run: the commit that keys

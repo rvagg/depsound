@@ -85,6 +85,7 @@ const (
 	CodeProvenanceAnomaly Code = "provenance.anomaly"       // publisher/attestation/repo/yank account-takeover shape
 	CodeProvenanceGap     Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
 	CodeUnreviewable      Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
+	CodeRangeResolved     Code = "resolution.range"         // an endpoint was a range/latest, resolved at review time
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -104,7 +105,7 @@ var allCodes = []Code{
 	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
-	CodeUnreviewable,
+	CodeUnreviewable, CodeRangeResolved,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -338,6 +339,20 @@ func Derive(ref string, s *stats.Stats) Ledger {
 				bytes(s.Artifact.UnreviewableFrom), bytes(s.Artifact.BytesFrom), pctOf(s.Artifact.UnreviewableFrom, s.Artifact.BytesFrom)))
 	}
 
+	// a range endpoint (a declaration-fallback line, or a range arg) resolves
+	// to one concrete version at review time; the note scopes trust exactly
+	// there: the review covered that version, a consumer may install another
+	// satisfying one, and declaration-level views are direct-deps-only
+	if r := s.Resolution; r != nil && (r.FromSpec != "" || r.ToSpec != "") {
+		spec := r.ToSpec
+		if spec == "" {
+			spec = r.FromSpec
+		}
+		add(CodeRangeResolved, KindNote, LensCoverage, weightPositive,
+			"endpoints resolved from a range at review time",
+			fmt.Sprintf("%q reviewed at one satisfying version; a consumer may install another, and a declaration-level change carries no transitive resolution", spec))
+	}
+
 	// a provenance source that failed is lost coverage, exactly like a failed
 	// OSV scan: the fields it carries are silently absent, so their absence
 	// must not read as "no anomalies"
@@ -536,6 +551,15 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	}
 	sortSignals(l.Signals)
 	return l
+}
+
+// DeriveBenign wraps a no-action finding (two ranges resolving to the same
+// version) so it renders as information, never as a failure or a flag.
+func DeriveBenign(ref, note string) Ledger {
+	return Ledger{Ref: ref, Signals: []Signal{{
+		Code: CodeRangeResolved, Kind: KindNote, Lens: LensCompat, Weight: weightPositive,
+		Title: "ranges resolve to the same version (a fresh install is unchanged)", Detail: note,
+	}}}
 }
 
 // DeriveRedirect is the FACT-grade flag that a dependency is served from a

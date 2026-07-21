@@ -153,6 +153,21 @@ func resolveLock(kind, src, lockName string) ([]resolvedDep, error) {
 			return nil, err
 		}
 		return npmLockedToResolved(reg), nil
+	case "npm-decl":
+		// the declaration fallback: values are ranges, passed through for
+		// bulk to resolve at review time. Dev deps count here, a repo's own
+		// devDependencies install for its CI and dev machines.
+		p, err := npmpkg.Parse(b)
+		if err != nil {
+			return nil, err
+		}
+		return declToResolved(p.Dev, p.Optional, p.Peer, p.Deps), nil
+	case "crates-decl":
+		c, err := cratepkg.Parse(b)
+		if err != nil {
+			return nil, err
+		}
+		return declToResolved(c.DevDeps, c.BuildDeps, c.Deps), nil
 	case "gha":
 		// a workflow file (or composite action.yml) IS the gha manifest: its
 		// pinned `uses:` refs are the resolved set, so diffResolved yields the
@@ -191,6 +206,23 @@ func ghaUnsupportedKind(name string) string {
 		return "reusable workflow"
 	}
 	return ""
+}
+
+// declToResolved flattens declaration dep tables (name -> range) into the
+// resolved-set shape, later maps winning a name collision (pass the primary
+// runtime table last).
+func declToResolved(tables ...map[string]string) []resolvedDep {
+	merged := map[string]string{}
+	for _, t := range tables {
+		for name, rng := range t {
+			merged[name] = rng
+		}
+	}
+	out := make([]resolvedDep, 0, len(merged))
+	for name, rng := range merged {
+		out = append(out, resolvedDep{name, rng, false})
+	}
+	return out
 }
 
 func lockedToResolved(crates []cratepkg.LockedCrate) []resolvedDep {

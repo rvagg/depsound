@@ -23,6 +23,10 @@ type Package struct {
 	Deps     map[string]string
 	Peer     map[string]string
 	Optional map[string]string
+	// Dev is devDependencies: irrelevant to a published artifact (they never
+	// install for consumers) but the declaration-fallback detect path reads
+	// them, because a repo's dev deps DO install for its own CI and dev.
+	Dev map[string]string
 	// Warnings records known fields whose shape was not what npm
 	// documents (ancient packages have engines-as-array and worse);
 	// such fields degrade to empty rather than failing the run.
@@ -38,6 +42,12 @@ func Load(dir string) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Parse(b)
+}
+
+// Parse reads package.json bytes (Load's file-free form, for callers holding
+// a manifest that is not on disk, e.g. detect's git-blob pairs).
+func Parse(b []byte) (*Package, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("package.json: %w", err)
@@ -52,6 +62,7 @@ func Load(dir string) (*Package, error) {
 	p.Deps = p.stringMap(raw, "dependencies")
 	p.Peer = p.stringMap(raw, "peerDependencies")
 	p.Optional = p.stringMap(raw, "optionalDependencies")
+	p.Dev = p.stringMap(raw, "devDependencies")
 	return p, nil
 }
 

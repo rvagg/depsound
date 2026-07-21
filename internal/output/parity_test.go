@@ -62,6 +62,7 @@ func markdownMarkers() map[Code]string {
 		CodeProvenanceAnomaly: "provenance anomaly",
 		CodeProvenanceGap:     "provenance incomplete",
 		CodeUnreviewable:      "unreviewable",
+		CodeRangeResolved:     "resolved from a range",
 		CodeGHARefMoved:       "since last fetch",
 		CodeGHAPinWeakened:    "pin weakened",
 		CodeGHAPinRaised:      "pin strengthened",
@@ -102,6 +103,7 @@ func bulkMarkers() map[Code]string {
 		CodeProvenanceAnomaly: "provenance anomaly",
 		CodeProvenanceGap:     "provenance incomplete",
 		CodeUnreviewable:      "unreviewable",
+		CodeRangeResolved:     "resolved from a range",
 		CodeGHARefMoved:       "since last fetch",
 		CodeGHAPinWeakened:    "pin weakened",
 		CodeGHAPinRaised:      "pin strengthened",
@@ -132,8 +134,9 @@ func parityFixture() []BulkResult {
 		{Ref: "gha:up v1 -> sha", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
 			Action: &stats.ActionSection{Pins: []stats.ActionPin{{Side: "from", Kind: "tag", Ref: "v1"}, {Side: "to", Kind: "sha", Ref: "bbbb"}}}}}, // pin strengthened
 		{Ref: "go:b v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}},
-		{Ref: "npm:c 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}},                            // disabled
-		{Ref: "npm:f 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false, Note: "OSV lookup failed"}}}, // failed
+		{Ref: "npm:c 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}}, // disabled
+		{Ref: "npm:f 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false, Note: "OSV lookup failed"},
+			Resolution: &stats.Resolution{FromSpec: "^1.0.0", ToSpec: "^2.0.0"}}}, // failed + range-resolved endpoints
 		{Ref: "gha:u v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
 			Action:    &stats.ActionSection{Pins: []stats.ActionPin{{Side: "from", Kind: "tag", Ref: "v1"}, {Side: "to", Kind: "tag", Ref: "v2"}}},                        // pin grade: tag both sides
 			MovedRefs: []stats.MovedRef{{Side: "to", Ref: "v2.0.1", Prev: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}, // osv-unsupported + moved ref

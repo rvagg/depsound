@@ -69,6 +69,8 @@ func ledgerRows(results []BulkResult) []ledgerRow {
 			rows = append(rows, ledgerRow{l: DeriveUnavailable(r.Ref, r.Unavailable), ref: r.Ref, kind: rowStats})
 		case r.Redirect != "":
 			rows = append(rows, ledgerRow{l: DeriveRedirect(r.Ref, r.Redirect), ref: r.Ref, kind: rowRedirect})
+		case r.Note != "":
+			rows = append(rows, ledgerRow{l: DeriveBenign(r.Ref, r.Note), ref: r.Ref, kind: rowStats})
 		case r.Census != nil:
 			rows = append(rows, ledgerRow{l: DeriveCensus(r.Ref, r.Census), c: r.Census, ref: r.Ref, kind: rowCensus})
 		case r.Stats != nil:

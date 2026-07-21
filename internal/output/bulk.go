@@ -26,7 +26,10 @@ type BulkResult struct {
 	// Unavailable is a classified acquisition failure (the artifact could not be
 	// fetched): absent/denied/transient, preserving URL and status.
 	Unavailable *Unavailable `json:"unavailable,omitempty"`
-	Err         string       `json:"error,omitempty"`
+	// Note is a benign no-action finding (e.g. two ranges resolving to the
+	// same version): information, never a failure and never a flag.
+	Note string `json:"note,omitempty"`
+	Err  string `json:"error,omitempty"`
 }
 
 // digest is the low-level Stats->signals extractor Derive wraps into the typed
@@ -82,6 +85,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeProvenanceAnomaly}, "provenance anomaly: account-takeover shape (publisher/attestation/repo/yank)"},
 	{[]Code{CodeProvenanceGap}, "coverage gap: publish provenance incomplete (a source lookup failed)"},
 	{[]Code{CodeUnreviewable}, "structurally unreviewable mass (generated/binary dominates the artifact bytes)"},
+	{[]Code{CodeRangeResolved}, "endpoints resolved from a range at review time (one satisfying version reviewed)"},
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
@@ -156,6 +160,10 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 			redirects = append(redirects, r)
 		case r.Census != nil:
 			newDeps = append(newDeps, r)
+		case r.Note != "":
+			for _, sig := range DeriveBenign(r.Ref, r.Note).Signals {
+				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
+			}
 		case r.Stats == nil:
 			failed = append(failed, r)
 		default:

@@ -67,6 +67,8 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 		Compat: stats.Compat{ExportsError: "bad exports"},
 	}))
 	// census (incl. the biggest-unreviewed-file lead), redirect, failure
+	collect(Derive("range", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+		Resolution: &stats.Resolution{ToSpec: "^2.0.0"}}))
 	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}))
 	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))

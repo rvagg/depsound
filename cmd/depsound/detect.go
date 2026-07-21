@@ -27,6 +27,21 @@ var detectManifests = map[string]string{
 	"package-lock.json": "npm",
 	"pnpm-lock.yaml":    "pnpm",
 	"Cargo.lock":        "crates",
+	// declaration files: the labelled-approximate fallback for repos that
+	// commit no lockfile (common for npm/crates libraries), where a dep
+	// change, or a sneaked-in dep, lives only here. Values are ranges, passed
+	// through untouched for bulk to resolve at review time; a directory whose
+	// lockfile also changed drops its declaration pair (the lockfile is exact
+	// and transitive, the declaration is neither).
+	"package.json": "npm-decl",
+	"Cargo.toml":   "crates-decl",
+}
+
+// declLockKind maps a declaration kind to the resolution kinds that trump it
+// in the same directory.
+var declLockKind = map[string][]string{
+	"npm-decl":    {"npm", "pnpm"},
+	"crates-decl": {"crates"},
 }
 
 // manifestKind classifies a changed file into a detector KIND, or (,false) to
@@ -56,8 +71,13 @@ func isWorkflowPath(p string) bool {
 // default filename. gha is detect-only (no transitive-lockfile mode), so it is
 // not in transitiveEcos; every other kind is.
 func detectEco(kind string) transitiveEco {
-	if kind == "gha" {
+	switch kind {
+	case "gha":
 		return transitiveEco{analysis: "gha", lockName: ""}
+	case "npm-decl":
+		return transitiveEco{analysis: "npm", lockName: "package.json"}
+	case "crates-decl":
+		return transitiveEco{analysis: "crates", lockName: "Cargo.toml"}
 	}
 	return transitiveEcos[kind]
 }
@@ -195,6 +215,19 @@ func detectChanges(pairs []detectPair) detectResult {
 	var res detectResult
 	changedIdx, addedIdx, redirectIdx := map[string]int{}, map[string]int{}, map[string]int{}
 	skipped := map[string]bool{}
+	// kinds present per directory, so a declaration pair defers to a changed
+	// lockfile beside it (the lockfile is exact and transitive; the
+	// declaration is ranges and direct-only)
+	dirKinds := map[string]map[string]bool{}
+	for _, p := range pairs {
+		if k, ok := manifestKind(p.path); ok {
+			d := path.Dir(p.path)
+			if dirKinds[d] == nil {
+				dirKinds[d] = map[string]bool{}
+			}
+			dirKinds[d][k] = true
+		}
+	}
 	for _, p := range pairs {
 		base := path.Base(p.path)
 		kind, ok := manifestKind(p.path)
@@ -203,6 +236,10 @@ func detectChanges(pairs []detectPair) detectResult {
 				skipped[base] = true
 				res.Notes = append(res.Notes, fmt.Sprintf("%s: no detector for %q, skipped", p.path, base))
 			}
+			continue
+		}
+		if lock := declSuperseded(kind, dirKinds[path.Dir(p.path)]); lock != "" {
+			res.Notes = append(res.Notes, fmt.Sprintf("%s: superseded by the %s diff beside it (exact + transitive)", p.path, lock))
 			continue
 		}
 		te := detectEco(kind)
@@ -217,6 +254,7 @@ func detectChanges(pairs []detectPair) detectResult {
 			continue
 		}
 		d := diffResolved(oldDeps, newDeps)
+		isDecl := strings.HasSuffix(kind, "-decl")
 		for _, c := range d.changed {
 			// a changed docker image or reusable workflow cannot be fetched or
 			// analysed; it rides the unresolved stream so the change is a loud
@@ -228,6 +266,21 @@ func detectChanges(pairs []detectPair) detectResult {
 					continue
 				}
 			}
+			if isDecl {
+				// a declaration value pointing off the registry (git/url/path/
+				// alias) is the trust-laundering shape, route it as a redirect;
+				// a compound range has no single endpoint to review, so it
+				// rides the unresolved stream rather than vanishing
+				if tgt := declNonRegistry(te.analysis, c.To); tgt != "" {
+					mergeRedirect(&res.Redirects, redirectIdx, te.analysis, detectRedirect{Name: c.Path, Target: tgt}, p.path)
+					continue
+				}
+				if hasSpace(c.From) || hasSpace(c.To) {
+					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
+						fmt.Sprintf("declaration range for %s (%q -> %q) has no single resolvable endpoint; review the manifest diff", c.Path, c.From, c.To)})
+					continue
+				}
+			}
 			mergeDetect(&res.Changed, changedIdx, te.analysis, c.Path, c.From, c.To, c.Indirect, p.path)
 		}
 		for _, c := range d.added {
@@ -235,6 +288,17 @@ func detectChanges(pairs []detectPair) detectResult {
 				if k := ghaUnsupportedKind(c.Path); k != "" {
 					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
 						fmt.Sprintf("unsupported uses (%s): %s added at %s; not analysed, review the workflow diff", k, c.Path, c.To)})
+					continue
+				}
+			}
+			if isDecl {
+				if tgt := declNonRegistry(te.analysis, c.To); tgt != "" {
+					mergeRedirect(&res.Redirects, redirectIdx, te.analysis, detectRedirect{Name: c.Path, Target: tgt}, p.path)
+					continue
+				}
+				if hasSpace(c.To) {
+					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
+						fmt.Sprintf("declaration range for added dep %s (%q) has no single resolvable endpoint; review the manifest diff", c.Path, c.To)})
 					continue
 				}
 			}
@@ -254,6 +318,40 @@ func detectChanges(pairs []detectPair) detectResult {
 	sortRedirects(res.Redirects)
 	return res
 }
+
+// declSuperseded names the lockfile kind that trumps a declaration kind when
+// both changed in the same directory; "" when the declaration pair stands.
+func declSuperseded(kind string, kinds map[string]bool) string {
+	for _, lock := range declLockKind[kind] {
+		if kinds[lock] {
+			return lock
+		}
+	}
+	return ""
+}
+
+// declNonRegistry extracts a non-registry source from a declaration value:
+// npm values that are git/url/local/alias forms, and cratepkg's rendered
+// "path="/"git="/"package=" (rename) forms. Empty for a registry range.
+func declNonRegistry(eco, v string) string {
+	switch eco {
+	case "npm":
+		for _, pre := range []string{"git+", "git://", "github:", "http://", "https://", "file:", "link:", "portal:", "workspace:", "npm:"} {
+			if strings.HasPrefix(v, pre) {
+				return v
+			}
+		}
+	case "crates":
+		for _, f := range strings.Fields(v) {
+			if strings.HasPrefix(f, "path=") || strings.HasPrefix(f, "git=") || strings.HasPrefix(f, "package=") {
+				return f
+			}
+		}
+	}
+	return ""
+}
+
+func hasSpace(s string) bool { return strings.ContainsAny(s, " \t") }
 
 // goRedirectDelta returns the replace directives added or retargeted between
 // two go.mod versions. In the main module (a consumer's own go.mod, what
