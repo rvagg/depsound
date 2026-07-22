@@ -14,14 +14,10 @@ import (
 	"github.com/rvagg/depsound/internal/gopkg"
 )
 
-// detectManifests maps an authoritative resolution file's base name to the
-// lockfile KIND it parses as. Only files that carry the RESOLVED set belong
-// here: go.mod (post-1.17 prune puts direct+indirect in it) and the lockfiles
-// (package-lock.json / pnpm-lock.yaml / Cargo.lock, which carry transitive).
-// Declaration files (package.json, Cargo.toml) are deliberately absent: their
-// lockfile is authoritative and diffing it catches
-// transitive bumps a manifest diff misses. A changed file whose base name is
-// not here is skipped with a note, never silently.
+// detectManifests maps a manifest's base name to the KIND it parses as: the
+// resolution files (go.mod, and the lockfiles, which carry the exact
+// transitive set) plus the declaration fallbacks below them. A changed file
+// whose base name is not here is skipped with a note, never silently.
 var detectManifests = map[string]string{
 	"go.mod":            "go",
 	"package-lock.json": "npm",
@@ -35,13 +31,18 @@ var detectManifests = map[string]string{
 	// and transitive, the declaration is neither).
 	"package.json": "npm-decl",
 	"Cargo.toml":   "crates-decl",
+	// pnpm catalogs centralize ranges in pnpm-workspace.yaml (package.json
+	// entries say "catalog:"), so a bump can live in this file alone; it
+	// rides the same declaration flow, deferring to a changed pnpm-lock.yaml
+	"pnpm-workspace.yaml": "pnpm-catalog",
 }
 
 // declLockKind maps a declaration kind to the resolution kinds that trump it
 // in the same directory.
 var declLockKind = map[string][]string{
-	"npm-decl":    {"npm", "pnpm"},
-	"crates-decl": {"crates"},
+	"npm-decl":     {"npm", "pnpm"},
+	"crates-decl":  {"crates"},
+	"pnpm-catalog": {"pnpm"},
 }
 
 // manifestKind classifies a changed file into a detector KIND, or (,false) to
@@ -78,6 +79,8 @@ func detectEco(kind string) transitiveEco {
 		return transitiveEco{analysis: "npm", lockName: "package.json"}
 	case "crates-decl":
 		return transitiveEco{analysis: "crates", lockName: "Cargo.toml"}
+	case "pnpm-catalog":
+		return transitiveEco{analysis: "npm", lockName: "pnpm-workspace.yaml"}
 	}
 	return transitiveEcos[kind]
 }
@@ -254,7 +257,7 @@ func detectChanges(pairs []detectPair) detectResult {
 			continue
 		}
 		d := diffResolved(oldDeps, newDeps)
-		isDecl := strings.HasSuffix(kind, "-decl")
+		isDecl := strings.HasSuffix(kind, "-decl") || kind == "pnpm-catalog"
 		for _, c := range d.changed {
 			// a changed docker image or reusable workflow cannot be fetched or
 			// analysed; it rides the unresolved stream so the change is a loud

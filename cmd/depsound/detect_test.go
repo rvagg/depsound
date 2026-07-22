@@ -419,3 +419,51 @@ func TestDetectDeclarationFallback(t *testing.T) {
 		}
 	})
 }
+
+// TestDetectPnpmCatalog: pnpm catalogs centralize ranges in
+// pnpm-workspace.yaml, so a bump can live in that file alone (the
+// synapse-sdk typescript-7 shape); named catalogs count too, and a changed
+// pnpm-lock.yaml beside it wins.
+func TestDetectPnpmCatalog(t *testing.T) {
+	write := func(name, content string) string {
+		p := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := "packages:\n  - packages/*\ncatalog:\n  typescript: 6.0.3\ncatalogs:\n  react18:\n    react: ^18.0.0\n"
+	niu := "packages:\n  - packages/*\ncatalog:\n  typescript: 7.0.2\ncatalogs:\n  react18:\n    react: ^18.2.0\n"
+	res := detectChanges([]detectPair{{path: "pnpm-workspace.yaml", old: write("o.yaml", old), new: write("n.yaml", niu)}})
+	if c := findChange(res.Changed, "typescript", "6.0.3", "7.0.2"); c == nil || c.Eco != "npm" {
+		t.Errorf("catalog bump missed: %+v", res.Changed)
+	}
+	if c := findChange(res.Changed, "react", "^18.0.0", "^18.2.0"); c == nil {
+		t.Errorf("named-catalog bump missed: %+v", res.Changed)
+	}
+
+	// only the pnpm lockfile supersedes a catalog, not npm's
+	lockOld := `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.0.0"}}}`
+	lockNew := `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.2.3"}}}`
+	res = detectChanges([]detectPair{
+		{path: "pnpm-workspace.yaml", old: write("o2.yaml", old), new: write("n2.yaml", niu)},
+		{path: "package-lock.json", old: write("lo.json", lockOld), new: write("ln.json", lockNew)},
+	})
+	if findChange(res.Changed, "typescript", "6.0.3", "7.0.2") == nil {
+		t.Errorf("catalog must not defer to package-lock.json: %+v (notes %v)", res.Changed, res.Notes)
+	}
+
+	res = detectChanges([]detectPair{
+		{path: "pnpm-workspace.yaml", old: write("o3.yaml", old), new: write("n3.yaml", niu)},
+		{path: "pnpm-lock.yaml", old: "-", new: "-"},
+	})
+	sup := false
+	for _, n := range res.Notes {
+		if strings.Contains(n, "pnpm-workspace.yaml") && strings.Contains(n, "superseded") {
+			sup = true
+		}
+	}
+	if !sup || len(res.Changed) != 0 {
+		t.Errorf("a changed pnpm-lock.yaml beside the catalog should supersede it: changed=%+v notes=%+v", res.Changed, res.Notes)
+	}
+}

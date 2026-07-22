@@ -54,10 +54,10 @@ A package that ships megabytes of bundled or minified code is structurally
 hard to review on every bump: the diff can only say "the blob changed".
 Treat recurring unreviewable mass as a property of the dependency and a fair
 reason to prefer a leaner alternative; the pressure belongs on authors who
-publish like that. depsound measures the mass (bytes by class, a heuristic
-basis) and flags the flip to bundle-dominated; whether to keep carrying the
-surface is your call. The bases are heuristic (class by path and markers,
-line shape, file size); the byte counts are real.
+publish like that. depsound measures the mass and flags the flip to
+bundle-dominated; whether the trade-off is worth it is your call. The bases
+are heuristic (class by path and markers, line shape, file size); the byte
+counts are real.
 
 == Execution surface ==
 npm/Go/Rust: install/build scripts, cgo, build.rs, proc-macro run code on

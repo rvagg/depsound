@@ -331,7 +331,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	case domTo && domFrom:
 		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
 			"mostly unreviewable at rest (both versions)",
-			unrevDetail+"; every bump of this package carries this surface")
+			unrevDetail+"; expect the same on every bump")
 	case domFrom && !domTo:
 		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
 			"no longer mostly unreviewable",

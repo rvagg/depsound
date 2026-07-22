@@ -55,3 +55,29 @@ func ParsePnpmLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 	}
 	return deps, nonRegistry, nil
 }
+
+// ParseWorkspaceCatalogs reads pnpm-workspace.yaml's catalog tables: the
+// default `catalog:` map plus every named catalog under `catalogs:`. pnpm
+// centralizes dependency ranges there (package.json entries say "catalog:"),
+// so a bump can live in this file alone, touching no other manifest. Returns
+// name -> range with named-catalog entries flattened in (a name colliding
+// across catalogs keeps the default catalog's value).
+func ParseWorkspaceCatalogs(b []byte) (map[string]string, error) {
+	var ws struct {
+		Catalog  map[string]string            `yaml:"catalog"`
+		Catalogs map[string]map[string]string `yaml:"catalogs"`
+	}
+	if err := yaml.Unmarshal(b, &ws); err != nil {
+		return nil, fmt.Errorf("pnpm-workspace.yaml: %w", err)
+	}
+	out := map[string]string{}
+	for _, named := range ws.Catalogs {
+		for name, rng := range named {
+			out[name] = rng
+		}
+	}
+	for name, rng := range ws.Catalog {
+		out[name] = rng
+	}
+	return out, nil
+}

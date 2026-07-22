@@ -168,6 +168,12 @@ func resolveLock(kind, src, lockName string) ([]resolvedDep, error) {
 			return nil, err
 		}
 		return declToResolved(c.DevDeps, c.BuildDeps, c.Deps), nil
+	case "pnpm-catalog":
+		cat, err := npmpkg.ParseWorkspaceCatalogs(b)
+		if err != nil {
+			return nil, err
+		}
+		return declToResolved(cat), nil
 	case "gha":
 		// a workflow file (or composite action.yml) IS the gha manifest: its
 		// pinned `uses:` refs are the resolved set, so diffResolved yields the
