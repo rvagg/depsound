@@ -133,9 +133,9 @@ func writeChurnTree(w func(string, ...any), roots []*ChurnNode) {
 	w("changed subtree (branches leading to a change; ^ bumped, + added, (*) shown above):")
 	var walk func(n *ChurnNode, prefix string, last bool)
 	walk = func(n *ChurnNode, prefix string, last bool) {
-		branch, next := "|- ", "|  "
+		branch, next := "├── ", "│   "
 		if last {
-			branch, next = "`- ", "   "
+			branch, next = "└── ", "    "
 		}
 		label := taint(n.Label)
 		if n.Mark != "" {
