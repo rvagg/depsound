@@ -99,6 +99,17 @@ func transitiveCmd(args []string) error {
 		DirectChanged:   res.directChanged,
 		IndirectChanged: res.indirectChanged,
 	}
+	// the changed subtree with its causality, where the lockfile carries
+	// edges (npm today; pnpm/crates follow-ons)
+	if kind == "npm" && len(res.changed)+len(res.added) > 0 {
+		if n := len(res.changed) + len(res.added); n > churnBudget {
+			tr.TreeNote = churnSummaryNote(n)
+		} else if b, err := readSource(newSrc, te.lockName); err == nil {
+			if roots, edges, err := npmpkg.PackageLockGraph(b); err == nil {
+				tr.Tree = buildChurnTree(roots, edges, res.changed, res.added)
+			}
+		}
+	}
 
 	if format == "json" {
 		enc := json.NewEncoder(os.Stdout)

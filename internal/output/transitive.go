@@ -29,6 +29,25 @@ type TransitiveResult struct {
 	Flat            bool `json:"flat,omitempty"`
 	DirectChanged   int  `json:"directChanged"`
 	IndirectChanged int  `json:"indirectChanged"`
+	// Tree is the changed subtree rooted at the consumer's direct deps: only
+	// branches leading to a changed/added node, so the churn reads with its
+	// causality ("bumping A moved x and y") instead of as a flat list.
+	// Populated when the lockfile kind carries edges (npm today); omitted,
+	// never faked, otherwise.
+	Tree []*ChurnNode `json:"churnTree,omitempty"`
+	// TreeNote states why a tree is absent when one was possible (over the
+	// churn budget): an elision is always said, never silent.
+	TreeNote string `json:"churnTreeNote,omitempty"`
+}
+
+// ChurnNode is one node of the changed subtree. Mark: "^" bumped, "+" added,
+// "" an unchanged node on the path to a change. Dedup marks a node whose
+// subtree already rendered under an earlier branch, printed as (*).
+type ChurnNode struct {
+	Label string       `json:"label"`
+	Mark  string       `json:"mark,omitempty"`
+	Kids  []*ChurnNode `json:"children,omitempty"`
+	Dedup bool         `json:"dedup,omitempty"`
 }
 
 // Transitive renders the change set: the framing (this is the WHOLE subtree,
@@ -47,6 +66,12 @@ func Transitive(t TransitiveResult) string {
 			t.label(), len(t.Changed), t.DirectChanged, t.IndirectChanged)
 		w("  %d added, %d removed. This is the whole subtree the bump moves, direct and", len(t.Added), len(t.Removed))
 		w("  indirect (from go.mod incl. // indirect; go.sum is fuller with test-only).")
+	}
+
+	writeChurnTree(w, t.Tree)
+	if t.TreeNote != "" {
+		w("")
+		w("  note: %s", t.TreeNote)
 	}
 
 	if len(t.Added) > 0 {
@@ -94,4 +119,37 @@ func (t TransitiveResult) tag(indirect bool) string {
 		return "  [indirect]"
 	}
 	return "  [direct]"
+}
+
+// writeChurnTree renders the changed subtree with box-drawing and delta
+// marks. Every elision is stated: a deduped subtree prints (*), and the
+// caller flips to the flat summary instead of passing a tree it cannot
+// honestly draw.
+func writeChurnTree(w func(string, ...any), roots []*ChurnNode) {
+	if len(roots) == 0 {
+		return
+	}
+	w("")
+	w("changed subtree (branches leading to a change; ^ bumped, + added, (*) shown above):")
+	var walk func(n *ChurnNode, prefix string, last bool)
+	walk = func(n *ChurnNode, prefix string, last bool) {
+		branch, next := "|- ", "|  "
+		if last {
+			branch, next = "`- ", "   "
+		}
+		label := taint(n.Label)
+		if n.Mark != "" {
+			label = n.Mark + " " + label
+		}
+		if n.Dedup {
+			label += " (*)"
+		}
+		w("  %s%s%s", prefix, branch, label)
+		for i, k := range n.Kids {
+			walk(k, prefix+next, i == len(n.Kids)-1)
+		}
+	}
+	for i, r := range roots {
+		walk(r, "", i == len(roots)-1)
+	}
 }

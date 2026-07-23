@@ -3,6 +3,7 @@ package npmpkg
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -57,4 +58,85 @@ func ParsePackageLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 		deps = append(deps, LockedDep{Name: name, Version: e.Version, Dev: e.Dev})
 	}
 	return deps, nonRegistry, nil
+}
+
+// PackageLockGraph reads the who-pulls-whom edges out of a package-lock v2/v3:
+// node "name@version" -> children it depends on, plus the root's direct set.
+// Each entry's target resolves by npm's shadowing rule: the nearest ancestor
+// node_modules that holds the name. Runtime `dependencies` plus optional;
+// per-package dev deps of transitive packages never install and carry no edge.
+func PackageLockGraph(b []byte) (roots []string, edges map[string][]string, err error) {
+	var lock struct {
+		Packages map[string]struct {
+			Name         string            `json:"name"`
+			Version      string            `json:"version"`
+			Dependencies map[string]string `json:"dependencies"`
+			Optional     map[string]string `json:"optionalDependencies"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(b, &lock); err != nil {
+		return nil, nil, fmt.Errorf("package-lock.json: %w", err)
+	}
+	if lock.Packages == nil {
+		return nil, nil, fmt.Errorf("package-lock.json has no `packages` map (lockfileVersion 1 unsupported)")
+	}
+
+	// resolve a dependency name from a package path by walking ancestor
+	// node_modules scopes, exactly npm's lookup order
+	resolve := func(from, name string) string {
+		prefix := from
+		for {
+			cand := "node_modules/" + name
+			if prefix != "" {
+				cand = prefix + "/node_modules/" + name
+			}
+			if _, ok := lock.Packages[cand]; ok {
+				return cand
+			}
+			if prefix == "" {
+				return ""
+			}
+			if i := strings.LastIndex(prefix, "/node_modules/"); i >= 0 {
+				prefix = prefix[:i]
+			} else {
+				prefix = ""
+			}
+		}
+	}
+	id := func(path string) string {
+		e := lock.Packages[path]
+		name := e.Name
+		if name == "" {
+			if i := strings.LastIndex(path, "node_modules/"); i >= 0 {
+				name = path[i+len("node_modules/"):]
+			}
+		}
+		return name + "@" + e.Version
+	}
+
+	edges = map[string][]string{}
+	for path, e := range lock.Packages {
+		names := make([]string, 0, len(e.Dependencies)+len(e.Optional))
+		for n := range e.Dependencies {
+			names = append(names, n)
+		}
+		for n := range e.Optional {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		var kids []string
+		for _, n := range names {
+			if target := resolve(path, n); target != "" {
+				kids = append(kids, id(target))
+			}
+		}
+		if path == "" {
+			roots = kids
+			continue
+		}
+		if e.Version != "" {
+			edges[id(path)] = append(edges[id(path)], kids...)
+		}
+	}
+	return roots, edges, nil
 }
