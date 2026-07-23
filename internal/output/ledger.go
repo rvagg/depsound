@@ -331,7 +331,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	case domTo && domFrom:
 		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
 			"mostly unreviewable at rest (both versions)",
-			unrevDetail+"; expect the same on every bump")
+			unrevDetail+"; expect the same on every bump. Weight depends on what you consume: check whether the entrypoints resolve into this mass")
 	case domFrom && !domTo:
 		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
 			"no longer mostly unreviewable",
@@ -546,7 +546,7 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	if unreviewableDominant(unrev, c.Bytes) {
 		add(CodeUnreviewable, KindFact, LensSecurity, weightWeigh,
 			"mostly unreviewable at rest",
-			fmt.Sprintf("%s of %s (%d%%) generated/binary/minified/oversized; structurally hard to review now and on every future bump",
+			fmt.Sprintf("%s of %s (%d%%) generated/binary/minified/oversized; structurally hard to review now and on every future bump (weight depends on whether the entrypoints resolve into it)",
 				bytes(unrev), bytes(c.Bytes), pctOf(unrev, c.Bytes)))
 	}
 	sortSignals(l.Signals)
