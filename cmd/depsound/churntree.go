@@ -3,9 +3,23 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
+
+	"golang.org/x/mod/semver"
 
 	"github.com/rvagg/depsound/internal/output"
 )
+
+// versionArrow marks a change by direction: ↓ downgrade, ↑ otherwise. Not-
+// comparable versions (non-semver, or equal) default to ↑; the from→to in the
+// label carries the truth, the glyph is only a scan hint.
+func versionArrow(from, to string) string {
+	f, t := "v"+strings.TrimPrefix(from, "v"), "v"+strings.TrimPrefix(to, "v")
+	if semver.IsValid(f) && semver.IsValid(t) && semver.Compare(f, t) > 0 {
+		return "↓"
+	}
+	return "↑"
+}
 
 // churnBudget is the flip point: past this many changed/added nodes a tree
 // is noise, so the render falls back to the flat summary (stated, never
@@ -26,8 +40,8 @@ func buildChurnTree(roots []string, edges map[string][]string, changed []output.
 	kind := map[string]string{}
 	for _, c := range changed {
 		id := c.Path + "@" + c.To
-		mark[id] = fmt.Sprintf("%s %s -> %s", c.Path, c.From, c.To)
-		kind[id] = "^"
+		mark[id] = fmt.Sprintf("%s %s → %s", c.Path, c.From, c.To)
+		kind[id] = versionArrow(c.From, c.To)
 	}
 	for _, a := range added {
 		id := a.Path + "@" + a.To

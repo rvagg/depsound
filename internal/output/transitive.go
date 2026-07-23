@@ -130,7 +130,7 @@ func writeChurnTree(w func(string, ...any), roots []*ChurnNode) {
 		return
 	}
 	w("")
-	w("changed subtree (branches leading to a change; ^ bumped, + added, (*) shown above):")
+	w("changed subtree (branches leading to a change; ↑/↓ up/downgrade, + added, (*) already shown):")
 	var walk func(n *ChurnNode, prefix string, last bool)
 	walk = func(n *ChurnNode, prefix string, last bool) {
 		branch, next := "├── ", "│   "

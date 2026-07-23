@@ -36,14 +36,14 @@ func TestBuildChurnTree(t *testing.T) {
 	}
 	walk(tree[0], 0)
 	joined := strings.Join(flat, "\n")
-	if !strings.Contains(joined, "c 3.0.0 -> 3.0.1") {
+	if !strings.Contains(joined, "c 3.0.0 → 3.0.1") {
 		t.Errorf("changed node missing:\n%s", joined)
 	}
 	if strings.Contains(joined, "clean") {
 		t.Errorf("clean branch must prune:\n%s", joined)
 	}
 	// c appears under a AND under b: exactly one full render + one dedup
-	count := strings.Count(joined, "c 3.0.0 -> 3.0.1")
+	count := strings.Count(joined, "c 3.0.0 → 3.0.1")
 	if count != 2 {
 		t.Errorf("want c rendered twice (once deduped), got %d:\n%s", count, joined)
 	}
