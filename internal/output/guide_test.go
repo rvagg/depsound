@@ -34,6 +34,52 @@ func TestGuideCoverageAlwaysPresent(t *testing.T) {
 	}
 }
 
+// a range-resolved endpoint is the no-lockfile case, so the transitive route
+// must be one that can actually be followed there
+func TestGuideTransitiveRouteFollowsResolution(t *testing.T) {
+	pkg := stats.PkgRef{Ecosystem: "npm", Name: "x", From: "1.0.0", To: "2.0.0"}
+	for _, tc := range []struct {
+		name       string
+		res        *stats.Resolution
+		want, deny string
+	}{
+		{"exact endpoints", nil, "--old=<base package-lock.json>", "--package-lock-only"},
+		{"range endpoints", &stats.Resolution{ToSpec: "^2.0.0"}, "depsound transitive npm:x 1.0.0 2.0.0", "--old=<base package-lock.json>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, next := Guide(&stats.Stats{Package: pkg, Resolution: tc.res})
+			var joined string
+			for _, a := range next {
+				joined += a.Reason + "\n" + a.Command + "\n"
+			}
+			if !strings.Contains(joined, tc.want) {
+				t.Errorf("missing %q in:\n%s", tc.want, joined)
+			}
+			if strings.Contains(joined, tc.deny) {
+				t.Errorf("unfollowable route %q in:\n%s", tc.deny, joined)
+			}
+		})
+	}
+}
+
+// a next-step is routing, and routing that gets cut mid-sentence routes
+// nowhere: our own reason text must fit the tainted-line cap
+func TestGuideReasonsFitTheLineCap(t *testing.T) {
+	for _, res := range []*stats.Resolution{nil, {ToSpec: "^2.0.0"}} {
+		_, next := Guide(&stats.Stats{
+			Package:    stats.PkgRef{Ecosystem: "npm", Name: "x", From: "1.0.0", To: "2.0.0"},
+			Runnable:   stats.Runnable{Lifecycle: []npmpkg.Change{{Key: "postinstall", Status: "added"}}},
+			Security:   osv.Assessment{Introduced: []osv.Vuln{{ID: "GHSA-x"}}, StillPresent: []osv.Vuln{{ID: "GHSA-y"}}},
+			Resolution: res,
+		})
+		for _, a := range next {
+			if len(a.Reason) > maxTaintedLen {
+				t.Errorf("reason is %d bytes, cap is %d, so it renders truncated: %q", len(a.Reason), maxTaintedLen, a.Reason)
+			}
+		}
+	}
+}
+
 func TestGuideDerivesSignalSteps(t *testing.T) {
 	s := &stats.Stats{
 		Package:  stats.PkgRef{Ecosystem: "npm", Name: "x", From: "1", To: "2"},

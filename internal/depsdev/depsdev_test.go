@@ -42,6 +42,42 @@ func TestDependencies(t *testing.T) {
 	}
 }
 
+func TestResolveEdges(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"nodes":[
+			{"versionKey":{"name":"rimraf","version":"5.0.5"},"relation":"SELF"},
+			{"versionKey":{"name":"glob","version":"10.5.0"},"relation":"DIRECT"},
+			{"versionKey":{"name":"jackspeak","version":"3.4.3"},"relation":"INDIRECT"}
+		],"edges":[
+			{"fromNode":0,"toNode":1,"requirement":"^10.3.7"},
+			{"fromNode":1,"toNode":2,"requirement":"^3.1.2"},
+			{"fromNode":9,"toNode":1,"requirement":"bogus"}
+		]}`))
+	}))
+	defer srv.Close()
+	old := base
+	base = srv.URL
+	defer func() { base = old }()
+
+	g, err := Resolve(context.Background(), srv.Client(), "npm", "rimraf", "5.0.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Root != "rimraf@5.0.5" || len(g.Deps) != 2 {
+		t.Fatalf("root %q deps %+v", g.Root, g.Deps)
+	}
+	if got := g.Edges["rimraf@5.0.5"]; len(got) != 1 || got[0] != "glob@10.5.0" {
+		t.Errorf("root edges = %v", got)
+	}
+	if got := g.Edges["glob@10.5.0"]; len(got) != 1 || got[0] != "jackspeak@3.4.3" {
+		t.Errorf("glob edges = %v", got)
+	}
+	// an out-of-range index is dropped, never panics
+	if len(g.Edges) != 2 {
+		t.Errorf("edges = %v", g.Edges)
+	}
+}
+
 func TestDependenciesNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "dependencies not found", http.StatusNotFound)

@@ -63,6 +63,7 @@ next steps:
 | `depsound <eco>:<name> [version]` | census: the footprint of adopting a package |
 | `depsound bulk` | many changes at once (a PR), prioritized by what tripped |
 | `depsound transitive <lang> --old=<lock> --new=<lock>` | the whole subtree a lockfile bump moves |
+| `depsound transitive <eco>:<name> <from> <to>` | that subtree when the repo commits no lockfile (projected via deps.dev) |
 | `depsound surface <eco>:<name> <from> <to> --uses=<paths>` | intersect a change with your import paths |
 | `depsound gha:owner/repo <from> <to>` | a GitHub Action bump (its own threat model) |
 

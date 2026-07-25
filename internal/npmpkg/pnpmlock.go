@@ -2,6 +2,7 @@ package npmpkg
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -54,6 +55,83 @@ func ParsePnpmLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 		deps = append(deps, LockedDep{Name: name, Version: version})
 	}
 	return deps, nonRegistry, nil
+}
+
+// PnpmLockGraph reads the who-pulls-whom graph out of a pnpm-lock.yaml 9.x:
+// `importers` gives the roots (each workspace package's own deps) and
+// `snapshots` gives the edges, both keyed name@version. pnpm states edges
+// explicitly, so no ancestor walk is needed; peer suffixes (`(react@18)`) are
+// stripped, collapsing peer-resolved instances onto the one resolved version.
+// Workspace links and non-registry entries are dropped: nothing to fetch.
+func PnpmLockGraph(b []byte) (roots []string, edges map[string][]string, err error) {
+	type dep struct {
+		Version string `yaml:"version"`
+	}
+	var lock struct {
+		Importers map[string]struct {
+			Dependencies         map[string]dep `yaml:"dependencies"`
+			DevDependencies      map[string]dep `yaml:"devDependencies"`
+			OptionalDependencies map[string]dep `yaml:"optionalDependencies"`
+		} `yaml:"importers"`
+		Snapshots map[string]struct {
+			Dependencies         map[string]string `yaml:"dependencies"`
+			OptionalDependencies map[string]string `yaml:"optionalDependencies"`
+		} `yaml:"snapshots"`
+	}
+	if err := yaml.Unmarshal(b, &lock); err != nil {
+		return nil, nil, fmt.Errorf("pnpm-lock.yaml: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, imp := range lock.Importers {
+		for _, table := range []map[string]dep{imp.Dependencies, imp.DevDependencies, imp.OptionalDependencies} {
+			for name, d := range table {
+				id, ok := pnpmID(name, d.Version)
+				if ok && !seen[id] {
+					seen[id] = true
+					roots = append(roots, id)
+				}
+			}
+		}
+	}
+	sort.Strings(roots)
+	edges = map[string][]string{}
+	for key, snap := range lock.Snapshots {
+		from := pnpmKey(key)
+		for _, table := range []map[string]string{snap.Dependencies, snap.OptionalDependencies} {
+			for name, version := range table {
+				if id, ok := pnpmID(name, version); ok {
+					edges[from] = append(edges[from], id)
+				}
+			}
+		}
+		sort.Strings(edges[from])
+	}
+	return roots, edges, nil
+}
+
+// pnpmID builds a name@version id, rejecting what is not a registry version
+// (link:/file:/workspace: entries, and git refs). An aliased entry names its
+// real package in the value (`cbw-sdk: '@coinbase/wallet-sdk@3.9.3'`), so the
+// value wins over the local name; an id keyed by the alias would orphan the
+// whole subtree under it.
+func pnpmID(name, version string) (string, bool) {
+	version = pnpmKey(strings.TrimPrefix(version, "npm:"))
+	if at := strings.LastIndexByte(version, '@'); at > 0 {
+		name, version = version[:at], version[at+1:]
+	}
+	if version == "" || version[0] < '0' || version[0] > '9' {
+		return "", false
+	}
+	return name + "@" + version, true
+}
+
+// pnpmKey drops the peer-resolution suffix a key or version can carry, so
+// every instance of a package collapses onto its resolved version.
+func pnpmKey(s string) string {
+	if i := strings.IndexByte(s, '('); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // ParseWorkspaceCatalogs reads pnpm-workspace.yaml's catalog tables: the

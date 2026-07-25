@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/rvagg/depsound/internal/depsdev"
+)
 
 func TestDiffResolved(t *testing.T) {
 	old := []resolvedDep{
@@ -44,5 +51,45 @@ func TestDiffResolvedMultiVersion(t *testing.T) {
 	d = diffResolved([]resolvedDep{{"y", "1.0.0", false}}, []resolvedDep{{"y", "1.1.0", false}})
 	if len(d.changed) != 1 || d.changed[0].To != "1.1.0" {
 		t.Errorf("single bump not paired: %+v", d.changed)
+	}
+}
+
+// deps.dev's DIRECT is relative to the projected package, and everything else
+// is deeper in its tree, so the neutral set carries it as indirect.
+func TestNodesToResolved(t *testing.T) {
+	got := nodesToResolved([]depsdev.Node{
+		{Name: "glob", Version: "10.5.0", Relation: "DIRECT"},
+		{Name: "jackspeak", Version: "3.4.3", Relation: "INDIRECT"},
+	})
+	if len(got) != 2 || got[0].indirect || !got[1].indirect {
+		t.Errorf("nodesToResolved = %+v", got)
+	}
+}
+
+// A repo that keeps a different lockfile must not read as a bare 404: the
+// sibling probe names what is actually there.
+func TestSiblingLockKinds(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"pnpm-lock.yaml", "go.mod"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := siblingLockKinds(filepath.Join(dir, "package-lock.json"), "npm")
+	if len(got) != 2 || got[0] != "go" || got[1] != "pnpm" {
+		t.Errorf("siblingLockKinds = %v, want [go pnpm]", got)
+	}
+	// the kind asked for is never suggested back
+	if got := siblingLockKinds(filepath.Join(dir, "go.mod"), "go"); len(got) != 1 || got[0] != "pnpm" {
+		t.Errorf("self-suggestion: %v", got)
+	}
+	// an https source has no siblings to probe
+	if got := siblingLockKinds("https://example.com/package-lock.json", "npm"); got != nil {
+		t.Errorf("https probe = %v", got)
+	}
+	// the hint leaves an unprobeable error untouched
+	err := errors.New("boom")
+	if wrongKindHint(err, "https://example.com/x", "npm") != err {
+		t.Error("hint must pass through when nothing was found")
 	}
 }

@@ -34,3 +34,50 @@ source = "git+https://github.com/x/y"
 		t.Errorf("non-registry count = %d, want 2", nonReg)
 	}
 }
+
+// Cargo.lock states edges per package; roots are the sourceless entries (the
+// workspace members being built).
+func TestCargoLockGraph(t *testing.T) {
+	lock := `
+[[package]]
+name = "myapp"
+version = "0.1.0"
+dependencies = ["regex", "serde 1.0.0"]
+
+[[package]]
+name = "regex"
+version = "1.12.4"
+source = "registry+x"
+dependencies = ["aho-corasick"]
+
+[[package]]
+name = "aho-corasick"
+version = "1.1.3"
+source = "registry+x"
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+x"
+
+[[package]]
+name = "serde"
+version = "2.0.0"
+source = "registry+x"
+`
+	roots, edges, err := CargoLockGraph([]byte(lock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 || roots[0] != "myapp@0.1.0" {
+		t.Errorf("roots = %v", roots)
+	}
+	// a bare name resolves to the one locked version; an explicit version wins
+	// where a name is locked twice
+	if got := edges["myapp@0.1.0"]; len(got) != 2 || got[0] != "regex@1.12.4" || got[1] != "serde@1.0.0" {
+		t.Errorf("root edges = %v", got)
+	}
+	if got := edges["regex@1.12.4"]; len(got) != 1 || got[0] != "aho-corasick@1.1.3" {
+		t.Errorf("regex edges = %v", got)
+	}
+}

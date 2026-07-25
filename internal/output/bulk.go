@@ -254,8 +254,8 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	}
 	if transitive {
 		w("NOT checked: does your code reach each change; what it does; test coverage;")
-		w("  added modules are listed but not diffed; test-only/deeper modules beyond")
-		w("  go.mod's pruned set (go.sum has more); publish provenance. Silence != safe.")
+		w("  added modules are listed but not diffed; whatever the lockfile itself omits")
+		w("  (pruned, test-only or platform-conditional); publish provenance. Silence != safe.")
 	} else {
 		prov := ""
 		if g := provenanceGap(results); g != "" {

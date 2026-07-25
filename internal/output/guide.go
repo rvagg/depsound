@@ -51,6 +51,11 @@ var coverageNotChecked = []string{
 // so a single-pair diff can point at it (pnpm shares npm's analysis).
 var transitiveLock = map[string]string{"go": "go.mod", "npm": "package-lock.json", "crates": "Cargo.lock"}
 
+// projectable marks the ecosystems whose subtree deps.dev can resolve, so the
+// no-lockfile route can offer the zero-setup projection. Go is absent by
+// nature, not by gap: go.mod IS the resolved set.
+var projectable = map[string]bool{"npm": true, "crates": true}
+
 // Guide computes the coverage boundary and directed next-steps for a
 // report. It is deliberately loud about limits: depsound is a heuristic
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
@@ -127,10 +132,19 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 
 	// route the transitive NOT-checked line to a real command for every
 	// ecosystem that has a lockfile transitive mode, so a single-pair diff
-	// never leaves the agent thinking the subtree is unreachable.
-	if lock := transitiveLock[s.Package.Ecosystem]; lock != "" {
-		add("this bump moves your whole transitive subtree, not just this dep; diff the lockfile pair (pass github:owner/repo@sha, no download)",
-			fmt.Sprintf("depsound transitive %s --old=<base %s> --new=<PR %s>", s.Package.Ecosystem, lock, lock))
+	// never leaves the agent thinking the subtree is unreachable. A
+	// range-valued endpoint means no lockfile resolved this change, so naming
+	// a lockfile pair would route to files that do not exist: point at the
+	// recipe that generates the pair instead.
+	if eco := s.Package.Ecosystem; transitiveLock[eco] != "" {
+		switch r := s.Resolution; {
+		case r != nil && (r.FromSpec != "" || r.ToSpec != "") && projectable[eco]:
+			add("this bump moves your whole transitive subtree, and no lockfile resolved it here: project it (deps.dev resolves in isolation, an upper bound, not your tree; exact route in `depsound guide`)",
+				fmt.Sprintf("depsound transitive %s:%s %s %s", eco, s.Package.Name, s.Package.From, s.Package.To))
+		default:
+			add("this bump moves your whole transitive subtree, not just this dep; diff the lockfile pair (pass github:owner/repo@sha, no download)",
+				fmt.Sprintf("depsound transitive %s --old=<base %s> --new=<PR %s>", eco, transitiveLock[eco], transitiveLock[eco]))
+		}
 	}
 
 	// The standing anti-closure nudge differs by threat model. An action runs

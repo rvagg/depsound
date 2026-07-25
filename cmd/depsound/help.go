@@ -25,6 +25,7 @@ func buildRouting() string {
 		{"adopting a new dependency", "depsound <spec> [version]  (census)"},
 		{"many bumps at once (a PR)", "depsound bulk  (list on stdin)"},
 		{"a lockfile bump's subtree", "depsound transitive <lang> --old --new"},
+		{"that subtree, no lockfile", "depsound transitive <spec> <from> <to>"},
 		{"a big diff vs your imports", "depsound surface <spec> <from> <to> --uses"},
 		{"one file/dir of a diff", "depsound show <spec> <from> <to> --file"},
 	}
@@ -108,6 +109,7 @@ yours to supply, from a PR diff, a go.mod diff, etc. A from/to may be a semver
 range; --cooldown applies to the whole list (see help diff).`,
 
 	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
+depsound transitive <ecosystem>:<name> <from> <to>   (projected, no lockfile)
 
 --old/--new take a local PATH, an https URL, OR github:owner/repo@ref, so you
 usually need NOT download the files yourself. Review a PR in one command:
@@ -125,9 +127,14 @@ Changed deps run through the bulk router; added are listed (new code, census
 each); removed are noted. A name carrying multiple versions (Cargo/npm dedup)
 is handled by pairing a lone removed+added as a bump.
 
-No lockfile committed, or adopting a new dep? Generate one with a resolution-
-only command (runs no package code), e.g. npm install --package-lock-only
---ignore-scripts, then diff. See depsound guide.`,
+No lockfile committed? Two routes, both real:
+  projected  depsound transitive npm:<name> <from> <to>   (npm/crates)
+             deps.dev resolves the dep's own tree at each endpoint: zero setup,
+             but an isolated live resolve, so an upper bound on what it adds to
+             you, and not reproducible the way a diff is.
+  exact      generate a lockfile per endpoint with a resolution-only command
+             (runs no package code), e.g. npm install --package-lock-only
+             --ignore-scripts, then diff the pair. See depsound guide.`,
 
 	"surface": `depsound surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
 

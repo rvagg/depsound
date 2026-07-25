@@ -63,8 +63,9 @@ func ParsePackageLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 // PackageLockGraph reads the who-pulls-whom edges out of a package-lock v2/v3:
 // node "name@version" -> children it depends on, plus the root's direct set.
 // Each entry's target resolves by npm's shadowing rule: the nearest ancestor
-// node_modules that holds the name. Runtime `dependencies` plus optional;
-// per-package dev deps of transitive packages never install and carry no edge.
+// node_modules that holds the name. Runtime `dependencies` plus optional, and
+// at the root also devDependencies (your own dev tooling does install; a
+// transitive package's dev deps never do, so they carry no edge).
 func PackageLockGraph(b []byte) (roots []string, edges map[string][]string, err error) {
 	var lock struct {
 		Packages map[string]struct {
@@ -72,6 +73,7 @@ func PackageLockGraph(b []byte) (roots []string, edges map[string][]string, err 
 			Version      string            `json:"version"`
 			Dependencies map[string]string `json:"dependencies"`
 			Optional     map[string]string `json:"optionalDependencies"`
+			Dev          map[string]string `json:"devDependencies"`
 		} `json:"packages"`
 	}
 	if err := json.Unmarshal(b, &lock); err != nil {
@@ -122,6 +124,11 @@ func PackageLockGraph(b []byte) (roots []string, edges map[string][]string, err 
 		}
 		for n := range e.Optional {
 			names = append(names, n)
+		}
+		if path == "" {
+			for n := range e.Dev {
+				names = append(names, n)
+			}
 		}
 		sort.Strings(names)
 		var kids []string

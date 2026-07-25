@@ -134,9 +134,30 @@ func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
+// Graph is a resolved subtree plus the who-pulls-whom edges deps.dev
+// resolved it through. Ids are name@version, the same shape a lockfile graph
+// uses, so one churn-tree builder serves both.
+type Graph struct {
+	Root  string              // the package itself
+	Deps  []Node              // the subtree, root excluded
+	Edges map[string][]string // id -> the ids it pulls in
+}
+
 // Dependencies resolves the flat transitive dependency set (excluding the
 // package itself) of system/name@version.
 func Dependencies(ctx context.Context, client *http.Client, system, name, ver string) ([]Node, error) {
+	g, err := Resolve(ctx, client, system, name, ver)
+	if err != nil {
+		return nil, err
+	}
+	return g.Deps, nil
+}
+
+// Resolve fetches the resolved subtree of system/name@version with its edges.
+// deps.dev resolves the package in isolation, so the result is that package's
+// own tree, not what it adds to yours, and it is a live snapshot: callers own
+// saying so.
+func Resolve(ctx context.Context, client *http.Client, system, name, ver string) (*Graph, error) {
 	u := fmt.Sprintf("%s/systems/%s/packages/%s/versions/%s:dependencies",
 		base, system, url.PathEscape(name), url.PathEscape(ver))
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -154,7 +175,7 @@ func Dependencies(ctx context.Context, client *http.Client, system, name, ver st
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("deps.dev has no resolved graph for %s:%s@%s (unpublished, or a binary-only crate)", system, name, ver)
+		return nil, fmt.Errorf("deps.dev has not resolved %s:%s@%s (it lags some releases, and never resolves unpublished or binary-only ones)", system, name, ver)
 	default:
 		return nil, fmt.Errorf("deps.dev %s: %s", u, resp.Status)
 	}
@@ -167,16 +188,31 @@ func Dependencies(ctx context.Context, client *http.Client, system, name, ver st
 			} `json:"versionKey"`
 			Relation string `json:"relation"`
 		} `json:"nodes"`
+		Edges []struct {
+			FromNode int `json:"fromNode"`
+			ToNode   int `json:"toNode"`
+		} `json:"edges"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("deps.dev %s: %w", u, err)
 	}
-	var deps []Node
-	for _, n := range out.Nodes {
+	g := &Graph{Root: name + "@" + ver, Edges: map[string][]string{}}
+	ids := make([]string, len(out.Nodes))
+	for i, n := range out.Nodes {
+		ids[i] = n.VersionKey.Name + "@" + n.VersionKey.Version
 		if n.Relation == "SELF" {
+			g.Root = ids[i]
 			continue
 		}
-		deps = append(deps, Node{n.VersionKey.Name, n.VersionKey.Version, n.Relation})
+		g.Deps = append(g.Deps, Node{n.VersionKey.Name, n.VersionKey.Version, n.Relation})
 	}
-	return deps, nil
+	// edges index into nodes; a malformed index is skipped rather than
+	// panicking on a payload we do not control
+	for _, e := range out.Edges {
+		if e.FromNode < 0 || e.FromNode >= len(ids) || e.ToNode < 0 || e.ToNode >= len(ids) {
+			continue
+		}
+		g.Edges[ids[e.FromNode]] = append(g.Edges[ids[e.FromNode]], ids[e.ToNode])
+	}
+	return g, nil
 }

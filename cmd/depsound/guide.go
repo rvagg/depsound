@@ -93,10 +93,19 @@ uncooled consumer installs instead, unreviewed. Note Dependabot cooldown gates
 when PRs OPEN; only an install cooldown (npm/pnpm minimumReleaseAge) gates what
 INSTALLS, so "latest" is still latest for a consumer configured without one.
 
-== No lockfile? generate one (no package code runs) ==
-transitive diffs two resolved lockfiles. If a repo commits none, or you are
-ADOPTING a new dep, generate them with a RESOLUTION-ONLY command in a temp
-dir (copy the manifest there so your tree is untouched). These resolve
+== No lockfile? two routes ==
+transitive diffs two resolved lockfiles, so a repo that commits none needs
+one of these.
+
+Projected (zero setup, npm/crates): depsound transitive <eco>:<name> <from> <to>
+resolves the dep's own tree at each endpoint via deps.dev and diffs those.
+That resolve is done in isolation, so it is an upper bound on what the bump
+adds to you (your other deps may already carry some of it), and it is a live
+snapshot, so it is not reproducible the way a diff is. Good for "did this bump
+quietly pull in 20 packages"; not evidence about your exact tree.
+
+Exact: generate the lockfiles yourself, with a RESOLUTION-ONLY command in a
+temp dir (copy the manifest there so your tree is untouched). These resolve
 versions but run NO package lifecycle code. Resolution is not installation;
 they stay within the "never run package code" line:
   npm    npm install --package-lock-only --ignore-scripts

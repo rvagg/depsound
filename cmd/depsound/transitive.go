@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rvagg/depsound/internal/cratepkg"
 	"github.com/rvagg/depsound/internal/fetch"
@@ -41,6 +43,7 @@ var transitiveEcos = map[string]transitiveEco{
 func transitiveCmd(args []string) error {
 	cacheDir, format := "", "stats"
 	noOSV := false
+	var cooldown time.Duration
 	var oldSrc, newSrc string
 	var pos []string
 	for _, a := range args {
@@ -53,6 +56,12 @@ func transitiveCmd(args []string) error {
 			oldSrc = strings.TrimPrefix(a, "--old=")
 		case strings.HasPrefix(a, "--new="):
 			newSrc = strings.TrimPrefix(a, "--new=")
+		case strings.HasPrefix(a, "--cooldown="):
+			d, err := parseCooldown(strings.TrimPrefix(a, "--cooldown="))
+			if err != nil {
+				return err
+			}
+			cooldown = d
 		case a == "--no-osv":
 			noOSV = true
 		case strings.HasPrefix(a, "-"):
@@ -61,8 +70,16 @@ func transitiveCmd(args []string) error {
 			pos = append(pos, a)
 		}
 	}
+	// a spec-shaped positional selects the no-lockfile projection; a bare
+	// lockfile kind selects the lockfile-pair diff
+	if len(pos) > 0 && strings.Contains(pos[0], ":") {
+		if len(pos) != 3 {
+			return fmt.Errorf("transitive: want `depsound transitive <eco>:<name> <from> <to>` (projected, no lockfile) or `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile>`")
+		}
+		return transitiveProjected(cacheDir, pos[0], pos[1], pos[2], cooldown, noOSV, format)
+	}
 	if len(pos) != 1 {
-		return fmt.Errorf("transitive: want `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile>`")
+		return fmt.Errorf("transitive: want `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile>`, or `depsound transitive <eco>:<name> <from> <to>` when there is no lockfile")
 	}
 	kind := pos[0]
 	te, ok := transitiveEcos[kind]
@@ -75,11 +92,11 @@ func transitiveCmd(args []string) error {
 
 	oldDeps, err := resolveLock(kind, oldSrc, te.lockName)
 	if err != nil {
-		return fmt.Errorf("--old: %w", err)
+		return fmt.Errorf("--old: %w", wrongKindHint(err, oldSrc, kind))
 	}
 	newDeps, err := resolveLock(kind, newSrc, te.lockName)
 	if err != nil {
-		return fmt.Errorf("--new: %w", err)
+		return fmt.Errorf("--new: %w", wrongKindHint(err, newSrc, kind))
 	}
 
 	res := diffResolved(oldDeps, newDeps)
@@ -99,14 +116,21 @@ func transitiveCmd(args []string) error {
 		DirectChanged:   res.directChanged,
 		IndirectChanged: res.indirectChanged,
 	}
-	// the changed subtree with its causality, where the lockfile carries
-	// edges (npm today; pnpm/crates follow-ons)
-	if kind == "npm" && len(res.changed)+len(res.added) > 0 {
-		if n := len(res.changed) + len(res.added); n > churnBudget {
-			tr.TreeNote = churnSummaryNote(n)
-		} else if b, err := readSource(newSrc, te.lockName); err == nil {
-			if roots, edges, err := npmpkg.PackageLockGraph(b); err == nil {
-				tr.Tree = buildChurnTree(roots, edges, res.changed, res.added)
+	// the changed subtree with its causality, from the lockfiles that carry
+	// edges (go.mod does not: it is a flat require set). What was removed
+	// only exists in the old graph, so attribute it there.
+	if len(res.changed)+len(res.added) > 0 {
+		if b, err := readSource(newSrc, te.lockName); err == nil {
+			if roots, edges, err := lockGraph(kind, b); err == nil {
+				attributeCause("", roots, edges, tr.Added)
+				tr.Tree, tr.TreeNote = buildChurnTree(roots, edges, res.changed, res.added)
+			}
+		}
+	}
+	if len(res.removed) > 0 {
+		if b, err := readSource(oldSrc, te.lockName); err == nil {
+			if roots, edges, err := lockGraph(kind, b); err == nil {
+				attributeCause("", roots, edges, tr.Removed)
 			}
 		}
 	}
@@ -118,6 +142,74 @@ func transitiveCmd(args []string) error {
 	}
 	fmt.Print(output.Transitive(tr))
 	return nil
+}
+
+// lockGraph reads a lockfile's who-pulls-whom edges where the format carries
+// them. go.mod does not: its require block is a flat resolved set with no
+// edges (`go mod graph` has them, but that is a toolchain call), so go gets
+// no tree rather than a fabricated one.
+func lockGraph(kind string, b []byte) (roots []string, edges map[string][]string, err error) {
+	switch kind {
+	case "npm":
+		return npmpkg.PackageLockGraph(b)
+	case "pnpm":
+		return npmpkg.PnpmLockGraph(b)
+	case "crates":
+		return cratepkg.CargoLockGraph(b)
+	}
+	return nil, nil, fmt.Errorf("%s carries no dependency edges", kind)
+}
+
+// wrongKindHint answers the question a bare "not found" leaves open: a repo
+// that keeps a different lockfile reads as a plain 404 on the one we asked
+// for, so probe the sibling kinds at the same location and name what IS
+// there. An explicitly-pathed source is the caller's choice, not a guess to
+// second-guess.
+func wrongKindHint(err error, src, kind string) error {
+	found := siblingLockKinds(src, kind)
+	if len(found) == 0 {
+		return err
+	}
+	var names []string
+	for _, k := range found {
+		names = append(names, transitiveEcos[k].lockName+" (`depsound transitive "+k+"`)")
+	}
+	return fmt.Errorf("%w\n  that source does carry %s", err, strings.Join(names, ", "))
+}
+
+// siblingLockKinds returns the lockfile kinds, other than the one asked for,
+// whose file exists alongside the source.
+func siblingLockKinds(src, kind string) []string {
+	kinds := []string{"go", "crates", "npm", "pnpm"} // fixed order: deterministic output
+	var out []string
+	switch {
+	case strings.HasPrefix(src, "github:"):
+		name, ref, path, err := parseGitHubSpec(strings.TrimPrefix(src, "github:"))
+		if err != nil || path != "" {
+			return nil
+		}
+		ctx, client := context.Background(), &http.Client{}
+		for _, k := range kinds {
+			if k == kind {
+				continue
+			}
+			if _, err := fetch.GitHubContents(ctx, client, name, ref, transitiveEcos[k].lockName); err == nil {
+				out = append(out, k)
+			}
+		}
+	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
+		return nil
+	default:
+		for _, k := range kinds {
+			if k == kind {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(filepath.Dir(src), transitiveEcos[k].lockName)); err == nil {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
 }
 
 // resolvedDep is one resolved dependency from a lockfile: name + exact
