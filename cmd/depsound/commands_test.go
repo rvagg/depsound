@@ -51,3 +51,37 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// helpTarget routes a `<cmd> --help` (or a bare-spec --help) to the most
+// specific help topic, so an agent's reflexive --help never hits "unknown
+// flag". hasHelpFlag catches the flag wherever it sits.
+func TestHelpRouting(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string // "" = general usage (nil target)
+	}{
+		{[]string{"transitive", "--help"}, "transitive"},
+		{[]string{"census", "-h"}, "census"},
+		{[]string{"surface", "npm:x", "1", "2", "--help"}, "surface"},
+		{[]string{"npm:foo", "--help"}, "census"},         // lone spec -> census
+		{[]string{"npm:foo", "1", "2", "--help"}, "diff"}, // version pair -> diff
+		{[]string{"gha:actions/checkout", "v1", "v2", "-h"}, "gha"},
+		{[]string{"--help"}, ""}, // no command -> usage
+	}
+	for _, tc := range cases {
+		if !hasHelpFlag(tc.args) {
+			t.Errorf("hasHelpFlag(%v) = false", tc.args)
+		}
+		got := helpTarget(tc.args)
+		var name string
+		if len(got) > 0 {
+			name = got[0]
+		}
+		if name != tc.want {
+			t.Errorf("helpTarget(%v) = %q, want %q", tc.args, name, tc.want)
+		}
+	}
+	if hasHelpFlag([]string{"transitive", "--old=x"}) {
+		t.Error("hasHelpFlag matched a non-help flag")
+	}
+}

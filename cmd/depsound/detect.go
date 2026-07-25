@@ -110,7 +110,7 @@ func detectCmd(args []string) error {
 		case strings.HasPrefix(a, "--file="):
 			inputFile = strings.TrimPrefix(a, "--file=")
 		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("unknown flag %q", a)
+			return fmt.Errorf("unknown flag %q (see --help)", a)
 		default:
 			return fmt.Errorf("detect takes no positional args; feed `path<TAB>old<TAB>new` lines on stdin or --file=")
 		}

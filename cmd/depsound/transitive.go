@@ -56,7 +56,7 @@ func transitiveCmd(args []string) error {
 		case a == "--no-osv":
 			noOSV = true
 		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("unknown flag %q", a)
+			return fmt.Errorf("unknown flag %q (see --help)", a)
 		default:
 			pos = append(pos, a)
 		}

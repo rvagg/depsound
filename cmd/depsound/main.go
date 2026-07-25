@@ -40,8 +40,7 @@ func main() {
 }
 
 func run(args []string) error {
-	// subcommands are the non-spec leading words; a spec always carries a
-	// colon (npm:foo), so anything else in first position is a command
+	// top-level meta words in first position
 	if len(args) > 0 {
 		switch args[0] {
 		case "-h", "--help", "help":
@@ -51,6 +50,18 @@ func run(args []string) error {
 		case "-v", "--version", "version":
 			fmt.Printf("depsound %s (stats schema %d)\n", version.Version, stats.SchemaVersion)
 			return nil
+		}
+	}
+	// -h/--help ANYWHERE else is the universal `<tool> <cmd> --help` reflex,
+	// not an unknown flag: route it to the most specific help topic before the
+	// subcommand's own parser can reject it.
+	if hasHelpFlag(args) {
+		return helpCmd(helpTarget(args))
+	}
+	// subcommands are the non-spec leading words; a spec always carries a
+	// colon (npm:foo), so anything else in first position is a command
+	if len(args) > 0 {
+		switch args[0] {
 		case "surface":
 			return surfaceCmd(args[1:])
 		case "show":
@@ -72,6 +83,45 @@ func run(args []string) error {
 		return censusCmd(args)
 	}
 	return diffCmd(args)
+}
+
+// subcommands are the verb-form entry points (as opposed to the bare-spec
+// diff/census forms); helpTarget keys off this set.
+var subcommands = map[string]bool{
+	"surface": true, "show": true, "bulk": true,
+	"census": true, "transitive": true, "detect": true,
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+// helpTarget picks the most specific help topic for a --help request: the
+// named subcommand, else the spec's implied command (gha's own threat model,
+// census for a lone spec/version, diff for a version pair), else the general
+// usage banner.
+func helpTarget(args []string) []string {
+	if len(args) > 0 && subcommands[args[0]] {
+		return []string{args[0]}
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "gha:") {
+			return []string{"gha"}
+		}
+	}
+	switch positionalCount(args) {
+	case 1, 2:
+		return []string{"census"}
+	case 0:
+		return nil // general usage
+	default:
+		return []string{"diff"}
+	}
 }
 
 // positionalCount counts non-flag arguments.
@@ -126,7 +176,7 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 					continue
 				}
 			}
-			return nil, nil, fmt.Errorf("unknown flag %q (run `depsound help`)", a)
+			return nil, nil, fmt.Errorf("unknown flag %q (see --help)", a)
 		default:
 			pos = append(pos, a)
 		}

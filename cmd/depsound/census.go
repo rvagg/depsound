@@ -58,7 +58,7 @@ func censusCmd(args []string) error {
 		case a == "--no-provenance":
 			prov = false
 		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("unknown flag %q", a)
+			return fmt.Errorf("unknown flag %q (see --help)", a)
 		default:
 			pos = append(pos, a)
 		}
