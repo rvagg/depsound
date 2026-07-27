@@ -251,6 +251,9 @@ type ActionSection struct {
 	Exec      []manifest.Change `json:"exec,omitempty"`   // pre/post/main/image/using deltas
 	Nested    []string          `json:"nested,omitempty"` // composite `uses:` (transitive)
 	SubPath   string            `json:"subPath,omitempty"`
+	// MainTo is the new version's node entrypoint (runs.main): the file that
+	// executes on the runner, so a reader can be sent to it by name.
+	MainTo string `json:"mainTo,omitempty"`
 	// Caps are the runner powers the code references (grep, evadable lead);
 	// CapsIntroduced is the subset new in this bump, the delta that matters.
 	Caps           []string `json:"caps,omitempty"`
@@ -488,6 +491,7 @@ func buildAction(in Input) *ActionSection {
 		sec.UsingTo = in.NewAction.Using
 		sec.Exec = ghapkg.ExecDelta(in.OldAction, in.NewAction)
 		sec.Nested = in.NewAction.Uses
+		sec.MainTo = in.NewAction.Main
 	}
 	// what the executed code reaches (grep of the dist bundle + scripts):
 	// present references and, crucially, which are NEW in this bump

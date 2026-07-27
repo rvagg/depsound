@@ -108,6 +108,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeIntegrityWeak}, "coverage gap: artifact verified by TLS trust only (no registry integrity or checksum-DB record)"},
 	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "coverage gap: known-CVE scan did not complete for these deps"},
 	{[]Code{CodeOSVFixed}, "advisories fixed by the upgrade (the merge argument)"},
+	{[]Code{CodeNoContentChange}, "no content change: the version moved, what installs did not"},
 	{[]Code{CodeOSVUnsupported}, "note: known-CVE scan not applicable (OSV has no index for this ecosystem)"},
 }
 

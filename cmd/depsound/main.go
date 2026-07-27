@@ -264,6 +264,9 @@ func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (
 			return nil, err
 		}
 	}
+	if sp.Eco == spec.GHA {
+		stampGHAPins(st, from, to, ghaPins)
+	}
 	st.MovedRefs = moved
 	idx, err := loadIndex(ws)
 	if err != nil {
@@ -444,7 +447,10 @@ func resolveGHAPins(name string, refs ...string) (map[string]ghaPin, error) {
 func ghaMovedRefs(st *stats.Stats, from, to string, pins map[string]ghaPin) []stats.MovedRef {
 	var moved []stats.MovedRef
 	check := func(side, ref string, src *stats.Source) {
-		if src == nil || src.RefKind == "sha" {
+		// mutability is a property of the ref this run holds, so it comes from
+		// the fresh resolution; a cached workspace's recorded tier would let
+		// cache history decide whether this check runs at all
+		if src == nil || pins[ref].kind == "sha" {
 			return
 		}
 		prev := strings.TrimPrefix(src.Digest, "git-")
@@ -455,6 +461,26 @@ func ghaMovedRefs(st *stats.Stats, from, to string, pins map[string]ghaPin) []st
 	check("from", from, st.Artifact.SourceFrom)
 	check("to", to, st.Artifact.SourceTo)
 	return moved
+}
+
+// stampGHAPins re-derives the pin tiers from this invocation. A pin belongs
+// to the reference a workflow holds, not to the commit's bytes: a tag and a
+// literal sha can name one commit while carrying very different immutability,
+// and a cached workspace records whichever spelling built it. Deriving them
+// fresh every run keeps the grade (and the warnings that hang off it)
+// independent of cache history.
+func stampGHAPins(st *stats.Stats, from, to string, pins map[string]ghaPin) {
+	for ref, src := range map[string]*stats.Source{from: st.Artifact.SourceFrom, to: st.Artifact.SourceTo} {
+		if src != nil {
+			src.RefKind = pins[ref].kind
+		}
+	}
+	if st.Action != nil {
+		st.Action.Pins = []stats.ActionPin{
+			{Side: "from", Ref: from, SHA: pins[from].sha, Kind: pins[from].kind},
+			{Side: "to", Ref: to, SHA: pins[to].sha, Kind: pins[to].kind},
+		}
+	}
 }
 
 func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[string]ghaPin) (*stats.Stats, error) {
@@ -489,15 +515,16 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		case spec.Crates:
 			err = fetch.Crate(ctx, client, sp.Name, v, dest)
 		case spec.GHA:
-			p := ghaPins[v]
-			err = fetch.GHA(ctx, client, sp.Name, v, p.sha, p.kind, dest)
+			err = fetch.GHA(ctx, client, sp.Name, v, ghaPins[v].sha, dest)
 		}
 		if err != nil {
 			return nil, err
 		}
 		arts[v] = dest
 		if m := fetch.ReadMeta(dest); m != nil {
-			srcs[v] = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification, RefKind: m.RefKind}
+			src := &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
+			src.RefKind = ghaPins[v].kind // empty for non-gha; the pin tier of this ref, freshly resolved
+			srcs[v] = src
 		}
 	}
 
@@ -571,9 +598,16 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		return nil, err
 	}
 
+	// a sub-path action is its own dependency: what was reviewed is
+	// owner/repo/sub, and every command and grouping keyed off the name must
+	// say so or a scoped review reads as the whole repo's
+	name := sp.Name
+	if sp.Sub != "" {
+		name += "/" + sp.Sub
+	}
 	input := stats.Input{
 		ToolVersion:    version.Version,
-		Pkg:            stats.PkgRef{Ecosystem: string(sp.Eco), Name: sp.Name, From: from, To: to},
+		Pkg:            stats.PkgRef{Ecosystem: string(sp.Eco), Name: name, From: from, To: to},
 		SubPath:        sp.Sub,
 		Workspace:      ws,
 		OldTree:        filepath.Join(tmp, oldRoot),

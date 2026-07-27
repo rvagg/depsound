@@ -86,6 +86,7 @@ const (
 	CodeProvenanceGap     Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
 	CodeUnreviewable      Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
 	CodeRangeResolved     Code = "resolution.range"         // an endpoint was a range/latest, resolved at review time
+	CodeNoContentChange   Code = "files.none"               // the versions differ but the reviewed content does not
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -105,7 +106,7 @@ var allCodes = []Code{
 	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
-	CodeUnreviewable, CodeRangeResolved,
+	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -208,6 +209,18 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		}
 		add(CodeBinDelta, KindFact, LensCompat, weightWeigh,
 			fmt.Sprintf("installed executable(s) changed: %d bin entry(ies)", n), firstN(names, 5))
+	}
+
+	// two versions whose reviewed content is byte-identical: the fact that
+	// settles the review, and one we already hold. Scoped names what was
+	// compared, since a sub-path action can be unchanged while its repo moved.
+	if s.Files.Changed == 0 && s.Artifact.BytesTo > 0 {
+		what := "the published artifact is byte-identical"
+		if a := s.Action; a != nil && a.SubPath != "" {
+			what = "the scoped action at " + a.SubPath + "/ is byte-identical"
+		}
+		add(CodeNoContentChange, KindFact, LensSecurity, weightPositive,
+			"no content change", what+"; the version moved, what installs did not")
 	}
 
 	// GitHub Actions execution model (gha only). CapsIntroduced is the delta
@@ -329,9 +342,18 @@ func Derive(ref string, s *stats.Stats) Ledger {
 			"artifact became mostly unreviewable in this bump",
 			unrevDetail+"; sources may have been swapped for a bundle, read the payload")
 	case domTo && domFrom:
+		// how much it weighs depends on whether you execute the mass. A package
+		// often ships a browser bundle beside the modules you import, so the
+		// answer is "check your entrypoints"; an action names its bundle in
+		// action.yml and the runner executes exactly that, so there is nothing
+		// to check and the weight is full.
+		weigh := "Weight depends on what you consume: check whether the entrypoints resolve into this mass"
+		if s.Action != nil {
+			weigh = "This is what the runner executes, so it weighs in full"
+		}
 		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
 			"mostly unreviewable at rest (both versions)",
-			unrevDetail+"; expect the same on every bump. Weight depends on what you consume: check whether the entrypoints resolve into this mass")
+			unrevDetail+"; expect the same on every bump. "+weigh)
 	case domFrom && !domTo:
 		add(CodeUnreviewable, KindFact, LensSecurity, weightPositive,
 			"no longer mostly unreviewable",
@@ -544,10 +566,14 @@ func DeriveCensus(ref string, c *Census) Ledger {
 		}
 	}
 	if unreviewableDominant(unrev, c.Bytes) {
+		weigh := "weight depends on whether the entrypoints resolve into it"
+		if c.GHAUsing != "" { // an action executes the bundle it names; nothing to check
+			weigh = "this is what the runner executes, so it weighs in full"
+		}
 		add(CodeUnreviewable, KindFact, LensSecurity, weightWeigh,
 			"mostly unreviewable at rest",
-			fmt.Sprintf("%s of %s (%d%%) generated/binary/minified/oversized; structurally hard to review now and on every future bump (weight depends on whether the entrypoints resolve into it)",
-				bytes(unrev), bytes(c.Bytes), pctOf(unrev, c.Bytes)))
+			fmt.Sprintf("%s of %s (%d%%) generated/binary/minified/oversized; structurally hard to review now and on every future bump (%s)",
+				bytes(unrev), bytes(c.Bytes), pctOf(unrev, c.Bytes), weigh))
 	}
 	sortSignals(l.Signals)
 	return l

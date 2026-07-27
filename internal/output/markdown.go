@@ -32,9 +32,27 @@ type ledgerRow struct {
 
 func (r ledgerRow) tier() int { return Assess(r.l).Tier }
 
-func (r ledgerRow) phrases() string {
-	out := make([]string, 0, len(r.l.Signals))
+// coverageNotes name what we could scan, not what we found: properties of the
+// ecosystem, identical on every row and every PR, so they belong in the
+// boundary once. A per-dep coverage gap (a scan that failed or was disabled)
+// is news about that dep and stays on its row.
+var coverageNotes = map[Code]bool{CodeOSVUnsupported: true}
+
+// findings are the signals that say something about this dependency.
+func (r ledgerRow) findings() []Signal {
+	out := make([]Signal, 0, len(r.l.Signals))
 	for _, sig := range r.l.Signals {
+		if !coverageNotes[sig.Code] {
+			out = append(out, sig)
+		}
+	}
+	return out
+}
+
+func (r ledgerRow) phrases() string {
+	f := r.findings()
+	out := make([]string, 0, len(f))
+	for _, sig := range f {
 		out = append(out, mdSignal(sig, r.s, r.c))
 	}
 	return strings.Join(out, "; ")
@@ -55,8 +73,92 @@ func (r ledgerRow) bullet() string {
 	case rowCensus:
 		return fmt.Sprintf("- **new dependency %s**: %s", refArrow(r.ref), r.phrases())
 	default:
-		return fmt.Sprintf("- **%s**: %s", refArrow(r.ref), r.phrases())
+		// a row whose signals are all calm context still has room for what the
+		// change is; a row carrying something to weigh gets to keep the floor
+		phrases := r.phrases()
+		if r.tier() == 0 {
+			if d := digestLine(r.s); d != "" {
+				phrases += " · " + d
+			}
+		}
+		return fmt.Sprintf("- **%s**: %s", refArrow(r.ref), phrases)
 	}
+}
+
+// digest is the row for a change that tripped nothing: what it is, in
+// per-invocation facts. Deltas and counts only, so every clause is checkable:
+// "no new runner capability" is, "capabilities fine" would be a verdict.
+func (r ledgerRow) digest() string {
+	d := digestLine(r.s)
+	if d == "" {
+		return ""
+	}
+	return fmt.Sprintf("- **%s**: %s", refArrow(r.ref), d)
+}
+
+func digestLine(s *stats.Stats) string {
+	if s == nil {
+		return ""
+	}
+	var parts []string
+	if a := s.Action; a != nil {
+		if p := pinPhrase(a.Pins); p != "" {
+			parts = append(parts, p)
+		}
+		if a.UsingTo != "" && a.UsingFrom == a.UsingTo {
+			parts = append(parts, mdTaint(a.UsingTo)+" unchanged")
+		}
+		parts = appendNonEmpty(parts, filesPhrase(s))
+		if len(a.Caps) > 0 { // referenced in both versions, none new in this bump
+			parts = append(parts, "no new runner capability")
+		}
+		if n := len(a.Nested); n > 0 {
+			parts = append(parts, fmt.Sprintf("%d nested action%s", n, plural(n)))
+		}
+		return strings.Join(parts, " · ")
+	}
+	parts = appendNonEmpty(parts, filesPhrase(s))
+	if s.Compat.TypeTo != "" && s.Compat.TypeFrom == s.Compat.TypeTo {
+		parts = append(parts, "still "+mdTaint(s.Compat.TypeTo))
+	}
+	if !execSurfacePresent(s.Runnable) {
+		parts = append(parts, "no install/build execution surface")
+	}
+	return strings.Join(parts, " · ")
+}
+
+func appendNonEmpty(parts []string, s string) []string {
+	if s == "" {
+		return parts
+	}
+	return append(parts, s)
+}
+
+// filesPhrase sizes the change; nothing changed is left to the
+// no-content-change signal.
+func filesPhrase(s *stats.Stats) string {
+	if s.Files.Changed == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d file%s +%s/-%s", s.Files.Changed, plural(s.Files.Changed),
+		commas(s.Files.Added), commas(s.Files.Removed))
+}
+
+// pinPhrase grades both sides of an action pin in one clause.
+func pinPhrase(pins []stats.ActionPin) string {
+	from, to := pinOf(pins, "from"), pinOf(pins, "to")
+	if from == nil || to == nil {
+		return ""
+	}
+	if from.Kind == to.Kind {
+		return from.Kind + " pin both sides"
+	}
+	return from.Kind + " → " + to.Kind + " pin"
+}
+
+func execSurfacePresent(r stats.Runnable) bool {
+	return len(r.Lifecycle) > 0 || r.GypFrom || r.GypTo || r.CgoFrom || r.CgoTo ||
+		r.BuildRSFrom || r.BuildRSTo || r.ProcMacroFrom || r.ProcMacroTo
 }
 
 // ledgerRows derives one ledger per result; inclusion and verdict come from the
@@ -108,36 +210,90 @@ func Markdown(results []BulkResult) string {
 	w("<!-- depsound-title: depsound: %s -->", checkTitle(v, total))
 	w("**depsound** · %d dependency change%s · %s", total, plural(total), triage(v))
 
-	var bullets []string
-	nClean := 0
+	// findings first, then a digest for each quiet change, so a row that tripped
+	// nothing still says what it is. Digests are capped so a wide PR cannot
+	// become a wall; the remainder collapses to a stated count.
+	var bullets, digests []string
+	nQuiet := 0
 	for _, r := range rows {
-		if len(r.l.Signals) == 0 {
-			nClean++
+		if len(r.findings()) > 0 {
+			bullets = append(bullets, r.bullet())
 			continue
 		}
-		bullets = append(bullets, r.bullet())
+		nQuiet++
+		if len(digests) < maxDigestRows {
+			if d := r.digest(); d != "" {
+				digests = append(digests, d)
+			}
+		}
 	}
-	// The bullets section lists only what tripped; the "N others" line is its
-	// footer accounting for the clean deps NOT listed. With nothing tripped
-	// there are no bullets, so the headline already carries "no signals
-	// tripped" and the line would just repeat it: skip the whole section.
-	if len(bullets) > 0 {
+	if len(bullets)+len(digests) > 0 {
 		w("")
-		for _, bl := range bullets {
+		for _, bl := range append(bullets, digests...) {
 			w("%s", bl)
 		}
-		if nClean > 0 {
-			w("- %d other%s: no signals tripped.", nClean, plural(nClean))
+		if rest := nQuiet - len(digests); rest > 0 {
+			w("- %d other%s: nothing tripped.", rest, plural(rest))
 		}
 	}
 	w("")
-	notChecked := "reachability, runtime behaviour, your tests"
-	if g := provenanceGap(results); g != "" {
-		notChecked += ", " + g
-	}
-	w("<i>Not checked: %s.</i>", notChecked)
+	w("<i>%s</i>", coverageLine(results, rows))
 	w("<!-- depsound -->")
 	return b.String()
+}
+
+// maxDigestRows caps the quiet-change detail so the comment's length tracks
+// what moved, never the size of the dependency list.
+const maxDigestRows = 10
+
+// coverageLine is the boundary in one small-print block: what was checked
+// across this set, what cannot be, and the ecosystem coverage notes hoisted
+// out of the rows. It is scoped by what is actually in the set, so a GitHub
+// Actions PR is not told about import reachability.
+func coverageLine(results []BulkResult, rows []ledgerRow) string {
+	gha, pkg := false, false
+	for _, r := range results {
+		switch {
+		case r.Stats != nil && r.Stats.Action != nil:
+			gha = true
+		case r.Stats != nil || r.Census != nil:
+			pkg = true
+		}
+	}
+	checked := []string{"the published artifact diff"}
+	notChecked := []string{"runtime behaviour", "intent (an obfuscated payload reads as ordinary code)"}
+	if gha {
+		checked = append(checked, "pin grade", "execution model", "runner capability references (grep, evadable)")
+		notChecked = append(notChecked, "the permissions, secrets and trigger at each callsite", "self-hosted runner reach")
+	}
+	if pkg {
+		checked = append(checked, "manifest compatibility", "install/build execution surface")
+		notChecked = append(notChecked, "whether your code reaches the change", "your test coverage")
+	}
+	if g := provenanceGap(results); g != "" {
+		notChecked = append(notChecked, g)
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "Checked: %s. Not checked: %s.", strings.Join(checked, ", "), strings.Join(notChecked, ", "))
+	// the hoisted coverage notes, once each, with the count they apply to
+	byCode := map[Code]int{}
+	var order []Code
+	for _, r := range rows {
+		for _, sig := range r.l.Signals {
+			if coverageNotes[sig.Code] {
+				if byCode[sig.Code] == 0 {
+					order = append(order, sig.Code)
+				}
+				byCode[sig.Code]++
+			}
+		}
+	}
+	for _, code := range order {
+		if code == CodeOSVUnsupported {
+			fmt.Fprintf(&out, " No known-CVE scan for %d of these: OSV indexes no advisories for that ecosystem.", byCode[code])
+		}
+	}
+	return out.String()
 }
 
 // mdSignal renders one ledger signal as a comment phrase. It dispatches on the
@@ -197,7 +353,28 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 // refArrow renders a dependency ref for a bullet: the tool's " -> " separator
 // as a unicode arrow, then escaped for the Markdown/HTML medium.
 func refArrow(ref string) string {
-	return mdTaint(strings.ReplaceAll(ref, " -> ", " → "))
+	// a commit-pinned action carries two 40-char shas; the short form is what a
+	// human matches against the diff, and the full pair stays in the report
+	fields := strings.Fields(ref)
+	for i, f := range fields {
+		if isHexSHA(f) {
+			fields[i] = f[:12]
+		}
+	}
+	return mdTaint(strings.ReplaceAll(strings.Join(fields, " "), " -> ", " → "))
+}
+
+// isHexSHA reports whether s is a full 40-char git object name.
+func isHexSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // commas formats a count with thousands separators: 49532 -> "49,532".

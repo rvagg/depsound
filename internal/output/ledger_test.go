@@ -338,3 +338,28 @@ func TestUnreviewableMassDoctrine(t *testing.T) {
 		t.Errorf("census dominance: want weigh at adoption, got %+v", cs)
 	}
 }
+
+// A dominant generated mass weighs differently by consumption model: a package
+// may ship a browser bundle beside the modules you import, so the reader has to
+// check their entrypoints; an action names its bundle in action.yml and the
+// runner executes exactly that.
+func TestUnreviewableMassWeighsByConsumption(t *testing.T) {
+	art := stats.Artifact{BytesFrom: 4 << 20, UnreviewableFrom: 3 << 20, BytesTo: 4 << 20, UnreviewableTo: 3 << 20}
+	find := func(l Ledger) string {
+		for _, s := range l.Signals {
+			if s.Code == CodeUnreviewable {
+				return s.Detail
+			}
+		}
+		return ""
+	}
+	pkg := find(Derive("npm:x 1 -> 2", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Artifact: art}))
+	if !strings.Contains(pkg, "check whether the entrypoints") {
+		t.Errorf("package detail = %q", pkg)
+	}
+	action := find(Derive("gha:o/r v1 -> v2", &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Artifact: art,
+		Action: &stats.ActionSection{UsingTo: "node24"}}))
+	if !strings.Contains(action, "runner executes, so it weighs in full") {
+		t.Errorf("action detail = %q", action)
+	}
+}

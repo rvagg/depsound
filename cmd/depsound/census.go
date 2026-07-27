@@ -310,7 +310,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	case spec.Crates:
 		err = fetch.Crate(ctx, client, sp.Name, v, art)
 	case spec.GHA:
-		err = fetch.GHA(ctx, client, sp.Name, v, pin.sha, pin.kind, art)
+		err = fetch.GHA(ctx, client, sp.Name, v, pin.sha, art)
 	}
 	if err != nil {
 		return nil, err
@@ -368,7 +368,7 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	cen.Tree = scoped
 	cen.ByClass, cen.Bytes, cen.UnreviewableBytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(scoped)
 	if sp.Eco == spec.GHA {
-		if err := censusGHA(cen, scoped, art, v, sp.Sub); err != nil {
+		if err := censusGHA(cen, scoped, art, v, sp.Sub, pin.kind); err != nil {
 			return nil, err
 		}
 	} else if err := censusManifest(sp.Eco, tree, cen); err != nil {
@@ -401,14 +401,13 @@ func writeExtractReport(path string, rep *extract.Report) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
-// censusGHA fills a GHA census: the pin (sha/tag/branch, from the sidecar),
-// the action.yml execution model (present form), and the sub-path caveat.
-func censusGHA(cen *output.Census, scoped, art, ref, sub string) error {
-	m := fetch.ReadMeta(art)
-	sha, kind := "", ""
-	if m != nil {
+// censusGHA fills a GHA census: the pin (sha/tag/branch, as this run resolved
+// it, never read back from the commit-keyed sidecar), the action.yml execution
+// model (present form), and the sub-path caveat.
+func censusGHA(cen *output.Census, scoped, art, ref, sub, kind string) error {
+	sha := ""
+	if m := fetch.ReadMeta(art); m != nil {
 		sha = strings.TrimPrefix(m.Digest, "git-")
-		kind = m.RefKind
 	}
 	cen.Resolved = fmt.Sprintf("%s (%s) -> %s", ref, orUnknown(kind), sha)
 	cen.GHAPinKind, cen.GHAPinSHA = kind, sha

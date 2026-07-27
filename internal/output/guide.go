@@ -61,18 +61,25 @@ var projectable = map[string]bool{"npm": true, "crates": true}
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
 func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	checked, notChecked := coverageChecked, coverageNotChecked
-	if s.Action != nil { // gha: the execution surface we check is action.yml
-		checked = append([]string(nil), coverageChecked...)
-		for i, c := range checked {
-			if strings.HasPrefix(c, "build/install execution surface") {
-				checked[i] = "action.yml execution model (using, entrypoints, composite uses)"
-			}
+	// an action is reviewed on its own terms: it runs on a runner rather than
+	// inside your code, so what it can reach is decided by the calling
+	// workflow, and import reachability says nothing about it
+	if s.Action != nil {
+		checked = []string{
+			"the repo tree at the pinned commit (what the runner checks out)",
+			"file classification (source vs generated/test/docs, heuristic)",
+			"pin grade (sha immutable; tag and branch re-pointable)",
+			"action.yml execution model (using, entrypoints, composite uses)",
+			"capability references in the executed code (OIDC/secrets/network/step-injection/exec; grep of the dist bundle, evadable)",
 		}
-		checked = append(checked, "capability references in the executed code (OIDC/secrets/network/step-injection/exec; grep of the dist bundle, evadable)")
-		// we now grep for capability references, but not for intent
-		notChecked = append([]string{
+		notChecked = []string{
 			"whether the referenced capabilities are used maliciously (grep finds references, not intent; an obfuscated payload evades it)",
-		}, coverageNotChecked...)
+			"the permissions, secrets and trigger the calling workflow grants at each callsite",
+			"self-hosted runner network reach and persistence",
+			"what the change does at runtime (behavioural / semantic effects)",
+			"nested actions and their own pins (listed, not analysed)",
+			"how the release was published (provenance, anomaly vs history)",
+		}
 	}
 	// provenance runs by default; when EVERY source answered, flip its
 	// blind-spot line to checked (copying, never mutating the shared
@@ -151,15 +158,31 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	// on the runner, not in your code, so import-path intersection (surface)
 	// is meaningless there; the gha next-steps are the pin and the payload.
 	if a := s.Action; a != nil {
-		if sha := pinSHA(a.Pins, "to"); sha != "" {
-			add("a tag can re-point after this review; pin the commit the review actually covered",
-				fmt.Sprintf("uses: %s@%s # %s", s.Package.Name, sha, s.Package.To))
+		// only a mutable ref can be re-pointed under a completed review
+		if p := pinOf(a.Pins, "to"); p != nil && p.Kind != "sha" {
+			add(fmt.Sprintf("a %s can be re-pointed after this review; pin the commit the review actually covered", p.Kind),
+				fmt.Sprintf("uses: %s@%s # %s", s.Package.Name, p.SHA, s.Package.To))
 		}
-		add("the dist bundle is what executes on the runner; read the changed entrypoint files in the workspace diff", "")
+		// route to the payload only where there is one: a composite action has
+		// no bundle, and an empty scoped diff has nothing to read
+		switch {
+		case s.Files.Changed == 0:
+		case a.UsingTo == "composite":
+			add("a composite action executes its own steps plus the actions it nests; read the changed steps in the workspace diff", "")
+		case a.MainTo != "":
+			add(fmt.Sprintf("%s is what executes on the runner; read it in the workspace diff", a.MainTo),
+				"depsound show "+ref+" --file="+a.MainTo)
+		default:
+			add("the executed entrypoint is what runs on the runner; read the changed files in the workspace diff", "")
+		}
 		if len(a.Nested) > 0 {
 			add(fmt.Sprintf("%d nested action(s) are their own supply chain; vet each pin", len(a.Nested)),
 				"depsound gha:<owner/repo> <ref>   (census each nested pin)")
 		}
+		// the standing gha nudge: what the runner hands the action is decided
+		// at the callsite, which is in the consumer's workflows, not here
+		add("an action runs with whatever the calling workflow grants it; check permissions, secrets and trigger at each callsite",
+			fmt.Sprintf("grep -rn %q .github/workflows/", s.Package.Name))
 	} else {
 		// Always last, and always present: reachability is the tool's blind
 		// spot, so the standing next-step is to intersect the diff with actual
@@ -170,12 +193,12 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	return cov, na
 }
 
-// pinSHA returns the resolved commit of the named side's pin, "" if absent.
-func pinSHA(pins []stats.ActionPin, side string) string {
+// pinOf returns the named side's pin, nil if absent.
+func pinOf(pins []stats.ActionPin, side string) *stats.ActionPin {
 	for _, p := range pins {
 		if p.Side == side {
-			return p.SHA
+			return &p
 		}
 	}
-	return ""
+	return nil
 }

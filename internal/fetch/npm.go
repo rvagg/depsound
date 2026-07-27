@@ -90,13 +90,15 @@ const (
 
 // Meta is the provenance sidecar stored beside each cached artifact so
 // reports remain traceable to exact inputs.
+// A GitHub Actions pin tier (sha|tag|branch) deliberately does not live here:
+// it belongs to the ref a workflow holds, not to the bytes. This sidecar is
+// keyed by resolved commit, which a tag and a literal sha can share, so
+// storing the tier would let cache history decide a security grade. It is
+// re-resolved on every invocation instead.
 type Meta struct {
 	URL          string `json:"url"`
 	Digest       string `json:"digest"`
 	Verification string `json:"verification,omitempty"`
-	// RefKind records how a GitHub Actions ref was pinned (sha|tag|branch):
-	// the immutability tier, resolved at fetch time so it survives caching.
-	RefKind string `json:"refKind,omitempty"`
 }
 
 func MetaPath(artifactPath string) string { return artifactPath + ".meta.json" }

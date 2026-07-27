@@ -98,8 +98,9 @@ func isHexSHA(s string) bool {
 // artifact is genuinely immutable and a cache hit needs no rehash (no
 // registry checksum exists; the sha is the identity, bytes rest on TLS
 // trust, recorded as tls-only). ref is the caller's spelling, kept for
-// error messages; kind (sha|tag|branch) rides into the sidecar.
-func GHA(ctx context.Context, client *http.Client, name, ref, sha, kind, dest string) error {
+// error messages only: how it was pinned is a property of the ref, so the
+// caller re-resolves it per invocation rather than reading it back here.
+func GHA(ctx context.Context, client *http.Client, name, ref, sha, dest string) error {
 	if _, err := os.Stat(dest); err == nil && ReadMeta(dest) != nil {
 		return nil
 	}
@@ -107,7 +108,7 @@ func GHA(ctx context.Context, client *http.Client, name, ref, sha, kind, dest st
 	if err := downloadPlain(ctx, client, u, dest); err != nil {
 		return fmt.Errorf("gha:%s@%s (commit %s): %w", name, ref, sha, err)
 	}
-	return writeMeta(dest, Meta{URL: u, Digest: "git-" + sha, Verification: VerifyTLSOnly, RefKind: kind})
+	return writeMeta(dest, Meta{URL: u, Digest: "git-" + sha, Verification: VerifyTLSOnly})
 }
 
 // GHATarballURL is the immutable download address for a resolved commit.

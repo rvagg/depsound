@@ -80,3 +80,35 @@ func TestExtractReportSidecar(t *testing.T) {
 		t.Errorf("corrupt sidecar should read nil, got %+v", rep)
 	}
 }
+
+// A pin tier belongs to the ref this run holds, never to the commit-keyed
+// bytes: a tag and a literal sha can name one commit while carrying very
+// different immutability. A cached workspace records whichever spelling built
+// it, so the tier is re-derived every invocation.
+func TestStampGHAPins(t *testing.T) {
+	sha := "cccccccccccccccccccccccccccccccccccccccc"
+	st := &stats.Stats{
+		Artifact: stats.Artifact{
+			SourceFrom: &stats.Source{Digest: "git-" + sha, RefKind: "tag"}, // stale: built by a tag run
+			SourceTo:   &stats.Source{Digest: "git-" + sha, RefKind: "tag"},
+		},
+		Action: &stats.ActionSection{Pins: []stats.ActionPin{
+			{Side: "from", Ref: "v1", SHA: sha, Kind: "tag"},
+			{Side: "to", Ref: "v2", SHA: sha, Kind: "tag"},
+		}},
+	}
+	pins := map[string]ghaPin{sha: {sha, "sha"}, "v2": {sha, "tag"}}
+	stampGHAPins(st, sha, "v2", pins)
+
+	if st.Artifact.SourceFrom.RefKind != "sha" || st.Artifact.SourceTo.RefKind != "tag" {
+		t.Errorf("sources = %q/%q, want sha/tag", st.Artifact.SourceFrom.RefKind, st.Artifact.SourceTo.RefKind)
+	}
+	// the rendered pins drive the grade signals, so they must follow too
+	if got := st.Action.Pins; len(got) != 2 || got[0].Kind != "sha" || got[0].Ref != sha || got[1].Kind != "tag" {
+		t.Errorf("pins = %+v", got)
+	}
+	// a tag misreported as sha would also skip the moved-tag check entirely
+	if ghaMovedRefs(st, sha, "v2", map[string]ghaPin{sha: {sha, "sha"}, "v2": {"dddddddddddddddddddddddddddddddddddddddd", "tag"}}) == nil {
+		t.Error("a moved tag must still be detected after stamping")
+	}
+}

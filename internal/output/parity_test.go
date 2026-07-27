@@ -36,7 +36,7 @@ func markdownMarkers() map[Code]string {
 		CodeOSVFixed:          "fixes",
 		CodeOSVDisabled:       "scan not run",
 		CodeOSVFailed:         "scan failed",
-		CodeOSVUnsupported:    "not applicable",
+		CodeOSVUnsupported:    "No known-CVE scan for",
 		CodeExecIntroduced:    "new execution surface",
 		CodeExecPresent:       "execution surface present",
 		CodeCompatChange:      "module format changed",
@@ -67,6 +67,7 @@ func markdownMarkers() map[Code]string {
 		CodeGHAPinWeakened:    "pin weakened",
 		CodeGHAPinRaised:      "pin strengthened",
 		CodeGHAPinGrade:       "pinned on both sides",
+		CodeNoContentChange:   "no content change",
 	}
 }
 
@@ -108,6 +109,7 @@ func bulkMarkers() map[Code]string {
 		CodeGHAPinWeakened:    "pin weakened",
 		CodeGHAPinRaised:      "pin strengthened",
 		CodeGHAPinGrade:       "pin grade",
+		CodeNoContentChange:   "no content change",
 	}
 }
 
@@ -156,6 +158,9 @@ func parityFixture() []BulkResult {
 			Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}},
 		{Ref: "npm:new 1.0.0", Census: &Census{Files: 12, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin",
 			HostileEntries: []string{"../evil"}, SkippedLinks: []string{"link -> /etc/passwd"}}}, // extraction evidence must survive the census path too
+		{Ref: "gha:o/r/post v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: true},
+			Artifact: stats.Artifact{BytesTo: 8 << 10}, // compared, and nothing differed
+			Action:   &stats.ActionSection{SubPath: "post", Pins: []stats.ActionPin{{Side: "from", Kind: "sha", Ref: "aaaa"}, {Side: "to", Kind: "sha", Ref: "bbbb"}}}}},
 		{Ref: "go:trusted/x", Redirect: "github.com/fork/x@v1.0.0"},
 		{Ref: "npm:broke 1 -> 2", Err: "extraction failed"},
 		{Ref: "npm:gone 1 -> 2", Unavailable: &Unavailable{Kind: "absent", Status: 404, URL: "https://registry.npmjs.org/gone/-/gone-2.tgz"}},
