@@ -68,6 +68,8 @@ func markdownMarkers() map[Code]string {
 		CodeGHAPinRaised:      "pin strengthened",
 		CodeGHAPinGrade:       "pinned on both sides",
 		CodeNoContentChange:   "no content change",
+		CodeMalwareAdvisory:   "malware advisory record",
+		CodeExecGitOnly:       "git/link/file dependency",
 	}
 }
 
@@ -89,7 +91,7 @@ func bulkMarkers() map[Code]string {
 		CodeBinaryChanged:     "file(s) changed",
 		CodeRedirect:          "redirected off the registry",
 		CodeCensusNew:         "whole footprint unreviewed",
-		CodeCensusCVE:         "known CVE(s)",
+		CodeCensusCVE:         "known vulnerability(ies)",
 		CodeCensusExec:        "runs install/build code",
 		CodeCensusBig:         "largest unreviewed",
 		CodeAnalysisFailed:    "failed (not analysed)",
@@ -110,6 +112,8 @@ func bulkMarkers() map[Code]string {
 		CodeGHAPinRaised:      "pin strengthened",
 		CodeGHAPinGrade:       "pin grade",
 		CodeNoContentChange:   "no content change",
+		CodeMalwareAdvisory:   "malicious-package advisory",
+		CodeExecGitOnly:       "only for a git/link/file dependency",
 	}
 }
 
@@ -154,9 +158,13 @@ func parityFixture() []BulkResult {
 			},
 			Compat: stats.Compat{ExportsError: "malformed exports map"},
 		}},
+		{Ref: "npm:husky-ish 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+			Runnable: stats.Runnable{LifecycleGitOnly: []manifest.Change{{Key: "prepare", Status: "added"}}}}},
+		{Ref: "npm:malware 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"},
+			Security: stats.Security{Queried: true, StillPresent: []osv.Vuln{{ID: "MAL-2022-4", Kind: osv.KindMalware}}}}},
 		{Ref: "npm:takeover 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, AttestationDropped: true,
 			Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}},
-		{Ref: "npm:new 1.0.0", Census: &Census{Files: 12, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin",
+		{Ref: "npm:new 1.0.0", Census: &Census{Files: 12, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}, {ID: "MAL-2022-4", Kind: osv.KindMalware}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin",
 			HostileEntries: []string{"../evil"}, SkippedLinks: []string{"link -> /etc/passwd"}}}, // extraction evidence must survive the census path too
 		{Ref: "gha:o/r/post v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: true},
 			Artifact: stats.Artifact{BytesTo: 8 << 10}, // compared, and nothing differed

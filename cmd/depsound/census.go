@@ -465,7 +465,7 @@ func censusManifest(eco spec.Ecosystem, tree string, cen *output.Census) error {
 		if err != nil {
 			return err
 		}
-		cen.Lifecycle = npmpkg.LifecyclePresent(p)
+		cen.Lifecycle, cen.LifecycleGitOnly = npmpkg.LifecyclePresent(p)
 		cen.Deps = npmpkg.DepsPresent(p)
 		cen.Gyp = exists(filepath.Join(tree, "binding.gyp"))
 		cen.Entrypoints = npmpkg.Entrypoints(p)

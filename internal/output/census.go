@@ -31,11 +31,14 @@ type Census struct {
 	BigExcluded      string `json:"bigExcluded,omitempty"`
 	BigExcludedBytes int64  `json:"bigExcludedBytes,omitempty"`
 
-	Lifecycle []manifest.Change `json:"lifecycle,omitempty"` // present install/build scripts
-	BuildRS   bool              `json:"buildRs,omitempty"`
-	Cgo       bool              `json:"cgo,omitempty"`
-	ProcMacro bool              `json:"procMacro,omitempty"`
-	Gyp       bool              `json:"bindingGyp,omitempty"`
+	// Lifecycle is the hooks a registry install runs; LifecycleGitOnly is the
+	// set that needs a git/link/file source (prepare, prepack and their pre/post).
+	Lifecycle        []manifest.Change `json:"lifecycle,omitempty"`
+	LifecycleGitOnly []manifest.Change `json:"lifecycleGitOnly,omitempty"`
+	BuildRS          bool              `json:"buildRs,omitempty"`
+	Cgo              bool              `json:"cgo,omitempty"`
+	ProcMacro        bool              `json:"procMacro,omitempty"`
+	Gyp              bool              `json:"bindingGyp,omitempty"`
 
 	// GitHub Actions execution model (present form) for a gha census.
 	GHAUsing  string            `json:"ghaUsing,omitempty"`
@@ -128,8 +131,26 @@ func pct(n, total int) int {
 	return n * 100 / total
 }
 
+// hasExec is execution a plain registry install performs. The git-only hooks
+// are real but need a git/link/file source, so they are stated separately
+// rather than inflating this.
 func (c *Census) hasExec() bool {
 	return len(c.Lifecycle) > 0 || c.BuildRS || c.Cgo || c.ProcMacro || c.Gyp
+}
+
+// writeGitOnlyHooks states the hooks that need a git, link or file source. They
+// do not run for a registry install, so they are neither hidden nor counted as
+// install execution: a consumer who depends on this by git gets them.
+func writeGitOnlyHooks(w func(string, ...any), hooks []manifest.Change) {
+	if len(hooks) == 0 {
+		return
+	}
+	var names []string
+	for _, h := range hooks {
+		names = append(names, taint(h.Key))
+	}
+	w("  declared but not run by a registry install: %s (these fire for a git,", strings.Join(names, ", "))
+	w("    link or file dependency; check how you depend on this)")
 }
 
 // censusExecWhat lists the install/build execution surfaces a census carries,
@@ -162,8 +183,11 @@ func censusFootprint(c *Census) string {
 	if c.hasExec() {
 		parts = append(parts, "runs install/build code ("+strings.Join(censusExecWhat(c), ", ")+")")
 	}
-	if len(c.Vulns) > 0 {
-		parts = append(parts, fmt.Sprintf("%d known CVE(s)", len(c.Vulns)))
+	if mal := malicious(c.Vulns); len(mal) > 0 {
+		parts = append(parts, fmt.Sprintf("%d malware advisory record(s) match this version", len(mal)))
+	}
+	if n := len(vulnsOnly(c.Vulns)); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d known vulnerability(ies)", n))
 	}
 	if c.BigExcluded != "" {
 		parts = append(parts, "largest unreviewed "+c.BigExcluded)
@@ -412,7 +436,7 @@ func writeSubtreeOSV(w func(string, ...any), c *Census) {
 	}
 }
 
-// writeRootOSV renders the known-CVE scan for THIS version. Rendered high in
+// writeRootOSV renders the known-advisory scan for THIS version. Rendered high in
 // the report (above the dependency inventory) so a WARNING is never buried
 // below a long dep list.
 func writeRootOSV(w func(string, ...any), c *Census) {
@@ -420,19 +444,19 @@ func writeRootOSV(w func(string, ...any), c *Census) {
 	if !c.OSVQueried {
 		switch {
 		case !osvSupported(c.Ecosystem):
-			w("OSV known-CVE scan: not applicable (no OSV index for the %s ecosystem)", c.Ecosystem)
+			w("OSV known-advisory scan: not applicable (no OSV index for the %s ecosystem)", c.Ecosystem)
 		case c.OSVNote != "":
-			w("OSV known-CVE scan: did NOT complete (%s); a coverage gap, not a clean result", taint(c.OSVNote))
+			w("OSV known-advisory scan: did NOT complete (%s); a coverage gap, not a clean result", taint(c.OSVNote))
 		default:
-			w("OSV known-CVE scan: not run (disabled); a coverage gap, not a clean result")
+			w("OSV known-advisory scan: not run (disabled); a coverage gap, not a clean result")
 		}
 	} else if len(c.Vulns) == 0 {
-		w("OSV known-CVE scan (backward-looking), %s: none for this version", c.OSVFetchedAt)
-		w("  (known CVEs only; says nothing about novel or injected code)")
+		w("OSV known-advisory scan (backward-looking), %s: none for this version", c.OSVFetchedAt)
+		w("  (reported records only; says nothing about novel or unreported code)")
 	} else {
-		w("OSV known-CVE scan (backward-looking), %s: %d for this version:", c.OSVFetchedAt, len(c.Vulns))
+		w("OSV known-advisory scan (backward-looking), %s: %d for this version:", c.OSVFetchedAt, len(c.Vulns))
 		for _, v := range c.Vulns {
-			line := "  " + taint(v.ID)
+			line := "  " + vulnClass(v) + taint(v.ID)
 			if len(v.Aliases) > 0 {
 				line += " (" + taint(strings.Join(v.Aliases, ", ")) + ")"
 			}
@@ -441,7 +465,7 @@ func writeRootOSV(w func(string, ...any), c *Census) {
 			}
 			w("%s", line)
 		}
-		w("  (known CVEs only; the scan says nothing about novel or injected code)")
+		w("  (reported records only; the scan says nothing about novel or unreported code)")
 	}
 }
 
@@ -513,13 +537,15 @@ func CensusText(c *Census) string {
 			w("  no action.yml found at this path")
 		}
 	} else if !c.hasExec() {
-		w("execution surface: none declared (no lifecycle scripts, cgo, build.rs,")
-		w("  proc-macro, gyp). Install/build only; imported code still runs when called.")
+		w("execution surface: none a registry install runs (no install hooks, cgo,")
+		w("  build.rs, proc-macro, gyp). Imported code still runs when called.")
+		writeGitOnlyHooks(w, c.LifecycleGitOnly)
 	} else {
 		w("execution surface (runs code on install/build):")
 		for _, l := range c.Lifecycle {
 			w("  lifecycle %s: %s", taint(l.Key), taint(l.To))
 		}
+		writeGitOnlyHooks(w, c.LifecycleGitOnly)
 		if c.Gyp {
 			w("  binding.gyp (node-gyp compiles at install)")
 		}
@@ -655,8 +681,16 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 			Reason:  "it runs code on install/build; read that code before adopting (script bodies are listed above)",
 			Command: "read the scripts/build files they invoke in the package tree: " + c.Tree})
 	}
-	if len(c.Vulns) > 0 {
-		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known CVEs in this version; consider a patched version or alternative", len(c.Vulns))})
+	// a malware record and a vulnerability call for opposite responses, so they
+	// never share a next-step: there is no patched version of a malicious
+	// publish, and installing it at all is the event
+	if mal := malicious(c.Vulns); len(mal) > 0 {
+		na = append(na, stats.NextAction{
+			Reason:  fmt.Sprintf("%d malware advisory record(s) match this package/version (%s); do not adopt it, and if it was ever installed, rotate whatever it could reach", len(mal), joinVulnIDs(mal, 3)),
+			Command: vulnURL(mal[0].ID)})
+	}
+	if n := len(vulnsOnly(c.Vulns)); n > 0 {
+		na = append(na, stats.NextAction{Reason: fmt.Sprintf("%d known vulnerability(ies) in this version; check whether a patched release exists and whether your usage reaches them", n)})
 	}
 	if c.Ecosystem == "gha" {
 		// --transitive (deps.dev) does not cover actions; the transitive

@@ -130,24 +130,50 @@ var lifecycleScripts = []string{
 	"prepack", "postpack",
 }
 
-func LifecycleDelta(a, b *Package) []Change {
-	var out []Change
+// registryInstallHooks are the hooks npm runs when a package is installed as a
+// dependency from the registry, which is what a published-artifact review is
+// about. The rest of the set (prepare and its pre/post, prepack, postpack) does
+// not fire for a registry tarball: it fires for a git, link or file dependency,
+// and in the package's own working copy. Conflating the two overstates what a
+// registry bump executes, and understates the sharper thing a git dependency
+// does, so callers must say which path they mean.
+var registryInstallHooks = map[string]bool{"preinstall": true, "install": true, "postinstall": true}
+
+// InstallActive reports whether hook runs when this package is installed from
+// the registry as a dependency.
+func InstallActive(hook string) bool { return registryInstallHooks[hook] }
+
+// LifecycleDelta splits the hook delta by activation path: install fires when
+// a consumer installs this from the registry, gitOnly needs a git, link or file
+// source. Callers must keep them apart, or a package whose only hook is
+// `prepare` reads as running code on every consumer's machine.
+func LifecycleDelta(a, b *Package) (install, gitOnly []Change) {
 	for _, k := range lifecycleScripts {
-		out = appendDelta(out, k, a.Scripts[k], b.Scripts[k])
+		if InstallActive(k) {
+			install = appendDelta(install, k, a.Scripts[k], b.Scripts[k])
+			continue
+		}
+		gitOnly = appendDelta(gitOnly, k, a.Scripts[k], b.Scripts[k])
 	}
-	return out
+	return install, gitOnly
 }
 
 // LifecyclePresent lists the lifecycle scripts a package ships (the
-// absolute/census form): what would run on install, not a delta.
-func LifecyclePresent(p *Package) []Change {
-	var out []Change
+// absolute/census form), split by activation path like LifecycleDelta.
+func LifecyclePresent(p *Package) (install, gitOnly []Change) {
 	for _, k := range lifecycleScripts {
-		if v := p.Scripts[k]; v != "" {
-			out = append(out, Change{Key: k, Status: "present", To: v})
+		v := p.Scripts[k]
+		if v == "" {
+			continue
 		}
+		c := Change{Key: k, Status: "present", To: v}
+		if InstallActive(k) {
+			install = append(install, c)
+			continue
+		}
+		gitOnly = append(gitOnly, c)
 	}
-	return out
+	return install, gitOnly
 }
 
 // DepsPresent lists all declared dependencies (absolute/census form).

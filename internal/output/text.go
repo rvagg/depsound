@@ -87,14 +87,18 @@ func Text(s *stats.Stats) string {
 
 	w("")
 	r := s.Runnable
-	if len(r.Lifecycle) == 0 && !r.GypFrom && !r.GypTo && len(r.Bin) == 0 && !r.CgoFrom && !r.CgoTo &&
-		!r.BuildRSFrom && !r.BuildRSTo && !r.ProcMacroFrom && !r.ProcMacroTo {
+	if len(r.Lifecycle) == 0 && len(r.LifecycleGitOnly) == 0 && !r.GypFrom && !r.GypTo && len(r.Bin) == 0 &&
+		!r.CgoFrom && !r.CgoTo && !r.BuildRSFrom && !r.BuildRSTo && !r.ProcMacroFrom && !r.ProcMacroTo {
 		w("execution surface: none (no lifecycle scripts, cgo, build.rs, proc-macro,")
 		w("  gyp or bin changes). Install/build only; imported code still runs when called.")
 	} else {
 		w("execution surface:")
 		for _, c := range r.Lifecycle {
 			w("  lifecycle %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
+		}
+		for _, c := range r.LifecycleGitOnly {
+			w("  lifecycle %s %s: %s  [git/link/file dependencies only, not a registry install]",
+				taint(c.Key), c.Status, changeDetail(c))
 		}
 		if r.GypFrom || r.GypTo {
 			w("  binding.gyp (node-gyp runs at install): %v -> %v", r.GypFrom, r.GypTo)
@@ -366,14 +370,24 @@ func writeSecurity(w func(string, ...any), sec osv.Assessment) {
 		// OSV is backward-looking, so "no advisories" is silent on exactly
 		// the novel/injected-code case an attacker relies on
 		w("%s, %s: none for either version", cveScanLabel, sec.FetchedAt)
-		w("  (known CVEs only; says nothing about novel or injected code)")
+		w("  (reported records only; says nothing about novel or unreported code)")
 		return
 	}
 	w("%s, %s:", cveScanLabel, sec.FetchedAt)
 	writeVulns(w, "fixed by this upgrade", sec.FixedByUpgrade)
 	writeVulns(w, "still present after upgrade", sec.StillPresent)
 	writeVulns(w, "introduced by this upgrade", sec.Introduced)
-	w("  (leads, not a gate; confirm relevance to your usage. known CVEs only, silent on novel/injected code)")
+	w("  (leads, not a gate; confirm relevance to your usage. reported records only, silent on novel or unreported code)")
+}
+
+// vulnClass marks a malicious-package record so it cannot be read as an
+// ordinary vulnerability in a mixed list. Vulnerabilities carry no prefix:
+// they are the common case and do not need one.
+func vulnClass(v osv.Vuln) string {
+	if v.Malicious() {
+		return "[malware] "
+	}
+	return ""
 }
 
 func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {
@@ -382,7 +396,7 @@ func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {
 	}
 	w("  %s:", label)
 	for _, v := range vulns {
-		line := "    " + taint(v.ID)
+		line := "    " + vulnClass(v) + taint(v.ID)
 		if len(v.Aliases) > 0 {
 			line += " (" + taint(strings.Join(v.Aliases, ", ")) + ")"
 		}
@@ -404,10 +418,11 @@ func changeDetail(c manifest.Change) string {
 	}
 }
 
-// cveScanLabel names the OSV lookup for what it is: a backward-looking
-// scan of a KNOWN-vulnerability database. Never "security", which reads as
-// a verdict and goes green exactly when a novel/injected attack lands.
-const cveScanLabel = "OSV known-CVE scan (backward-looking)"
+// cveScanLabel names the OSV lookup for what it is: a backward-looking scan
+// of a database of reported records (vulnerabilities and malicious packages).
+// Never "security", which reads as a verdict and goes green exactly when a
+// novel or unreported attack lands.
+const cveScanLabel = "OSV known-advisory scan (backward-looking)"
 
 // bothPresentNote fires when a build-time execution surface is present in
 // BOTH versions: the flag did not flip, but the CODE it executes may still

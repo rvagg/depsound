@@ -38,9 +38,14 @@ type BulkResult struct {
 type digest struct {
 	exec     bool
 	execWhat []string
-	compat   bool
-	genFile  string // biggest unreviewed generated/binary file, if a large delta
-	genDelta int
+	// registryExec marks a surface that runs on an ordinary registry install;
+	// nonRegistryOnly marks one that needs a git/link/file source. A change
+	// with only the latter must not read as "code runs when you install this".
+	registryExec    bool
+	nonRegistryOnly bool
+	compat          bool
+	genFile         string // biggest unreviewed generated/binary file, if a large delta
+	genDelta        int
 }
 
 // addExec records a build-execution surface as a pointer, distinguishing
@@ -50,9 +55,11 @@ func (d *digest) addExec(name string, from, to bool) {
 	switch {
 	case !from && to:
 		d.exec = true
+		d.registryExec = true
 		d.execWhat = append(d.execWhat, name+" INTRODUCED")
 	case from && to:
 		d.exec = true
+		d.registryExec = true
 		d.execWhat = append(d.execWhat, name+" present (build code may have changed)")
 	}
 }
@@ -80,6 +87,7 @@ type bulkSection struct {
 }
 
 var bulkSections = []bulkSection{
+	{[]Code{CodeMalwareAdvisory}, "malicious-package advisory matches a reviewed version (not a flaw to upgrade past)"},
 	{[]Code{CodeArtifactAbsent}, "artifact unavailable (URL not retrievable now; contents not inspected; prior publication not established)"},
 	{[]Code{CodeHostileEntry}, "hostile archive member(s) skipped (traversal/absolute/control-byte name: an attack-shaped artifact)"},
 	{[]Code{CodeProvenanceAnomaly}, "provenance anomaly: account-takeover shape (publisher/attestation/repo/yank)"},
@@ -90,6 +98,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
 	{[]Code{CodeExecPresent}, "build/install execution surface present, its build code may have changed"},
+	{[]Code{CodeExecGitOnly}, "hooks that run only for a git/link/file dependency (a registry install does not run them)"},
 	{[]Code{CodeBinaryAdded}, "binary/opaque file(s) added (zero line delta, an ideal payload channel; ranked by bytes)"},
 	{[]Code{CodeBinaryChanged}, "binary/opaque file(s) changed (zero line delta; ranked by byte delta)"},
 	{[]Code{CodeGeneratedDelta}, "large unreviewed generated/binary change (payload can hide here)"},
@@ -98,18 +107,18 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeGHAPinGrade}, "GitHub Actions pin grade (mutable/unpinned standing context)"},
 	{[]Code{CodeGHAPinRaised}, "GitHub Actions pin strengthened"},
 	{[]Code{CodeGHACaps}, "GitHub Actions runner capability introduced by the bump"},
-	{[]Code{CodeOSVIntroduced}, "CVEs introduced by the upgrade"},
-	{[]Code{CodeOSVStill}, "CVEs still present after the upgrade (bump did not fix them)"},
+	{[]Code{CodeOSVIntroduced}, "vulnerabilities introduced by the upgrade"},
+	{[]Code{CodeOSVStill}, "vulnerabilities still present after the upgrade (bump did not fix them)"},
 	{[]Code{CodeGHAUsing}, "GitHub Actions runtime changed (may raise the minimum runner version)"},
 	{[]Code{CodeBinDelta}, "installed executable (bin) entries changed (a new or re-pointed command on PATH)"},
 	{[]Code{CodeCompatChange}, "compatibility changes"},
 	{[]Code{CodeExportsUnresolved}, "coverage gap: exports/resolution compatibility could not be computed"},
 	{[]Code{CodeSkippedLink}, "coverage gap: symlink/hardlink(s) not materialized (contents not inspected)"},
 	{[]Code{CodeIntegrityWeak}, "coverage gap: artifact verified by TLS trust only (no registry integrity or checksum-DB record)"},
-	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "coverage gap: known-CVE scan did not complete for these deps"},
+	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "coverage gap: known-advisory scan did not complete for these deps"},
 	{[]Code{CodeOSVFixed}, "advisories fixed by the upgrade (the merge argument)"},
 	{[]Code{CodeNoContentChange}, "no content change: the version moved, what installs did not"},
-	{[]Code{CodeOSVUnsupported}, "note: known-CVE scan not applicable (OSV has no index for this ecosystem)"},
+	{[]Code{CodeOSVUnsupported}, "note: known-advisory scan not applicable (OSV has no index for this ecosystem)"},
 }
 
 // provenanceGap phrases the coverage footer's publish-provenance entry: empty
@@ -251,7 +260,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		if osvNA > 0 {
 			st = append(st, fmt.Sprintf("not applicable for %d (ecosystem unsupported)", osvNA))
 		}
-		w("  known-CVE scan (OSV, backward-looking; blind to novel/injected code): %s.", strings.Join(st, "; "))
+		w("  known-advisory scan (OSV, backward-looking; blind to novel/unreported code): %s.", strings.Join(st, "; "))
 	}
 	if transitive {
 		w("NOT checked: does your code reach each change; what it does; test coverage;")
@@ -274,9 +283,15 @@ func digestOf(s *stats.Stats) digest {
 		compat: s.Compat.TypeFrom != s.Compat.TypeTo || len(s.Compat.Constraints) > 0 || len(s.Compat.Exports) > 0,
 	}
 	r := s.Runnable
+	// the two hook sets are separated upstream by activation path, because only
+	// one of them runs when a consumer installs this from the registry
 	for _, c := range r.Lifecycle {
-		d.exec = true
+		d.exec, d.registryExec = true, true
 		d.execWhat = append(d.execWhat, "lifecycle "+c.Key+" "+c.Status)
+	}
+	for _, c := range r.LifecycleGitOnly {
+		d.exec, d.nonRegistryOnly = true, true
+		d.execWhat = append(d.execWhat, "lifecycle "+c.Key+" "+c.Status+" (git/non-registry installs only)")
 	}
 	// execution surface fires on PRESENCE, not only introduction: a build
 	// surface present in both versions (cgo true->true) still executes the
@@ -299,6 +314,33 @@ func digestOf(s *stats.Stats) digest {
 // joinVulnIDs renders advisory IDs (preferring the CVE alias, more
 // recognizable than a GHSA id) so the router points at what to act on,
 // not just how many. Capped so a heavy dep does not become a wall.
+// malicious and vulnsOnly split an advisory set by record class. They answer
+// opposite questions ("is this package reported malicious" vs "does this code
+// carry a flaw"), so no renderer may show them as one count.
+func malicious(sets ...[]osv.Vuln) []osv.Vuln {
+	var out []osv.Vuln
+	seen := map[string]bool{}
+	for _, set := range sets {
+		for _, v := range set {
+			if v.Malicious() && !seen[v.ID] {
+				seen[v.ID] = true
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+func vulnsOnly(set []osv.Vuln) []osv.Vuln {
+	var out []osv.Vuln
+	for _, v := range set {
+		if !v.Malicious() {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func joinVulnIDs(vulns []osv.Vuln, max int) string {
 	var ids []string
 	for i, v := range vulns {

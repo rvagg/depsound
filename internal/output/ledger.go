@@ -87,6 +87,8 @@ const (
 	CodeUnreviewable      Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
 	CodeRangeResolved     Code = "resolution.range"         // an endpoint was a range/latest, resolved at review time
 	CodeNoContentChange   Code = "files.none"               // the versions differ but the reviewed content does not
+	CodeMalwareAdvisory   Code = "security.malwareAdvisory" // a malicious-package record matches the reviewed version
+	CodeExecGitOnly       Code = "exec.gitOnly"             // hooks that fire only for a git/link/file dependency
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -106,7 +108,7 @@ var allCodes = []Code{
 	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
-	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange,
+	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange, CodeMalwareAdvisory, CodeExecGitOnly,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -139,13 +141,13 @@ func addOSVGap(add func(Code, SignalKind, Lens, int, string, string), eco, note 
 	switch {
 	case !osvSupported(eco):
 		add(CodeOSVUnsupported, KindNote, LensCoverage, weightPositive,
-			"known-CVE scan not applicable", "OSV has no advisory index for the "+eco+" ecosystem")
+			"known-advisory scan not applicable", "OSV has no advisory index for the "+eco+" ecosystem")
 	case note != "":
 		add(CodeOSVFailed, KindDegradation, LensCoverage, weightWeigh,
-			"known-CVE scan failed", note)
+			"known-advisory scan failed", note)
 	default:
 		add(CodeOSVDisabled, KindDegradation, LensCoverage, weightWeigh,
-			"known-CVE scan not run", "OSV was disabled for this dependency")
+			"known-advisory scan not run", "OSV was disabled for this dependency")
 	}
 }
 
@@ -167,13 +169,23 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	case !s.Security.Queried:
 		addOSVGap(add, s.Package.Ecosystem, s.Security.Note)
 	default:
-		if n := len(s.Security.Introduced); n > 0 {
-			add(CodeOSVIntroduced, KindFact, LensSecurity, weightLook,
-				fmt.Sprintf("introduces %d known CVE(s)", n), joinVulnIDs(s.Security.Introduced, 5))
+		// a malware record is a different finding from a vulnerability and gets
+		// its own code: it says the published package was reported malicious,
+		// which no upgrade "fixes" and which is the loudest thing we can carry.
+		// It matches the reviewed version whether it also matched the old one,
+		// so both buckets feed it.
+		if mal := malicious(s.Security.Introduced, s.Security.StillPresent); len(mal) > 0 {
+			add(CodeMalwareAdvisory, KindFact, LensSecurity, weightLook,
+				fmt.Sprintf("%d malware advisory record(s) match this version", len(mal)),
+				joinVulnIDs(mal, 5)+"; not a code flaw to upgrade past: treat the package as compromised and rotate anything it could reach")
 		}
-		if n := len(s.Security.StillPresent); n > 0 {
+		if n := len(vulnsOnly(s.Security.Introduced)); n > 0 {
+			add(CodeOSVIntroduced, KindFact, LensSecurity, weightLook,
+				fmt.Sprintf("introduces %d known vulnerability(ies)", n), joinVulnIDs(vulnsOnly(s.Security.Introduced), 5))
+		}
+		if n := len(vulnsOnly(s.Security.StillPresent)); n > 0 {
 			add(CodeOSVStill, KindFact, LensSecurity, weightWeigh,
-				fmt.Sprintf("%d known CVE(s) still present after the bump", n), joinVulnIDs(s.Security.StillPresent, 5))
+				fmt.Sprintf("%d known vulnerability(ies) still present after the bump", n), joinVulnIDs(vulnsOnly(s.Security.StillPresent), 5))
 		}
 		if n := len(s.Security.FixedByUpgrade); n > 0 {
 			add(CodeOSVFixed, KindFact, LensSecurity, weightPositive,
@@ -184,13 +196,21 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	// execution surface, generated delta, compat: reuse the existing digest so
 	// the ledger agrees with today's renderers on what fired.
 	d := digestOf(s)
-	if d.exec {
+	switch {
+	case d.registryExec:
 		what := strings.Join(humanExec(d.execWhat), ", ")
 		if execIntroduced(d.execWhat) {
 			add(CodeExecIntroduced, KindFact, LensSecurity, weightLook, "new execution surface", what)
 		} else {
 			add(CodeExecPresent, KindFact, LensSecurity, weightWeigh, "execution surface present", what)
 		}
+	case d.nonRegistryOnly:
+		// real execution on a different activation path. Calm by weight, because
+		// a registry install does not run it and most consumers install that
+		// way; the redirect signal is what fires when one of them does not.
+		add(CodeExecGitOnly, KindFact, LensSecurity, weightPositive,
+			"hooks that run only for a git/link/file dependency",
+			strings.Join(humanExec(d.execWhat), ", ")+"; a registry install does not run these")
 	}
 	if d.genDelta > 0 {
 		add(CodeGeneratedDelta, KindHeuristic, LensCompat, weightWeigh,
@@ -509,13 +529,22 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	}
 	add(CodeCensusNew, KindFact, LensCompat, weightWeigh,
 		fmt.Sprintf("new dependency, %s file(s) unreviewed", commas(c.Files)), "")
-	// OSV status honestly: a scan that ran reports its CVEs (or nothing); a scan
-	// that did NOT run is a coverage gap, never a silent clean-on-security.
+	// OSV status honestly: a scan that ran reports its records (or nothing); a
+	// scan that did NOT run is a coverage gap, never a silent clean-on-security.
+	// A malware record on a package you are about to adopt is the loudest thing
+	// this tool can say, and it is a different finding from a vulnerability.
 	if !c.OSVQueried {
 		addOSVGap(add, c.Ecosystem, c.OSVNote)
-	} else if len(c.Vulns) > 0 {
-		add(CodeCensusCVE, KindFact, LensSecurity, weightLook,
-			fmt.Sprintf("%d known CVE(s) at this version", len(c.Vulns)), joinVulnIDs(c.Vulns, 5))
+	} else {
+		if mal := malicious(c.Vulns); len(mal) > 0 {
+			add(CodeMalwareAdvisory, KindFact, LensSecurity, weightLook,
+				fmt.Sprintf("%d malware advisory record(s) match this version", len(mal)),
+				joinVulnIDs(mal, 5)+"; no upgrade fixes a malicious publish")
+		}
+		if n := len(vulnsOnly(c.Vulns)); n > 0 {
+			add(CodeCensusCVE, KindFact, LensSecurity, weightLook,
+				fmt.Sprintf("%d known vulnerability(ies) at this version", n), joinVulnIDs(vulnsOnly(c.Vulns), 5))
+		}
 	}
 	if c.hasExec() {
 		add(CodeCensusExec, KindFact, LensSecurity, weightLook,

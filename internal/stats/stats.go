@@ -131,10 +131,16 @@ type MovedRef struct {
 }
 
 type Runnable struct {
-	Lifecycle []manifest.Change `json:"lifecycle"`
-	Bin       []manifest.Change `json:"bin"`
-	GypFrom   bool              `json:"nodeGypFrom"`
-	GypTo     bool              `json:"nodeGypTo"`
+	// Lifecycle is the hooks that run when a consumer installs this from the
+	// registry. LifecycleGitOnly is the rest of the hook set (prepare and its
+	// pre/post, prepack, postpack), which fires only for a git, link or file
+	// dependency: real execution, on a different activation path, and reporting
+	// the two as one would claim a registry bump runs code that it does not.
+	Lifecycle        []manifest.Change `json:"lifecycle"`
+	LifecycleGitOnly []manifest.Change `json:"lifecycleGitOnly,omitempty"`
+	Bin              []manifest.Change `json:"bin"`
+	GypFrom          bool              `json:"nodeGypFrom"`
+	GypTo            bool              `json:"nodeGypTo"`
 	// cgo means C compilation at the consumer's build time (Go only)
 	CgoFrom bool `json:"cgoFrom,omitempty"`
 	CgoTo   bool `json:"cgoTo,omitempty"`
@@ -343,7 +349,7 @@ func Build(in Input) (*Stats, error) {
 		for _, w := range in.NewPkg.Warnings {
 			s.Notes = append(s.Notes, "new package.json: "+w)
 		}
-		s.Runnable.Lifecycle = npmpkg.LifecycleDelta(in.OldPkg, in.NewPkg)
+		s.Runnable.Lifecycle, s.Runnable.LifecycleGitOnly = npmpkg.LifecycleDelta(in.OldPkg, in.NewPkg)
 		s.Runnable.Bin = npmpkg.BinDelta(in.OldPkg, in.NewPkg)
 		s.Runnable.GypFrom = exists(filepath.Join(in.OldTree, "binding.gyp"))
 		s.Runnable.GypTo = exists(filepath.Join(in.NewTree, "binding.gyp"))

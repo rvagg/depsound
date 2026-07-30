@@ -27,12 +27,45 @@ var userAgent = version.UserAgent
 // release), so unlike immutable artifacts it is re-fetched when stale.
 const cacheTTL = 6 * time.Hour
 
+// Kind separates the two record classes OSV serves under one query. They call
+// for opposite responses, so they must never render as one thing: a
+// vulnerability is a flaw in code you may or may not reach, answered by
+// upgrading past it; a malware record says the published package itself was
+// reported malicious, answered by not installing it and rotating whatever it
+// could have reached. There is no "patched version" of malware.
+type Kind string
+
+const (
+	KindVuln    Kind = "vulnerability"
+	KindMalware Kind = "malware"
+)
+
 type Vuln struct {
 	ID       string   `json:"id"`
+	Kind     Kind     `json:"kind,omitempty"`
 	Aliases  []string `json:"aliases,omitempty"`
 	Summary  string   `json:"summary,omitempty"`
 	Severity string   `json:"severity,omitempty"`
 	Fixed    []string `json:"fixed,omitempty"` // versions that fix it, from affected ranges
+}
+
+// Malicious reports whether this is a malicious-package record. OpenSSF's
+// malicious-package feed (which OSV serves, and Dependabot now alerts on)
+// carries the MAL- prefix on the record id or an alias.
+func (v Vuln) Malicious() bool { return v.Kind == KindMalware }
+
+// kindOf classifies a record by its ids. Anything not identifiably malware is
+// treated as a vulnerability: the ordinary case must never be inflated.
+func kindOf(id string, aliases []string) Kind {
+	if strings.HasPrefix(id, "MAL-") {
+		return KindMalware
+	}
+	for _, a := range aliases {
+		if strings.HasPrefix(a, "MAL-") {
+			return KindMalware
+		}
+	}
+	return KindVuln
 }
 
 // Assessment is the upgrade's vulnerability delta. FixedByUpgrade is the
@@ -316,7 +349,7 @@ func parse(raw []byte) []Vuln {
 	}
 	var out []Vuln
 	for _, v := range resp.Vulns {
-		vuln := Vuln{ID: v.ID, Aliases: v.Aliases, Summary: v.Summary}
+		vuln := Vuln{ID: v.ID, Kind: kindOf(v.ID, v.Aliases), Aliases: v.Aliases, Summary: v.Summary}
 		if len(v.Severity) > 0 {
 			vuln.Severity = v.Severity[0].Score
 		}
@@ -363,6 +396,14 @@ func readCache(cacheRoot, osvEco, name, version string) ([]Vuln, time.Time, bool
 	}
 	if time.Since(env.FetchedAt) > cacheTTL {
 		return nil, time.Time{}, false
+	}
+	// an entry written before Kind existed carries none; the ids it stored are
+	// the ground truth, so classify on read rather than let a cache age decide
+	// whether a malware record reads as one
+	for i := range env.Vulns {
+		if env.Vulns[i].Kind == "" {
+			env.Vulns[i].Kind = kindOf(env.Vulns[i].ID, env.Vulns[i].Aliases)
+		}
 	}
 	return env.Vulns, env.FetchedAt, true
 }

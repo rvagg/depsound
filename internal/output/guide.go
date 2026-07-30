@@ -29,13 +29,13 @@ var coverageChecked = []string{
 func osvCoverageLine(eco string, queried bool, note string) (checked bool, line string) {
 	switch {
 	case queried:
-		return true, "known CVEs via OSV (backward-looking)"
+		return true, "reported advisories via OSV (vulnerabilities and malicious packages, backward-looking)"
 	case !osvSupported(eco):
-		return false, "known CVEs via OSV: not applicable (no OSV index for this ecosystem)"
+		return false, "reported advisories via OSV: not applicable (no OSV index for this ecosystem)"
 	case note != "":
-		return false, "known CVEs via OSV: scan did NOT complete (" + note + ")"
+		return false, "reported advisories via OSV: scan did NOT complete (" + note + ")"
 	default:
-		return false, "known CVEs via OSV: scan disabled for this run"
+		return false, "reported advisories via OSV: scan disabled for this run"
 	}
 }
 

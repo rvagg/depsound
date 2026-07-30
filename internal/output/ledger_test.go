@@ -71,7 +71,9 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 		Resolution: &stats.Resolution{ToSpec: "^2.0.0"}}))
 	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}))
-	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
+	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}, {ID: "MAL-1", Kind: osv.KindMalware}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
+	collect(Derive("gitonly", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+		Runnable: stats.Runnable{LifecycleGitOnly: []manifest.Change{{Key: "prepare", Status: "added"}}}}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
 	collect(DeriveFailure("bad", "extraction failed"))
 	collect(DeriveUnavailable("gone", &Unavailable{Kind: "absent", Status: 404, URL: "u"}))
@@ -361,5 +363,44 @@ func TestUnreviewableMassWeighsByConsumption(t *testing.T) {
 		Action: &stats.ActionSection{UsingTo: "node24"}}))
 	if !strings.Contains(action, "runner executes, so it weighs in full") {
 		t.Errorf("action detail = %q", action)
+	}
+}
+
+// A prepare-only delta is not install execution: it fires for a git, link or
+// file dependency. Reporting it as "new execution surface" at look-now weight
+// claimed a registry bump runs code that it does not.
+func TestPrepareIsNotInstallExecution(t *testing.T) {
+	l := Derive("npm:x 1 -> 2", &stats.Stats{
+		Package:  stats.PkgRef{Ecosystem: "npm"},
+		Security: stats.Security{Queried: true},
+		Runnable: stats.Runnable{LifecycleGitOnly: []manifest.Change{{Key: "prepare", Status: "added"}}},
+	})
+	var got Signal
+	for _, s := range l.Signals {
+		switch s.Code {
+		case CodeExecIntroduced, CodeExecPresent:
+			t.Errorf("prepare must not fire %q", s.Code)
+		case CodeExecGitOnly:
+			got = s
+		}
+	}
+	if got.Code == "" {
+		t.Fatalf("prepare must still be reported: %+v", l.Signals)
+	}
+	// calm by weight: the headline belongs to what a registry install runs
+	if got.Weight != weightPositive {
+		t.Errorf("weight = %d, want %d", got.Weight, weightPositive)
+	}
+	if Assess(l).Tier != 0 {
+		t.Errorf("a prepare-only bump must not trip the headline: tier %d", Assess(l).Tier)
+	}
+	// and a real install hook still fires at full weight
+	reg := Derive("npm:y 1 -> 2", &stats.Stats{
+		Package:  stats.PkgRef{Ecosystem: "npm"},
+		Security: stats.Security{Queried: true},
+		Runnable: stats.Runnable{Lifecycle: []manifest.Change{{Key: "postinstall", Status: "added"}}},
+	})
+	if Assess(reg).Tier == 0 {
+		t.Error("an added postinstall must still trip the headline")
 	}
 }
