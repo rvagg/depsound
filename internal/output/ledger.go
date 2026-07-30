@@ -7,6 +7,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -51,46 +52,47 @@ const (
 type Code string
 
 const (
-	CodeOSVIntroduced     Code = "osv.introduced"
-	CodeOSVStill          Code = "osv.still"
-	CodeOSVFixed          Code = "osv.fixed"
-	CodeOSVDisabled       Code = "coverage.osv.disabled"
-	CodeOSVUnsupported    Code = "coverage.osv.unsupported"
-	CodeOSVFailed         Code = "coverage.osv.failed"
-	CodeExecIntroduced    Code = "exec.introduced"
-	CodeExecPresent       Code = "exec.present"
-	CodeCompatChange      Code = "compat.change"
-	CodeGeneratedDelta    Code = "generated.delta"
-	CodeGHACaps           Code = "gha.capsIntroduced"
-	CodeGHAUsing          Code = "gha.using"
-	CodeGHARefMoved       Code = "gha.refMoved"    // mutable ref resolves to a different commit than last fetch
-	CodeGHAPinWeakened    Code = "gha.pinWeakened" // pin grade dropped (sha->tag/branch, tag->branch): the re-point enabling move
-	CodeGHAPinRaised      Code = "gha.pinRaised"   // pin grade rose toward sha
-	CodeGHAPinGrade       Code = "gha.pinGrade"    // the standing grade: same-grade context in a diff, adoption fact in a census
-	CodeBinaryAdded       Code = "binary.added"
-	CodeBinaryChanged     Code = "binary.changed"
-	CodeRedirect          Code = "redirect"
-	CodeCensusNew         Code = "census.new"
-	CodeCensusCVE         Code = "census.cve"
-	CodeCensusExec        Code = "census.exec"
-	CodeCensusBig         Code = "census.bigExcluded"
-	CodeAnalysisFailed    Code = "analysis.failed"
-	CodeArtifactAbsent    Code = "artifact.absent"          // the artifact URL is not retrievable (404/410)
-	CodeArtifactDenied    Code = "artifact.denied"          // access denied (401/403)
-	CodeArtifactFetch     Code = "artifact.fetchFail"       // transient acquisition failure
-	CodeHostileEntry      Code = "artifact.hostile"         // hostile archive member skipped at extraction
-	CodeSkippedLink       Code = "artifact.skippedLink"     // symlink/hardlink not materialized (uninspected)
-	CodeIntegrityWeak     Code = "integrity.tlsOnly"        // TLS-trust-only, no registry integrity/checksum-DB
-	CodeExportsUnresolved Code = "compat.exportsUnresolved" // exports/resolution delta could not be computed
-	CodeBinDelta          Code = "bin.delta"                // installed executable (bin) entries changed
-	CodeProvenanceAnomaly Code = "provenance.anomaly"       // publisher/attestation/repo/yank account-takeover shape
-	CodeProvenanceGap     Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
-	CodeUnreviewable      Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
-	CodeRangeResolved     Code = "resolution.range"         // an endpoint was a range/latest, resolved at review time
-	CodeNoContentChange   Code = "files.none"               // the versions differ but the reviewed content does not
-	CodeMalwareAdvisory   Code = "security.malwareAdvisory" // a malicious-package record matches the reviewed version
-	CodeExecGitOnly       Code = "exec.gitOnly"             // hooks that fire only for a git/link/file dependency
-	CodeNonRegistryDep    Code = "deps.nonRegistry"         // this package pulls a dependency from git/url/filesystem
+	CodeOSVIntroduced      Code = "osv.introduced"
+	CodeOSVStill           Code = "osv.still"
+	CodeOSVFixed           Code = "osv.fixed"
+	CodeOSVDisabled        Code = "coverage.osv.disabled"
+	CodeOSVUnsupported     Code = "coverage.osv.unsupported"
+	CodeOSVFailed          Code = "coverage.osv.failed"
+	CodeExecIntroduced     Code = "exec.introduced"
+	CodeExecPresent        Code = "exec.present"
+	CodeCompatChange       Code = "compat.change"
+	CodeGeneratedDelta     Code = "generated.delta"
+	CodeGHACaps            Code = "gha.capsIntroduced"
+	CodeGHAUsing           Code = "gha.using"
+	CodeGHARefMoved        Code = "gha.refMoved"    // mutable ref resolves to a different commit than last fetch
+	CodeGHAPinWeakened     Code = "gha.pinWeakened" // pin grade dropped (sha->tag/branch, tag->branch): the re-point enabling move
+	CodeGHAPinRaised       Code = "gha.pinRaised"   // pin grade rose toward sha
+	CodeGHAPinGrade        Code = "gha.pinGrade"    // the standing grade: same-grade context in a diff, adoption fact in a census
+	CodeBinaryAdded        Code = "binary.added"
+	CodeBinaryChanged      Code = "binary.changed"
+	CodeRedirect           Code = "redirect"
+	CodeCensusNew          Code = "census.new"
+	CodeCensusCVE          Code = "census.cve"
+	CodeCensusExec         Code = "census.exec"
+	CodeCensusBig          Code = "census.bigExcluded"
+	CodeAnalysisFailed     Code = "analysis.failed"
+	CodeArtifactAbsent     Code = "artifact.absent"          // the artifact URL is not retrievable (404/410)
+	CodeArtifactDenied     Code = "artifact.denied"          // access denied (401/403)
+	CodeArtifactFetch      Code = "artifact.fetchFail"       // transient acquisition failure
+	CodeHostileEntry       Code = "artifact.hostile"         // hostile archive member skipped at extraction
+	CodeSkippedLink        Code = "artifact.skippedLink"     // symlink/hardlink not materialized (uninspected)
+	CodeIntegrityWeak      Code = "integrity.tlsOnly"        // TLS-trust-only, no registry integrity/checksum-DB
+	CodeExportsUnresolved  Code = "compat.exportsUnresolved" // exports/resolution delta could not be computed
+	CodeBinDelta           Code = "bin.delta"                // installed executable (bin) entries changed
+	CodeProvenanceAnomaly  Code = "provenance.anomaly"       // publisher/attestation/repo/yank account-takeover shape
+	CodeProvenanceGap      Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
+	CodeUnreviewable       Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
+	CodeRangeResolved      Code = "resolution.range"         // an endpoint was a range/latest, resolved at review time
+	CodeNoContentChange    Code = "files.none"               // the versions differ but the reviewed content does not
+	CodeMalwareAdvisory    Code = "security.malwareAdvisory" // a malicious-package record matches the reviewed version
+	CodeExecGitOnly        Code = "exec.gitOnly"             // hooks that fire only for a git/link/file dependency
+	CodeNonRegistryDep     Code = "deps.nonRegistry"         // this package pulls a dependency from git/url/filesystem
+	CodeProvenanceHardened Code = "provenance.hardened"      // publishing moved onto a trusted publisher (OIDC)
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -111,7 +113,7 @@ var allCodes = []Code{
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
 	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange, CodeMalwareAdvisory, CodeExecGitOnly,
-	CodeNonRegistryDep,
+	CodeNonRegistryDep, CodeProvenanceHardened,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -342,8 +344,16 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	// bin deltas are excluded here: they already surface as exec + bin.delta.
 	if p := s.Provenance; p != nil && p.Queried {
 		var shapes []string
-		if p.MaintainerChanged {
+		// a publisher change means opposite things by direction: onto a trusted
+		// publisher it retires a long-lived token, off one it is the takeover
+		// tell. Only the second and the ambiguous user-to-user case are shapes.
+		switch p.Shift() {
+		case provenance.ShiftRelaxed:
+			shapes = append(shapes, "publishing moved OFF trusted publishing to a user account")
+		case provenance.ShiftUser:
 			shapes = append(shapes, "publisher changed")
+		case provenance.ShiftRepinned:
+			shapes = append(shapes, "the trusted-publisher configuration changed (a different repository or workflow may now publish)")
 		}
 		if p.AttestationDropped {
 			shapes = append(shapes, "build attestation dropped")
@@ -356,6 +366,14 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		}
 		if p.Yanked {
 			shapes = append(shapes, "version yanked")
+		}
+		if p.Shift() == provenance.ShiftHardened {
+			what := "publishing moved to trusted publishing (" + p.TrustedPublisher + " OIDC), retiring a long-lived token"
+			if p.AttestationAdded {
+				what += "; build attestation now present where the prior version had none"
+			}
+			add(CodeProvenanceHardened, KindFact, LensSecurity, weightPositive,
+				"publishing chain strengthened", what)
 		}
 		if len(shapes) > 0 {
 			add(CodeProvenanceAnomaly, KindFact, LensSecurity, weightLook,

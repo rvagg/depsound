@@ -323,7 +323,16 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 	if len(p.InstallScriptsChanged) > 0 {
 		warn = append(warn, fmt.Sprintf("install script changed since %s: %s (re-read it)", p.PrevVersion, strings.Join(p.InstallScriptsChanged, ", ")))
 	}
-	if p.MaintainerChanged {
+	switch p.Shift() {
+	case provenance.ShiftRelaxed:
+		warn = append(warn, fmt.Sprintf("publishing moved OFF trusted publishing to %s (%s used %s OIDC); the takeover tell", p.Publisher, p.PrevVersion, p.PrevTrustedPublisher))
+	case provenance.ShiftRepinned:
+		what := "the trusted-publisher configuration changed since " + p.PrevVersion + ": a different repository or workflow is now authorised to publish"
+		if p.TrustedPublisher != p.PrevTrustedPublisher {
+			what = fmt.Sprintf("the trusted publisher changed since %s: %s, was %s", p.PrevVersion, p.TrustedPublisher, p.PrevTrustedPublisher)
+		}
+		warn = append(warn, what+"; check the attestation still attests the repo you expect")
+	case provenance.ShiftUser:
 		warn = append(warn, fmt.Sprintf("publisher changed to %s (not %s's); the takeover tell", p.Publisher, p.PrevVersion))
 	}
 	if p.AttestationDropped {
@@ -342,6 +351,16 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 	// weaker/ambiguous signals: a note, not an alarm (size churns, dormancy
 	// and deprecation are usually benign; state the fact, not a verdict)
 	var note []string
+	// a publisher change ONTO a trusted publisher is the hardening the whole
+	// ecosystem is pushing for, so it belongs here rather than among the shapes
+	// a compromise makes
+	if p.Shift() == provenance.ShiftHardened {
+		n := fmt.Sprintf("publishing moved to trusted publishing (%s OIDC) since %s, retiring a long-lived token", p.TrustedPublisher, p.PrevVersion)
+		if p.AttestationAdded {
+			n += "; attestation now present where " + p.PrevVersion + " had none"
+		}
+		note = append(note, n)
+	}
 	switch p.Freshness {
 	case "under-day":
 		note = append(note, "published <24h ago, the hottest window for a malicious republish; prefer --cooldown")
@@ -377,8 +396,8 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 		who := ""
 		if p.Publisher != "" {
 			who = " by " + taint(p.Publisher)
-			if strings.Contains(p.Publisher, "GitHub Actions") {
-				who += " (CI)"
+			if p.TrustedPublisher != "" {
+				who += " (" + taint(p.TrustedPublisher) + " trusted publisher, OIDC)"
 			} else if !p.MaintainerChanged && p.PrevVersion != "" {
 				who += " (same as prior)"
 			}

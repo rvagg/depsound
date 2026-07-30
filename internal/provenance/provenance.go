@@ -43,11 +43,27 @@ type Result struct {
 	GapDays       int    `json:"gapDays,omitempty"`
 	DormancyBreak bool   `json:"dormancyBreak,omitempty"` // released after a long silence
 
-	Publisher         string `json:"publisher,omitempty"`
+	Publisher     string `json:"publisher,omitempty"`
+	PrevPublisher string `json:"prevPublisher,omitempty"`
+	// TrustedPublisher names the OIDC publisher that produced the release
+	// ("github"), empty when a user's own credentials published it. Kept for
+	// both sides, because the DIRECTION of a publisher change is what carries
+	// meaning: moving onto a trusted publisher hardens the chain, moving off it
+	// is the shape worth alarm, and a plain user-to-user change is neither.
+	TrustedPublisher     string `json:"trustedPublisher,omitempty"`
+	PrevTrustedPublisher string `json:"prevTrustedPublisher,omitempty"`
+	// TrustedConfig identifies WHICH configuration is authorised to publish
+	// (for GitHub: org/repo/workflow/environment), stable across releases and
+	// one per package. The provider staying "github" while this changes is a
+	// different repo or workflow gaining publish rights, which no other field
+	// here would show: the publisher name and provider both stay identical.
+	TrustedConfig     string `json:"trustedConfig,omitempty"`
+	PrevTrustedConfig string `json:"prevTrustedConfig,omitempty"`
 	MaintainerChanged bool   `json:"maintainerChanged,omitempty"` // publisher differs from the prior version's
 
 	Attestation        bool `json:"attestation,omitempty"`        // npm provenance present
 	AttestationDropped bool `json:"attestationDropped,omitempty"` // prior version had one, this does not
+	AttestationAdded   bool `json:"attestationAdded,omitempty"`   // this version has one, the prior did not
 	// AttestedSource is the repo the (npm-validated) provenance attestation
 	// says the build ran from; AttestedMismatch flags it differing from the
 	// package's own claimed repository, valid provenance from the wrong repo.
@@ -194,6 +210,14 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 	type npmVer struct {
 		Publisher struct {
 			Name string `json:"name"`
+			// TrustedPublisher is set when the release came from a trusted
+			// publisher (OIDC, e.g. a GitHub Actions workflow) rather than a
+			// user's own token. Its presence is a hardening fact, and its
+			// DISAPPEARANCE is the shape worth alarm.
+			TrustedPublisher struct {
+				ID       string `json:"id"`           // the provider: github | gitlab | circleci
+				ConfigID string `json:"oidcConfigId"` // WHICH config: the repo/workflow authorised to publish
+			} `json:"trustedPublisher"`
 		} `json:"_npmUser"`
 		Deprecated json.RawMessage   `json:"deprecated"`
 		Scripts    map[string]string `json:"scripts"`
@@ -206,6 +230,8 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 	cur := parseNpmVer[npmVer](doc.Versions[ver])
 	if cur != nil {
 		r.Publisher = cur.Publisher.Name
+		r.TrustedPublisher = cur.Publisher.TrustedPublisher.ID
+		r.TrustedConfig = cur.Publisher.TrustedPublisher.ConfigID
 		r.Size = cur.Dist.UnpackedSize
 		r.Attestation = len(cur.Dist.Attestations) > 0
 		r.Deprecated = r.Deprecated || len(cur.Deprecated) > 0
@@ -235,12 +261,20 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 		if pv := parseNpmVer[npmVer](doc.Versions[prev]); pv != nil {
 			r.PrevSize = pv.Dist.UnpackedSize
 			if cur != nil && cur.Publisher.Name != "" && pv.Publisher.Name != "" {
+				r.PrevPublisher = pv.Publisher.Name
 				r.MaintainerChanged = cur.Publisher.Name != pv.Publisher.Name
+			}
+			if cur != nil {
+				r.PrevTrustedPublisher = pv.Publisher.TrustedPublisher.ID
+				r.PrevTrustedConfig = pv.Publisher.TrustedPublisher.ConfigID
 			}
 			// the high-value delta: a version that stopped carrying the
 			// provenance its predecessor had (published off the trusted pipeline)
 			if cur != nil && !r.Attestation && len(pv.Dist.Attestations) > 0 {
 				r.AttestationDropped = true
+			}
+			if cur != nil && r.Attestation && len(pv.Dist.Attestations) == 0 {
+				r.AttestationAdded = true
 			}
 			if cur != nil {
 				r.InstallScriptsAdded, r.InstallScriptsChanged = installScriptDelta(pv.Scripts, cur.Scripts)
@@ -586,4 +620,39 @@ func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 		return fmt.Errorf("GET %s: %s", u, resp.Status)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(v)
+}
+
+// PublisherShift classifies what a publisher change MEANS, because the same
+// "the name differs" fact points in opposite directions. Moving onto a trusted
+// publisher (OIDC) retires a long-lived token and is the hardening the whole
+// ecosystem is pushing for; moving off one, back to a user account, is the
+// takeover tell. A user-to-user change is the ordinary ambiguous case.
+type PublisherShift string
+
+const (
+	ShiftNone     PublisherShift = ""
+	ShiftHardened PublisherShift = "hardened" // user -> trusted publisher
+	ShiftRelaxed  PublisherShift = "relaxed"  // trusted publisher -> user
+	ShiftRepinned PublisherShift = "repinned" // a different repo/workflow (or provider) now publishes
+	ShiftUser     PublisherShift = "user"     // user -> a different user
+)
+
+// Shift reports the direction of this release's publisher change.
+func (r *Result) Shift() PublisherShift {
+	cur, prev := r.TrustedPublisher, r.PrevTrustedPublisher
+	switch {
+	case cur != "" && prev == "":
+		return ShiftHardened
+	case cur == "" && prev != "":
+		return ShiftRelaxed
+	// both trusted: the provider rarely changes, but the CONFIG is the thing
+	// that says which repo and workflow may publish, and only a comparison of
+	// it can see an authorised publisher being swapped
+	case cur != "" && prev != "" &&
+		(cur != prev || (r.TrustedConfig != "" && r.PrevTrustedConfig != "" && r.TrustedConfig != r.PrevTrustedConfig)):
+		return ShiftRepinned
+	case r.MaintainerChanged:
+		return ShiftUser
+	}
+	return ShiftNone
 }

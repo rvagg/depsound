@@ -76,6 +76,9 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 		Dependencies: []manifest.DepChange{{Name: "helper", Status: "added", To: "github:o/r", Flag: "git dependency"}}}))
 	collect(Derive("gitonly", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Runnable: stats.Runnable{LifecycleGitOnly: []manifest.Change{{Key: "prepare", Status: "added"}}}}))
+	collect(Derive("hardened", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, TrustedPublisher: "github", AttestationAdded: true,
+			Sources: map[string]string{"depsdev": "complete", "registry": "complete"}}}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
 	collect(DeriveFailure("bad", "extraction failed"))
 	collect(DeriveUnavailable("gone", &Unavailable{Kind: "absent", Status: 404, URL: "u"}))
