@@ -70,7 +70,8 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 	collect(Derive("range", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Resolution: &stats.Resolution{ToSpec: "^2.0.0"}}))
 	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
-		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}))
+		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, RepoMismatch: true, ClaimedRepo: "github.com/o/r", SourceRepo: "github.com/other/r",
+			Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}))
 	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}, {ID: "MAL-1", Kind: osv.KindMalware}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(Derive("gitdep", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Dependencies: []manifest.DepChange{{Name: "helper", Status: "added", To: "github:o/r", Flag: "git dependency"}}}))

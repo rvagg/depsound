@@ -573,15 +573,39 @@ func repoMismatch(claimed, source string) bool {
 	return trimRepo(claimed) != trimRepo(source)
 }
 
+// trimRepo reduces a repository URL to host/path so two spellings of one repo
+// compare equal. npm's `repository` field and deps.dev's source link disagree
+// freely on scheme (git://, git+https://, git+ssh://git@, scp-style), and a
+// difference in spelling is not a difference in repo: any scheme is stripped
+// rather than a fixed list, because a scheme this misses turns into a false
+// "claimed repo != source repo".
 func trimRepo(u string) string {
-	u = strings.TrimSuffix(u, ".git")
+	u = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(u), ".git"))
 	u = strings.TrimPrefix(u, "git+")
-	u = strings.TrimPrefix(u, "https://")
-	u = strings.TrimPrefix(u, "http://")
-	u = strings.TrimPrefix(u, "ssh://git@")
-	u = strings.TrimPrefix(u, "git@")
-	u = strings.ReplaceAll(u, "github.com:", "github.com/")
-	return strings.TrimSuffix(u, "/")
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	// userinfo (git@host) belongs to the transport, not the identity; only
+	// before the first "/", so a path containing "@" survives
+	host, path, hasPath := strings.Cut(u, "/")
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		host = host[i+1:]
+	}
+	// scp-style "host:owner/repo"
+	if h, rest, ok := strings.Cut(host, ":"); ok {
+		host = h
+		if rest != "" {
+			path = rest + "/" + path
+			hasPath = true
+		}
+	}
+	u = host
+	if hasPath {
+		u += "/" + path
+	}
+	// host and forge paths are case-insensitive in practice; comparing
+	// identity, not fetching
+	return strings.TrimSuffix(strings.ToLower(u), "/")
 }
 
 // repoURL extracts the url from an npm repository field, which is either a

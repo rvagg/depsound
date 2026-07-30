@@ -72,6 +72,7 @@ func markdownMarkers() map[Code]string {
 		CodeExecGitOnly:        "git/link/file dependency",
 		CodeNonRegistryDep:     "outside the registry",
 		CodeProvenanceHardened: "publishing chain strengthened",
+		CodeRepoMismatch:       "claimed repo differs",
 	}
 }
 
@@ -118,6 +119,7 @@ func bulkMarkers() map[Code]string {
 		CodeExecGitOnly:        "only for a git/link/file dependency",
 		CodeNonRegistryDep:     "outside the registry",
 		CodeProvenanceHardened: "publishing chain strengthened",
+		CodeRepoMismatch:       "claimed repo differs",
 	}
 }
 
@@ -171,7 +173,7 @@ func parityFixture() []BulkResult {
 		{Ref: "npm:hardened 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 			Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, TrustedPublisher: "github", AttestationAdded: true,
 				Sources: map[string]string{"depsdev": "complete", "registry": "complete"}}}}, // onto OIDC: hardening, not a shape
-		{Ref: "npm:takeover 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, AttestationDropped: true,
+		{Ref: "npm:takeover 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, AttestationDropped: true, RepoMismatch: true, ClaimedRepo: "github.com/o/r", SourceRepo: "github.com/other/r",
 			Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}},
 		{Ref: "npm:new 1.0.0", Census: &Census{Files: 12, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}, {ID: "MAL-2022-4", Kind: osv.KindMalware}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin",
 			HostileEntries: []string{"../evil"}, SkippedLinks: []string{"link -> /etc/passwd"}}}, // extraction evidence must survive the census path too

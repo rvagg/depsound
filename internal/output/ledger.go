@@ -84,7 +84,7 @@ const (
 	CodeIntegrityWeak      Code = "integrity.tlsOnly"        // TLS-trust-only, no registry integrity/checksum-DB
 	CodeExportsUnresolved  Code = "compat.exportsUnresolved" // exports/resolution delta could not be computed
 	CodeBinDelta           Code = "bin.delta"                // installed executable (bin) entries changed
-	CodeProvenanceAnomaly  Code = "provenance.anomaly"       // publisher/attestation/repo/yank account-takeover shape
+	CodeProvenanceAnomaly  Code = "provenance.anomaly"       // publisher shift / attestation / yank: the account-takeover shape
 	CodeProvenanceGap      Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
 	CodeUnreviewable       Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
 	CodeRangeResolved      Code = "resolution.range"         // an endpoint was a range/latest, resolved at review time
@@ -93,6 +93,7 @@ const (
 	CodeExecGitOnly        Code = "exec.gitOnly"             // hooks that fire only for a git/link/file dependency
 	CodeNonRegistryDep     Code = "deps.nonRegistry"         // this package pulls a dependency from git/url/filesystem
 	CodeProvenanceHardened Code = "provenance.hardened"      // publishing moved onto a trusted publisher (OIDC)
+	CodeRepoMismatch       Code = "provenance.repoMismatch"  // claimed repo != the registry's source repo
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -113,7 +114,7 @@ var allCodes = []Code{
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
 	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange, CodeMalwareAdvisory, CodeExecGitOnly,
-	CodeNonRegistryDep, CodeProvenanceHardened,
+	CodeNonRegistryDep, CodeProvenanceHardened, CodeRepoMismatch,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -361,11 +362,19 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		if p.AttestedMismatch {
 			shapes = append(shapes, "attested from a different repo")
 		}
-		if p.RepoMismatch {
-			shapes = append(shapes, "claimed repo != source repo")
-		}
+
 		if p.Yanked {
 			shapes = append(shapes, "version yanked")
+		}
+		// a claimed-vs-source repo difference on its own says nothing about
+		// publisher identity, and has ordinary causes (a rename, a redirect, a
+		// monorepo path). It gets its own bucket rather than the takeover
+		// heading; the attested-source mismatch above is the sharp one, because
+		// there a VALID attestation names a repo the package does not claim.
+		if p.RepoMismatch {
+			add(CodeRepoMismatch, KindFact, LensSecurity, weightWeigh,
+				"the package's claimed repo differs from its registry source repo",
+				p.ClaimedRepo+" vs "+p.SourceRepo+"; often a rename or redirect, so confirm which is current rather than assuming compromise")
 		}
 		if p.Shift() == provenance.ShiftHardened {
 			what := "publishing moved to trusted publishing (" + p.TrustedPublisher + " OIDC), retiring a long-lived token"
