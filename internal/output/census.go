@@ -423,7 +423,7 @@ func writeSubtreeOSV(w func(string, ...any), c *Census) {
 	w("")
 	if len(affected) == 0 {
 		w("OSV across the subtree (backward-looking): 0 of %d deps affected", len(c.Subtree))
-		w("  (known CVEs only; says nothing about novel/injected code)")
+		w("  (reported records only; says nothing about novel or unreported code)")
 		return
 	}
 	w("OSV subtree scan: %d of %d deps carry known advisories:", len(affected), len(c.Subtree))
@@ -544,6 +544,9 @@ func CensusText(c *Census) string {
 		w("execution surface (runs code on install/build):")
 		for _, l := range c.Lifecycle {
 			w("  lifecycle %s: %s", taint(l.Key), taint(l.To))
+		}
+		if n := npmInstallPolicyNote(c.Ecosystem, c.Lifecycle, c.Gyp); n != "" {
+			w("  %s", n)
 		}
 		writeGitOnlyHooks(w, c.LifecycleGitOnly)
 		if c.Gyp {

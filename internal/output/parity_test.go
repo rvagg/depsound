@@ -36,7 +36,7 @@ func markdownMarkers() map[Code]string {
 		CodeOSVFixed:          "fixes",
 		CodeOSVDisabled:       "scan not run",
 		CodeOSVFailed:         "scan failed",
-		CodeOSVUnsupported:    "No known-CVE scan for",
+		CodeOSVUnsupported:    "No advisory scan for",
 		CodeExecIntroduced:    "new execution surface",
 		CodeExecPresent:       "execution surface present",
 		CodeCompatChange:      "module format changed",
@@ -70,6 +70,7 @@ func markdownMarkers() map[Code]string {
 		CodeNoContentChange:   "no content change",
 		CodeMalwareAdvisory:   "malware advisory record",
 		CodeExecGitOnly:       "git/link/file dependency",
+		CodeNonRegistryDep:    "outside the registry",
 	}
 }
 
@@ -114,6 +115,7 @@ func bulkMarkers() map[Code]string {
 		CodeNoContentChange:   "no content change",
 		CodeMalwareAdvisory:   "malicious-package advisory",
 		CodeExecGitOnly:       "only for a git/link/file dependency",
+		CodeNonRegistryDep:    "outside the registry",
 	}
 }
 
@@ -158,6 +160,8 @@ func parityFixture() []BulkResult {
 			},
 			Compat: stats.Compat{ExportsError: "malformed exports map"},
 		}},
+		{Ref: "npm:gitdep 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+			Dependencies: []manifest.DepChange{{Section: "optionalDependencies", Name: "helper", Status: "added", To: "github:o/r", Flag: "git dependency"}}}},
 		{Ref: "npm:husky-ish 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 			Runnable: stats.Runnable{LifecycleGitOnly: []manifest.Change{{Key: "prepare", Status: "added"}}}}},
 		{Ref: "npm:malware 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"},

@@ -98,6 +98,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
 	{[]Code{CodeExecPresent}, "build/install execution surface present, its build code may have changed"},
+	{[]Code{CodeNonRegistryDep}, "declares dependencies served from outside the registry (a trusted name pulling code from elsewhere)"},
 	{[]Code{CodeExecGitOnly}, "hooks that run only for a git/link/file dependency (a registry install does not run them)"},
 	{[]Code{CodeBinaryAdded}, "binary/opaque file(s) added (zero line delta, an ideal payload channel; ranked by bytes)"},
 	{[]Code{CodeBinaryChanged}, "binary/opaque file(s) changed (zero line delta; ranked by byte delta)"},

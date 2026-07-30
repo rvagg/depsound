@@ -72,6 +72,8 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}))
 	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}, {ID: "MAL-1", Kind: osv.KindMalware}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
+	collect(Derive("gitdep", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+		Dependencies: []manifest.DepChange{{Name: "helper", Status: "added", To: "github:o/r", Flag: "git dependency"}}}))
 	collect(Derive("gitonly", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Runnable: stats.Runnable{LifecycleGitOnly: []manifest.Change{{Key: "prepare", Status: "added"}}}}))
 	collect(DeriveRedirect("red", "github.com/fork/x@v1.0.0"))
@@ -402,5 +404,56 @@ func TestPrepareIsNotInstallExecution(t *testing.T) {
 	})
 	if Assess(reg).Tier == 0 {
 		t.Error("an added postinstall must still trip the headline")
+	}
+}
+
+// A dependency served from outside the registry is both a trust story and, from
+// npm v12, an install that stops without an explicit flag. Adding one is the
+// event; carrying one is standing context.
+func TestNonRegistryDepSignal(t *testing.T) {
+	sig := func(deps []manifest.DepChange) Signal {
+		l := Derive("npm:x 1 -> 2", &stats.Stats{
+			Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
+			Dependencies: deps,
+		})
+		for _, s := range l.Signals {
+			if s.Code == CodeNonRegistryDep {
+				return s
+			}
+		}
+		return Signal{}
+	}
+	added := sig([]manifest.DepChange{{Name: "helper", Status: "added", To: "github:o/r", Flag: "git dependency"}})
+	if added.Weight != weightLook || !strings.Contains(added.Detail, "--allow-git") {
+		t.Errorf("added = %+v", added)
+	}
+	present := sig([]manifest.DepChange{{Name: "helper", Status: "present", To: "file:../x", Flag: "filesystem dependency"}})
+	if present.Weight != weightWeigh || !strings.Contains(present.Detail, "--allow-file") {
+		t.Errorf("present = %+v", present)
+	}
+	// a removed spec pulls nothing, so it is not a finding
+	if got := sig([]manifest.DepChange{{Name: "helper", Status: "removed", From: "github:o/r", Flag: "git dependency"}}); got.Code != "" {
+		t.Errorf("removed must not fire: %+v", got)
+	}
+	// registry specs carry no flag and say nothing
+	if got := sig([]manifest.DepChange{{Name: "ok", Status: "added", To: "^1.0.0"}}); got.Code != "" {
+		t.Errorf("registry spec must not fire: %+v", got)
+	}
+}
+
+// The v12 install-policy note is npm-only and states the resolver default, so
+// it must never appear for another ecosystem.
+func TestInstallPolicyNoteIsNpmOnly(t *testing.T) {
+	hooks := []manifest.Change{{Key: "postinstall", Status: "added"}}
+	if n := npmInstallPolicyNote("npm", hooks, false); !strings.Contains(n, "npm v12 does not run install scripts") {
+		t.Errorf("npm note = %q", n)
+	}
+	if n := npmInstallPolicyNote("npm", nil, true); !strings.Contains(n, "node-gyp") {
+		t.Errorf("gyp note = %q", n)
+	}
+	for _, eco := range []string{"go", "crates", "gha"} {
+		if n := npmInstallPolicyNote(eco, hooks, true); n != "" {
+			t.Errorf("%s note = %q, want none", eco, n)
+		}
 	}
 }

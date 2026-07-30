@@ -290,7 +290,7 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 	}
 	for _, code := range order {
 		if code == CodeOSVUnsupported {
-			fmt.Fprintf(&out, " No known-CVE scan for %d of these: OSV indexes no advisories for that ecosystem.", byCode[code])
+			fmt.Fprintf(&out, " No advisory scan for %d of these: OSV indexes none for that ecosystem.", byCode[code])
 		}
 	}
 	return out.String()
@@ -327,11 +327,11 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 	case CodeOSVFixed:
 		return fmt.Sprintf("fixes %d advisory(ies)", len(s.Security.FixedByUpgrade))
 	case CodeOSVDisabled:
-		return "known-CVE scan not run (coverage gap, not a clean result)"
+		return "known-advisory scan not run (coverage gap, not a clean result)"
 	case CodeOSVFailed:
-		return "known-CVE scan failed (coverage gap, not a clean result): " + mdTaint(sig.Detail)
+		return "known-advisory scan failed (coverage gap, not a clean result): " + mdTaint(sig.Detail)
 	case CodeOSVUnsupported:
-		return "known-CVE scan not applicable (this ecosystem has no OSV index)"
+		return "known-advisory scan not applicable (this ecosystem has no OSV index)"
 	case CodeExecIntroduced:
 		return "new execution surface: " + mdTaint(sig.Detail)
 	case CodeExecPresent:
@@ -351,7 +351,8 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 	case CodeCensusNew:
 		return fmt.Sprintf("adopting %s file%s, whole footprint unreviewed", commas(c.Files), plural(c.Files))
 	case CodeCensusCVE:
-		return fmt.Sprintf("%d known CVE(s) at this version: %s", len(c.Vulns), linkedVulnIDs(c.Vulns, 5))
+		v := vulnsOnly(c.Vulns)
+		return fmt.Sprintf("%d known vulnerability(ies) at this version: %s", len(v), linkedVulnIDs(v, 5))
 	case CodeCensusExec:
 		return "runs code on install/build: " + mdTaint(sig.Detail)
 	case CodeCensusBig:

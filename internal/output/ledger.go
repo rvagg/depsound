@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -89,6 +90,7 @@ const (
 	CodeNoContentChange   Code = "files.none"               // the versions differ but the reviewed content does not
 	CodeMalwareAdvisory   Code = "security.malwareAdvisory" // a malicious-package record matches the reviewed version
 	CodeExecGitOnly       Code = "exec.gitOnly"             // hooks that fire only for a git/link/file dependency
+	CodeNonRegistryDep    Code = "deps.nonRegistry"         // this package pulls a dependency from git/url/filesystem
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -109,6 +111,7 @@ var allCodes = []Code{
 	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
 	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange, CodeMalwareAdvisory, CodeExecGitOnly,
+	CodeNonRegistryDep,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -198,7 +201,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	d := digestOf(s)
 	switch {
 	case d.registryExec:
-		what := strings.Join(humanExec(d.execWhat), ", ")
+		what := execNote(s.Package.Ecosystem, s.Runnable.Lifecycle, s.Runnable.GypTo, strings.Join(humanExec(d.execWhat), ", "))
 		if execIntroduced(d.execWhat) {
 			add(CodeExecIntroduced, KindFact, LensSecurity, weightLook, "new execution surface", what)
 		} else {
@@ -219,6 +222,19 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	if d.compat {
 		add(CodeCompatChange, KindFact, LensCompat, weightWeigh, "compatibility changed", rawCompat(s))
 	}
+	// a dependency this package pulls from outside the registry: the
+	// trust-laundering shape (a registry name serving code from elsewhere), and
+	// from npm v12 an install that stops without an explicit flag. Introducing
+	// one is the event; carrying one is standing context.
+	if flagged := nonRegistryDeps(s.Dependencies); len(flagged) > 0 {
+		w, title := weightWeigh, "declares dependencies from outside the registry"
+		if introducedNonRegistry(s.Dependencies) {
+			w, title = weightLook, "adds a dependency from outside the registry"
+		}
+		add(CodeNonRegistryDep, KindFact, LensSecurity, w, title,
+			strings.Join(flagged, "; ")+"; "+npmV12SpecNote(s.Dependencies))
+	}
+
 	// a bin delta changes what a command on PATH (npx/the .bin shim) runs: a
 	// FACT worth weighing, so a bump that only re-points an executable is not
 	// invisible.
@@ -548,7 +564,12 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	}
 	if c.hasExec() {
 		add(CodeCensusExec, KindFact, LensSecurity, weightLook,
-			"runs code on install/build", strings.Join(censusExecWhat(c), ", "))
+			"runs code on install/build", execNote(c.Ecosystem, c.Lifecycle, c.Gyp, strings.Join(censusExecWhat(c), ", ")))
+	}
+	if flagged := nonRegistryDeps(c.Deps); len(flagged) > 0 {
+		add(CodeNonRegistryDep, KindFact, LensSecurity, weightWeigh,
+			"declares dependencies from outside the registry",
+			strings.Join(flagged, "; ")+"; "+npmV12SpecNote(c.Deps))
 	}
 	// adoption is the moment the pin is chosen, so the grade weighs here even
 	// though the same grade is quiet context in a diff (delta doctrine): the
@@ -770,4 +791,90 @@ func sortSignals(ss []Signal) {
 		}
 		return ss[i].Code < ss[j].Code
 	})
+}
+
+// nonRegistryDeps lists the package's own dependencies served from outside the
+// registry, as "name (class)" for display. Removals are excluded: a spec that
+// is gone pulls nothing.
+func nonRegistryDeps(deps []manifest.DepChange) []string {
+	var out []string
+	for _, d := range deps {
+		if d.Flag != "" && d.Status != "removed" {
+			out = append(out, d.Name+" ("+d.Flag+")")
+		}
+	}
+	return out
+}
+
+func introducedNonRegistry(deps []manifest.DepChange) bool {
+	for _, d := range deps {
+		if d.Flag != "" && d.Status == "added" {
+			return true
+		}
+	}
+	return false
+}
+
+// npmV12SpecNote names the flag npm v12 requires for the classes present. It
+// states what the resolver does by default, never what a particular consumer's
+// install will do: their npm version and config are not ours to see.
+func npmV12SpecNote(deps []manifest.DepChange) string {
+	flags := map[string]string{
+		"git dependency":        "--allow-git",
+		"remote tarball":        "--allow-remote",
+		"filesystem dependency": "--allow-file / --allow-directory",
+	}
+	var need []string
+	seen := map[string]bool{}
+	for _, d := range deps {
+		if d.Status == "removed" {
+			continue
+		}
+		if f := flags[d.Flag]; f != "" && !seen[f] {
+			seen[f] = true
+			need = append(need, f)
+		}
+	}
+	if len(need) == 0 {
+		return ""
+	}
+	sort.Strings(need)
+	return "npm v12 declines these by default, needing " + strings.Join(need, " and ")
+}
+
+// execNote appends npm's install-policy context to an execution surface. npm
+// v12 stopped running dependency install scripts and the implicit node-gyp
+// rebuild by default, which changes what this surface costs a consumer, so the
+// fact is worth carrying beside it. It states the resolver default only: which
+// npm a consumer runs, and what their allowScripts/.npmrc say, is not visible
+// from an artifact, so this never claims a particular install is safe.
+func execNote(eco string, hooks []manifest.Change, gyp bool, what string) string {
+	note := npmInstallPolicyNote(eco, hooks, gyp)
+	if note == "" {
+		return what
+	}
+	if what == "" {
+		return note
+	}
+	return what + "; " + note
+}
+
+// npmInstallPolicyNote is the note alone, for renderers that place it on their
+// own line rather than appending to a phrase.
+func npmInstallPolicyNote(eco string, hooks []manifest.Change, gyp bool) string {
+	if eco != "npm" {
+		return ""
+	}
+	var v12 []string
+	if len(hooks) > 0 {
+		v12 = append(v12, "install scripts")
+	}
+	if gyp {
+		v12 = append(v12, "the implicit node-gyp rebuild")
+	}
+	if len(v12) == 0 {
+		return ""
+	}
+	return "npm v12 does not run " + strings.Join(v12, " or ") +
+		" for a dependency by default (npm 11 and earlier do, and an approval or dangerously-allow-all-scripts re-enables it)"
 }

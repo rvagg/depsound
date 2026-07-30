@@ -231,3 +231,30 @@ func TestLifecycleSplitByActivationPath(t *testing.T) {
 		t.Error("InstallActive must cover the registry hooks only")
 	}
 }
+
+// A non-registry spec is a trust story and, from npm v12, an install that needs
+// an explicit flag. The three classes are distinguished because npm treats them
+// differently, and the bare owner/repo form announces nothing at all.
+func TestSpecFlagClasses(t *testing.T) {
+	for spec, want := range map[string]string{
+		"^1.2.3":                            "",
+		"~0.1.0":                            "",
+		"1.x":                               "",
+		"latest":                            "",
+		"git+https://github.com/o/r.git":    "git dependency",
+		"git://github.com/o/r":              "git dependency",
+		"github:o/r":                        "git dependency",
+		"https://example.com/pkg.git":       "git dependency",
+		"expressjs/express":                 "git dependency",
+		"o/r#a1b2c3d":                       "git dependency",
+		"https://example.com/pkg-1.0.0.tgz": "remote tarball",
+		"file:../local":                     "filesystem dependency",
+		"link:../sibling":                   "filesystem dependency",
+		"npm:@scope/other@^1.0.0":           "",
+		"workspace:*":                       "",
+	} {
+		if got := specFlag(spec); got != want {
+			t.Errorf("specFlag(%q) = %q, want %q", spec, got, want)
+		}
+	}
+}

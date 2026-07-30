@@ -251,20 +251,52 @@ func DepsDelta(a, b *Package) []DepChange {
 	return out
 }
 
-// specFlag identifies dependency specs that bypass the registry.
+// specFlag identifies dependency specs that bypass the registry, separated by
+// the three classes npm treats differently: a git source (fetched and built,
+// so its prepare hook runs), a remote tarball, and a filesystem path. Each is
+// a distinct trust story and, from npm v12, needs its own explicit --allow-*
+// flag to install at all.
 func specFlag(spec string) string {
 	switch {
 	case spec == "":
 		return ""
-	case strings.Contains(spec, "://"),
-		strings.HasPrefix(spec, "git+"),
-		strings.HasPrefix(spec, "git:"),
-		strings.HasPrefix(spec, "github:"):
-		return "git/url dependency"
+	case strings.HasPrefix(spec, "git+"), strings.HasPrefix(spec, "git:"),
+		strings.HasPrefix(spec, "github:"), strings.HasSuffix(spec, ".git"),
+		githubShorthand(spec):
+		return "git dependency"
+	case strings.Contains(spec, "://"):
+		return "remote tarball"
 	case strings.HasPrefix(spec, "file:"), strings.HasPrefix(spec, "link:"):
 		return "filesystem dependency"
 	}
 	return ""
+}
+
+// githubShorthand matches npm's bare owner/repo[#committish] form, which is a
+// git dependency with nothing in the string to announce it. Deliberately
+// strict: a semver range carries no slash, so the shape alone is the evidence.
+func githubShorthand(spec string) bool {
+	owner, rest, ok := strings.Cut(spec, "/")
+	if !ok || owner == "" || rest == "" {
+		return false
+	}
+	repo, _, _ := strings.Cut(rest, "#") // drop the committish
+	return plainSegment(owner) && plainSegment(repo)
+}
+
+func plainSegment(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func appendDelta(out []Change, key, from, to string) []Change {
