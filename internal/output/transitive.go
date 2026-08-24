@@ -17,6 +17,9 @@ type ModuleRef struct {
 	// so churn reads causally even where the tree is suppressed. Set only
 	// where the source carries edges; empty is "not known", never "no parent".
 	Via string `json:"via,omitempty"`
+	// Analysis is the full census of an added node. Removed nodes have no
+	// artifact left in the new graph and therefore no analysis.
+	Analysis *BulkResult `json:"analysis,omitempty"`
 }
 
 // TransitiveResult is the whole change set a bump drags in: the analysed
@@ -99,9 +102,11 @@ func Transitive(t TransitiveResult) string {
 			where = "added under " + taint(t.Projected)
 		}
 		w("")
-		w("%s (%d), new code, not a diff; census any you rely on -> depsound %s:<name> <version>:",
-			where, len(t.Added), t.Ecosystem)
-		t.writeGrouped(w, t.Added, func(m ModuleRef) string { return m.To })
+		w("%s (%d), new code; each node was censused at its resolved version:",
+			where, len(t.Added))
+		t.writeGrouped(w, t.Added, func(m ModuleRef) string {
+			return m.To + "; " + moduleAnalysis(m)
+		})
 	}
 	if len(t.Removed) > 0 {
 		where := "removed from your tree"
@@ -177,6 +182,22 @@ func (t TransitiveResult) writeGrouped(w func(string, ...any), refs []ModuleRef,
 		for _, line := range wrapJoin(labels, 72) {
 			w("%s%s", indent, line)
 		}
+	}
+}
+
+func moduleAnalysis(m ModuleRef) string {
+	switch {
+	case m.Analysis == nil:
+		return "census not available"
+	case m.Analysis.Census != nil:
+		return censusFootprint(m.Analysis.Census)
+	case m.Analysis.Unavailable != nil:
+		u := m.Analysis.Unavailable
+		return fmt.Sprintf("census unavailable (%s, HTTP %d; %s)", taint(u.Kind), u.Status, taint(u.URL))
+	case m.Analysis.Err != "":
+		return "census failed: " + taint(m.Analysis.Err)
+	default:
+		return "census produced no artifact facts"
 	}
 }
 

@@ -46,10 +46,12 @@ func System(eco string) (system string, ok bool) {
 // ecosystem deprecated it, its licenses, and deps.dev's view of the source
 // repo (the "actual repo", to cross-check against the package's claim).
 type VersionInfo struct {
-	PublishedAt time.Time
-	Deprecated  bool
-	Licenses    []string
-	SourceRepo  string // github.com/owner/repo, from the SOURCE_REPO link
+	PublishedAt      time.Time
+	Deprecated       bool
+	DeprecatedReason string
+	Licenses         []string
+	SourceRepo       string // github.com/owner/repo, from the SOURCE_REPO link
+	SourceURL        string // exact GetVersion endpoint observed
 }
 
 // Version fetches GetVersion for system/name@ver. Returns nil,nil when
@@ -57,10 +59,11 @@ type VersionInfo struct {
 func Version(ctx context.Context, client *http.Client, system, name, ver string) (*VersionInfo, error) {
 	u := fmt.Sprintf("%s/systems/%s/packages/%s/versions/%s", base, system, url.PathEscape(name), url.PathEscape(ver))
 	var out struct {
-		PublishedAt  string   `json:"publishedAt"`
-		IsDeprecated bool     `json:"isDeprecated"`
-		Licenses     []string `json:"licenses"`
-		Links        []struct {
+		PublishedAt      string   `json:"publishedAt"`
+		IsDeprecated     bool     `json:"isDeprecated"`
+		DeprecatedReason string   `json:"deprecatedReason"`
+		Licenses         []string `json:"licenses"`
+		Links            []struct {
 			Label string `json:"label"`
 			URL   string `json:"url"`
 		} `json:"links"`
@@ -68,7 +71,7 @@ func Version(ctx context.Context, client *http.Client, system, name, ver string)
 	if err := getJSON(ctx, client, u, &out); err != nil {
 		return nil, err
 	}
-	vi := &VersionInfo{Deprecated: out.IsDeprecated, Licenses: out.Licenses}
+	vi := &VersionInfo{Deprecated: out.IsDeprecated, DeprecatedReason: out.DeprecatedReason, Licenses: out.Licenses, SourceURL: u}
 	vi.PublishedAt, _ = time.Parse(time.RFC3339, out.PublishedAt)
 	for _, l := range out.Links {
 		if l.Label == "SOURCE_REPO" {

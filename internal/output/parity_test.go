@@ -60,7 +60,7 @@ func markdownMarkers() map[Code]string {
 		CodeExportsUnresolved:  "could not be computed",
 		CodeBinDelta:           "installed executable",
 		CodeProvenanceAnomaly:  "provenance anomaly",
-		CodeProvenanceGap:      "provenance incomplete",
+		CodeProvenanceGap:      "metadata incomplete",
 		CodeUnreviewable:       "unreviewable",
 		CodeRangeResolved:      "resolved from a range",
 		CodeGHARefMoved:        "since last fetch",
@@ -73,6 +73,8 @@ func markdownMarkers() map[Code]string {
 		CodeNonRegistryDep:     "outside the registry",
 		CodeProvenanceHardened: "publishing chain strengthened",
 		CodeRepoMismatch:       "claimed repo differs",
+		CodeDeprecated:         "Go module is deprecated",
+		CodeRetracted:          "reviewed Go module version is retracted",
 	}
 }
 
@@ -107,7 +109,7 @@ func bulkMarkers() map[Code]string {
 		CodeExportsUnresolved:  "could not be computed",
 		CodeBinDelta:           "installed executable",
 		CodeProvenanceAnomaly:  "provenance anomaly",
-		CodeProvenanceGap:      "provenance incomplete",
+		CodeProvenanceGap:      "metadata incomplete",
 		CodeUnreviewable:       "unreviewable",
 		CodeRangeResolved:      "resolved from a range",
 		CodeGHARefMoved:        "since last fetch",
@@ -120,6 +122,8 @@ func bulkMarkers() map[Code]string {
 		CodeNonRegistryDep:     "outside the registry",
 		CodeProvenanceHardened: "publishing chain strengthened",
 		CodeRepoMismatch:       "claimed repo differs",
+		CodeDeprecated:         "dependency deprecated",
+		CodeRetracted:          "reviewed Go module version is retracted",
 	}
 }
 
@@ -145,7 +149,11 @@ func parityFixture() []BulkResult {
 		}},
 		{Ref: "gha:up v1 -> sha", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
 			Action: &stats.ActionSection{Pins: []stats.ActionPin{{Side: "from", Kind: "tag", Ref: "v1"}, {Side: "to", Kind: "sha", Ref: "bbbb"}}}}}, // pin strengthened
-		{Ref: "go:b v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true}}},
+		{Ref: "go:b v1 -> v2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true}, Runnable: stats.Runnable{CgoFrom: true, CgoTo: true},
+			Provenance: &provenance.Result{Queried: true, Deprecated: true, DeprecationScope: "go-module", DeprecationReason: "use go:b/v2", DeprecationSource: "https://proxy.example/go:b/@v/v2.mod",
+				RetractionsObservedAt: "2026-08-21T00:00:00Z", RetractionsSource: "https://proxy.example/go:b/@v/v2.mod",
+				Retractions: []provenance.Retraction{{Low: "v2.0.0", Rationale: "bad release", MatchesReviewed: true}},
+				Sources:     map[string]string{"depsdev": "complete", "registry": "unsupported", "gomod": "complete"}}}},
 		{Ref: "npm:c 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false}}}, // disabled
 		{Ref: "npm:f 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: false, Note: "OSV lookup failed"},
 			Resolution: &stats.Resolution{FromSpec: "^1.0.0", ToSpec: "^2.0.0"}}}, // failed + range-resolved endpoints

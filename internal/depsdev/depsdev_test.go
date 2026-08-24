@@ -19,6 +19,28 @@ func TestSystem(t *testing.T) {
 	}
 }
 
+func TestVersionPreservesDeprecationReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"publishedAt":"2024-03-06T06:45:40Z",
+			"isDeprecated":true,
+			"deprecatedReason":"Use google.golang.org/protobuf instead."
+		}`))
+	}))
+	defer srv.Close()
+	old := base
+	base = srv.URL
+	defer func() { base = old }()
+
+	got, err := Version(t.Context(), srv.Client(), "go", "github.com/golang/protobuf", "v1.5.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Deprecated || got.DeprecatedReason != "Use google.golang.org/protobuf instead." || got.SourceURL == "" {
+		t.Fatalf("version metadata = %+v", got)
+	}
+}
+
 func TestDependencies(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"nodes":[

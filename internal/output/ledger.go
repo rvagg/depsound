@@ -94,6 +94,8 @@ const (
 	CodeNonRegistryDep     Code = "deps.nonRegistry"         // this package pulls a dependency from git/url/filesystem
 	CodeProvenanceHardened Code = "provenance.hardened"      // publishing moved onto a trusted publisher (OIDC)
 	CodeRepoMismatch       Code = "provenance.repoMismatch"  // claimed repo != the registry's source repo
+	CodeDeprecated         Code = "maintenance.deprecated"   // current ecosystem metadata marks the version/module deprecated
+	CodeRetracted          Code = "maintenance.retracted"    // current latest go.mod retracts the reviewed version
 )
 
 // allCodes is the single source of the code set. AllSignalCodes returns it, and
@@ -115,6 +117,7 @@ var allCodes = []Code{
 	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
 	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange, CodeMalwareAdvisory, CodeExecGitOnly,
 	CodeNonRegistryDep, CodeProvenanceHardened, CodeRepoMismatch,
+	CodeDeprecated, CodeRetracted,
 }
 
 func AllSignalCodes() []Code { return allCodes }
@@ -388,7 +391,9 @@ func Derive(ref string, s *stats.Stats) Ledger {
 			add(CodeProvenanceAnomaly, KindFact, LensSecurity, weightLook,
 				"provenance anomaly (account-takeover shape)", strings.Join(shapes, ", "))
 		}
+		addMaintenance(add, p)
 	}
+
 	// structural reviewability: a tree dominated by unreviewable bytes is a
 	// property of the package's publishing practice, not of this bump. Delta
 	// doctrine: present in both versions is one calm context line (never a
@@ -444,12 +449,51 @@ func Derive(ref string, s *stats.Stats) Ledger {
 	if p := s.Provenance; p != nil {
 		if failed := p.FailedSources(); len(failed) > 0 {
 			add(CodeProvenanceGap, KindDegradation, LensCoverage, weightWeigh,
-				"publish provenance incomplete", "lookup failed: "+strings.Join(failed, "; "))
+				"provenance or maintenance metadata incomplete", "lookup failed: "+strings.Join(failed, "; "))
 		}
 	}
 
 	sortSignals(l.Signals)
 	return l
+}
+func addMaintenance(add func(Code, SignalKind, Lens, int, string, string), p *provenance.Result) {
+	if p.Deprecated {
+		title := "dependency is deprecated"
+		switch p.DeprecationScope {
+		case "npm-version":
+			title = "npm version is deprecated"
+		case "go-module":
+			title = "Go module is deprecated"
+		}
+		add(CodeDeprecated, KindFact, LensCompat, weightWeigh, title,
+			deprecationText(p)+"; source: "+p.DeprecationSource)
+	}
+
+	var matched []string
+	for _, retraction := range p.Retractions {
+		if !retraction.MatchesReviewed {
+			continue
+		}
+		versions := retraction.Low
+		if retraction.High != "" {
+			versions = "[" + retraction.Low + ", " + retraction.High + "]"
+		}
+		if retraction.Rationale != "" {
+			versions += ": " + retraction.Rationale
+		}
+		matched = append(matched, versions)
+	}
+	if len(matched) > 0 {
+		detail := strings.Join(matched, "; ")
+		if p.RetractionsObservedAt != "" {
+			detail += "; observed " + p.RetractionsObservedAt + " (observation time, not action time)"
+		}
+		if p.RetractionsSource != "" {
+			detail += "; source: " + p.RetractionsSource
+		}
+		add(CodeRetracted, KindFact, LensCompat, weightLook,
+			"reviewed Go module version is retracted", detail)
+	}
 }
 
 // firstN joins up to n of xs with a "+K more" tail, so a long hostile/skipped
@@ -592,6 +636,9 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	if c.hasExec() {
 		add(CodeCensusExec, KindFact, LensSecurity, weightLook,
 			"runs code on install/build", execNote(c.Ecosystem, c.Lifecycle, c.Gyp, strings.Join(censusExecWhat(c), ", ")))
+	}
+	if c.Provenance != nil && c.Provenance.Queried {
+		addMaintenance(add, c.Provenance)
 	}
 	if flagged := nonRegistryDeps(c.Deps); len(flagged) > 0 {
 		add(CodeNonRegistryDep, KindFact, LensSecurity, weightWeigh,

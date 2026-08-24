@@ -72,6 +72,10 @@ func TestLedgerEveryCodeReachable(t *testing.T) {
 	collect(Derive("prov", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Provenance: &provenance.Result{Queried: true, MaintainerChanged: true, RepoMismatch: true, ClaimedRepo: "github.com/o/r", SourceRepo: "github.com/other/r",
 			Sources: map[string]string{"depsdev": "complete", "registry": "failed"}}}))
+	collect(Derive("maintenance", &stats.Stats{Package: stats.PkgRef{Ecosystem: "go"}, Security: stats.Security{Queried: true},
+		Provenance: &provenance.Result{Queried: true, Deprecated: true, DeprecationScope: "go-module", DeprecationReason: "use v2",
+			Retractions: []provenance.Retraction{{Low: "v1.0.0", Rationale: "bad release", MatchesReviewed: true}},
+			Sources:     map[string]string{"depsdev": "complete", "registry": "unsupported", "gomod": "complete"}}}))
 	collect(DeriveCensus("cen", &Census{Files: 10, OSVQueried: true, Vulns: []osv.Vuln{{ID: "V"}, {ID: "MAL-1", Kind: osv.KindMalware}}, Lifecycle: []manifest.Change{{Key: "postinstall"}}, BigExcluded: "blob.bin"}))
 	collect(Derive("gitdep", &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Dependencies: []manifest.DepChange{{Name: "helper", Status: "added", To: "github:o/r", Flag: "git dependency"}}}))

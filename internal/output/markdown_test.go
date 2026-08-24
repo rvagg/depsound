@@ -50,13 +50,13 @@ func TestMarkdownProvenanceCoverageFlip(t *testing.T) {
 		Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true},
 		Provenance: &provenance.Result{Queried: true},
 	}}})
-	if strings.Contains(ran, "publish provenance") {
+	if strings.Contains(ran, "provenance and maintenance metadata") {
 		t.Errorf("provenance ran; footer must not call it not-checked:\n%s", ran)
 	}
 	none := Markdown([]BulkResult{{Ref: "gha:x v1 -> v2", Stats: &stats.Stats{
 		Package: stats.PkgRef{Ecosystem: "gha"}, Security: stats.Security{Queried: false},
 	}}})
-	if !strings.Contains(none, "publish provenance") {
+	if !strings.Contains(none, "provenance and maintenance metadata") {
 		t.Errorf("no provenance run; footer must still list it:\n%s", none)
 	}
 }
@@ -310,13 +310,13 @@ func TestMarkdownProvenanceFooterCounts(t *testing.T) {
 		return BulkResult{Ref: ref, Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm"}, Security: stats.Security{Queried: true}, Provenance: p}}
 	}
 
-	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", full), row("npm:b 1 -> 2", full)}); strings.Contains(out, "publish provenance") {
+	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", full), row("npm:b 1 -> 2", full)}); strings.Contains(out, "provenance and maintenance metadata") {
 		t.Errorf("all-complete must drop the provenance gap:\n%s", out)
 	}
-	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", full), row("npm:b 1 -> 2", failed)}); !strings.Contains(out, "publish provenance (1 of 2 changes)") {
+	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", full), row("npm:b 1 -> 2", failed)}); !strings.Contains(out, "provenance and maintenance metadata (1 of 2 changes)") {
 		t.Errorf("partial coverage must count the gap:\n%s", out)
 	}
-	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", nil), row("npm:b 1 -> 2", nil)}); !strings.Contains(out, "publish provenance") {
+	if out := Markdown([]BulkResult{row("npm:a 1 -> 2", nil), row("npm:b 1 -> 2", nil)}); !strings.Contains(out, "provenance and maintenance metadata") {
 		t.Errorf("no provenance at all must keep the gap:\n%s", out)
 	}
 }

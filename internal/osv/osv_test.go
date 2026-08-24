@@ -30,6 +30,14 @@ func TestParseVulns(t *testing.T) {
 	}
 }
 
+func TestParseMaliciousCategory(t *testing.T) {
+	raw := `{"vulns":[{"id":"RUSTSEC-2026-0260","affected":[{"database_specific":{"categories":["malicious"]}}]}]}`
+	v := parse([]byte(raw))
+	if len(v) != 1 || !v[0].Malicious() {
+		t.Fatalf("explicit malicious category parsed as %+v", v)
+	}
+}
+
 func TestAssessBuckets(t *testing.T) {
 	// from has {A, B}; to has {B (as its CVE alias), C}. Expect:
 	// A fixed, B still present (alias-deduped), C introduced.

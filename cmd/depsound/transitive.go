@@ -104,7 +104,7 @@ func transitiveCmd(args []string) error {
 	for _, c := range res.changed {
 		items = append(items, bulkItem{spec: te.analysis + ":" + c.Path, from: c.From, to: c.To})
 	}
-	fmt.Fprintf(os.Stderr, "depsound: transitive %s: %d changed, %d added, %d removed; analysing changes\n",
+	fmt.Fprintf(os.Stderr, "depsound: transitive %s: %d changed, %d added, %d removed; analysing changes and added modules\n",
 		kind, len(res.changed), len(res.added), len(res.removed))
 	tr := output.TransitiveResult{
 		Ecosystem:       te.analysis,
@@ -116,6 +116,7 @@ func transitiveCmd(args []string) error {
 		DirectChanged:   res.directChanged,
 		IndirectChanged: res.indirectChanged,
 	}
+	analyseAdded(cacheDir, te.analysis, tr.Added, noOSV)
 	// the changed subtree with its causality, from the lockfiles that carry
 	// edges (go.mod does not: it is a flat require set). What was removed
 	// only exists in the old graph, so attribute it there.
@@ -142,6 +143,20 @@ func transitiveCmd(args []string) error {
 	}
 	fmt.Print(output.Transitive(tr))
 	return nil
+}
+
+// analyseAdded runs the existing lean census over every node newly entering a
+// resolved graph. Exact lockfile/projected versions bypass range cooldown:
+// the report must inspect what the resolver selected, even when it is fresh.
+func analyseAdded(cacheDir, eco string, refs []output.ModuleRef, noOSV bool) {
+	items := make([]bulkItem, len(refs))
+	for i, ref := range refs {
+		items[i] = bulkItem{spec: eco + ":" + ref.Path, to: ref.To}
+	}
+	results := runBulk(cacheDir, items, noOSV, true, 0)
+	for i := range refs {
+		refs[i].Analysis = &results[i]
+	}
 }
 
 // lockGraph reads a lockfile's who-pulls-whom edges where the format carries

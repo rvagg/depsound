@@ -54,9 +54,15 @@ type Vuln struct {
 // carries the MAL- prefix on the record id or an alias.
 func (v Vuln) Malicious() bool { return v.Kind == KindMalware }
 
-// kindOf classifies a record by its ids. Anything not identifiably malware is
-// treated as a vulnerability: the ordinary case must never be inflated.
-func kindOf(id string, aliases []string) Kind {
+// kindOf classifies a record by explicit category first, then its ids.
+// Anything not identifiably malware is treated as a vulnerability: the
+// ordinary case must never be inflated.
+func kindOf(id string, aliases, categories []string) Kind {
+	for _, category := range categories {
+		if strings.EqualFold(category, "malicious") {
+			return KindMalware
+		}
+	}
 	if strings.HasPrefix(id, "MAL-") {
 		return KindMalware
 	}
@@ -338,7 +344,13 @@ func parse(raw []byte) []Vuln {
 						Fixed string `json:"fixed"`
 					} `json:"events"`
 				} `json:"ranges"`
+				DatabaseSpecific struct {
+					Categories []string `json:"categories"`
+				} `json:"database_specific"`
 			} `json:"affected"`
+			DatabaseSpecific struct {
+				Categories []string `json:"categories"`
+			} `json:"database_specific"`
 			Severity []struct {
 				Score string `json:"score"`
 			} `json:"severity"`
@@ -349,7 +361,11 @@ func parse(raw []byte) []Vuln {
 	}
 	var out []Vuln
 	for _, v := range resp.Vulns {
-		vuln := Vuln{ID: v.ID, Kind: kindOf(v.ID, v.Aliases), Aliases: v.Aliases, Summary: v.Summary}
+		categories := append([]string(nil), v.DatabaseSpecific.Categories...)
+		for _, af := range v.Affected {
+			categories = append(categories, af.DatabaseSpecific.Categories...)
+		}
+		vuln := Vuln{ID: v.ID, Kind: kindOf(v.ID, v.Aliases, categories), Aliases: v.Aliases, Summary: v.Summary}
 		if len(v.Severity) > 0 {
 			vuln.Severity = v.Severity[0].Score
 		}
@@ -402,7 +418,7 @@ func readCache(cacheRoot, osvEco, name, version string) ([]Vuln, time.Time, bool
 	// whether a malware record reads as one
 	for i := range env.Vulns {
 		if env.Vulns[i].Kind == "" {
-			env.Vulns[i].Kind = kindOf(env.Vulns[i].ID, env.Vulns[i].Aliases)
+			env.Vulns[i].Kind = kindOf(env.Vulns[i].ID, env.Vulns[i].Aliases, nil)
 		}
 	}
 	return env.Vulns, env.FetchedAt, true

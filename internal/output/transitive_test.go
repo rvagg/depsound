@@ -1,6 +1,7 @@
 package output
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -40,5 +41,35 @@ func TestTransitiveLockfileFraming(t *testing.T) {
 	// pnpm resolves npm packages; the label must not hide the argument given
 	if !strings.Contains(out, "pnpm (npm packages)") {
 		t.Errorf("label lost the lockfile kind:\n%s", out)
+	}
+}
+
+func TestTransitiveAddedNodeCarriesCensus(t *testing.T) {
+	analysis := &BulkResult{
+		Ref:    "crates:proc-macro1 1.0.107",
+		Census: &Census{Files: 14, BuildRS: true},
+	}
+	result := TransitiveResult{
+		Ecosystem: "crates",
+		Flat:      true,
+		Added: []ModuleRef{{
+			Path: "proc-macro1", To: "1.0.107", Via: "arrayref@0.3.10", Analysis: analysis,
+		}},
+	}
+	out := Transitive(result)
+	for _, want := range []string{"via arrayref@0.3.10", "proc-macro1 1.0.107", "14 files", "runs install/build code (build.rs)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"analysis":`, `"buildRs":true`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("JSON missing %s: %s", want, raw)
+		}
 	}
 }

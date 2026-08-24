@@ -92,7 +92,9 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeHostileEntry}, "hostile archive member(s) skipped (traversal/absolute/control-byte name: an attack-shaped artifact)"},
 	{[]Code{CodeProvenanceAnomaly}, "provenance anomaly: account-takeover shape (publisher shift, attestation dropped or attesting elsewhere, yank)"},
 	{[]Code{CodeRepoMismatch}, "claimed repo differs from the registry source repo (often a rename or redirect; confirm which is current)"},
-	{[]Code{CodeProvenanceGap}, "coverage gap: publish provenance incomplete (a source lookup failed)"},
+	{[]Code{CodeProvenanceGap}, "coverage gap: provenance or maintenance metadata incomplete (a source lookup failed)"},
+	{[]Code{CodeRetracted}, "reviewed Go module version is retracted (current latest go.mod metadata)"},
+	{[]Code{CodeDeprecated}, "dependency deprecated (current maintenance metadata, not compromise)"},
 	{[]Code{CodeUnreviewable}, "structurally unreviewable mass (generated/binary dominates the artifact bytes)"},
 	{[]Code{CodeRangeResolved}, "endpoints resolved from a range at review time (one satisfying version reviewed)"},
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
@@ -124,10 +126,10 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeOSVUnsupported}, "note: known-advisory scan not applicable (OSV has no index for this ecosystem)"},
 }
 
-// provenanceGap phrases the coverage footer's publish-provenance entry: empty
-// when every diffed dep had FULL provenance coverage, the whole gap when none
-// did, and an N-of-M count when partial, one dep answering must never clear
-// the gap for the rest (and a partial answer is not coverage).
+// provenanceGap phrases the coverage footer's provenance/maintenance-metadata
+// entry: empty when every diffed dep had full coverage, the whole gap when none
+// did, and an N-of-M count when partial. One dep answering must never clear the
+// gap for the rest.
 func provenanceGap(results []BulkResult) string {
 	total, complete := 0, 0
 	for _, r := range results {
@@ -141,11 +143,11 @@ func provenanceGap(results []BulkResult) string {
 	}
 	switch {
 	case total == 0 || complete == 0:
-		return "publish provenance"
+		return "provenance and maintenance metadata"
 	case complete == total:
 		return ""
 	default:
-		return fmt.Sprintf("publish provenance (%d of %d changes)", total-complete, total)
+		return fmt.Sprintf("provenance and maintenance metadata (%d of %d changes)", total-complete, total)
 	}
 }
 
@@ -266,19 +268,20 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w("  known-advisory scan (OSV, backward-looking; blind to novel/unreported code): %s.", strings.Join(st, "; "))
 	}
 	if transitive {
-		w("NOT checked: does your code reach each change; what it does; test coverage;")
-		w("  added modules are listed but not diffed; whatever the lockfile itself omits")
-		w("  (pruned, test-only or platform-conditional); publish provenance. Silence != safe.")
+		w("NOT checked: does your code reach each change; what changed inside added modules;")
+		w(" runtime semantics; test coverage; whatever the lockfile itself omits (pruned,")
+		w(" test-only or platform-conditional); publish provenance. Added modules were")
+		w(" censused at the resolved version, not diffed. Silence != safe.")
 	} else {
 		prov := ""
 		if g := provenanceGap(results); g != "" {
 			prov = "; " + g
 		}
 		w("NOT checked: does your code reach each change; what it does; test coverage;")
-		w("  transitive deps these bumps pull in%s. Silence != safe.", prov)
+		w(" transitive deps these bumps pull in%s. Silence != safe.", prov)
 	}
 	w("next: for each dep you rely on, intersect the diff with your usage ->")
-	w("  depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
+	w(" depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
 }
 
 func digestOf(s *stats.Stats) digest {

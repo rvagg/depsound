@@ -3,6 +3,7 @@ package output
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
@@ -377,7 +378,7 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 		note = append(note, fmt.Sprintf("new bin/CLI command(s) since %s: %s (installs an executable; runs when invoked, not on install)", p.PrevVersion, strings.Join(p.BinAdded, ", ")))
 	}
 	if p.Deprecated {
-		note = append(note, "deprecated by the registry (maintenance signal, not compromise)")
+		note = append(note, deprecationText(p))
 	}
 
 	w("provenance (deltas vs history; not a verdict):")
@@ -404,6 +405,8 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 		}
 		w("  published %s (%dd ago)%s", p.PublishedAt, p.AgeDays, who)
 	}
+	writeRegistryActions(w, p)
+	writeRetractions(w, p)
 	if eco == "npm" {
 		switch {
 		case p.Attestation && p.AttestedSource != "":
@@ -423,6 +426,123 @@ func writeProvenance(w func(string, ...any), p *provenance.Result, eco string) {
 	}
 	if p.Note != "" {
 		w("  note: %s", p.Note)
+	}
+}
+
+func deprecationText(p *provenance.Result) string {
+	subject := "deprecated in current ecosystem metadata"
+	switch p.DeprecationScope {
+	case "npm-version":
+		subject = "npm version deprecated in current registry metadata"
+	case "go-module":
+		subject = "Go module deprecated by its latest go.mod"
+	}
+	if p.DeprecationReason != "" {
+		subject += ": " + p.DeprecationReason
+	}
+	if p.DeprecationObservedAt != "" {
+		subject += " (observed " + p.DeprecationObservedAt + "; observation time, not change time)"
+	}
+	return subject + "; maintenance fact, not compromise"
+}
+
+const maxRetractionRows = 20
+
+func writeRetractions(w func(string, ...any), p *provenance.Result) {
+	if len(p.Retractions) == 0 {
+		return
+	}
+	version := p.RetractionsVersion
+	if version == "" {
+		version = "latest"
+	}
+	observed := ""
+	if p.RetractionsObservedAt != "" {
+		observed = "; observed " + taint(p.RetractionsObservedAt) + ", not action time"
+	}
+	w("  Go retractions declared by %s go.mod%s:", taint(version), observed)
+
+	ordered := make([]provenance.Retraction, 0, len(p.Retractions))
+	for _, retraction := range p.Retractions {
+		if retraction.MatchesReviewed {
+			ordered = append(ordered, retraction)
+		}
+	}
+	for _, retraction := range p.Retractions {
+		if !retraction.MatchesReviewed {
+			ordered = append(ordered, retraction)
+		}
+	}
+	shown := ordered
+	if len(shown) > maxRetractionRows {
+		shown = shown[:maxRetractionRows]
+	}
+	for _, retraction := range shown {
+		versions := retraction.Low
+		if retraction.High != "" {
+			versions = "[" + retraction.Low + ", " + retraction.High + "]"
+		}
+		rationale := ""
+		if retraction.Rationale != "" {
+			rationale = ": " + taint(retraction.Rationale)
+		}
+		match := ""
+		if retraction.MatchesReviewed {
+			match = " (matches reviewed version)"
+		}
+		w("    %s%s%s", taint(versions), rationale, match)
+	}
+	if len(shown) < len(ordered) {
+		w("    showing %d of %d declarations; full current metadata is in JSON", len(shown), len(ordered))
+	}
+}
+
+const maxRegistryActionRows = 20
+
+// writeRegistryActions projects the crates.io audit trail around the reviewed
+// release. These are registry facts, not a "yank wave" or compromise signal;
+// the agent combines them with the dependency and execution-surface facts.
+func writeRegistryActions(w func(string, ...any), p *provenance.Result) {
+	var actions []provenance.RegistryAction
+	for _, action := range p.RegistryActions {
+		if action.Action != "yank" && action.Action != "unyank" {
+			continue
+		}
+		if p.RegistryActionsSince != "" {
+			at, aerr := time.Parse(time.RFC3339Nano, action.At)
+			since, serr := time.Parse(time.RFC3339Nano, p.RegistryActionsSince)
+			if (aerr == nil && serr == nil && at.Before(since)) ||
+				((aerr != nil || serr != nil) && action.At < p.RegistryActionsSince) {
+				continue
+			}
+		}
+		actions = append(actions, action)
+	}
+	if len(actions) == 0 {
+		return
+	}
+	scope := "returned by crates.io"
+	if p.RegistryActionsSinceVersion != "" {
+		scope = "since " + taint(p.RegistryActionsSinceVersion) + " was published"
+	}
+	observed := ""
+	if p.RegistryActionsObservedAt != "" {
+		observed = "; observed " + taint(p.RegistryActionsObservedAt)
+	}
+	w("  registry yank/unyank actions %s%s:", scope, observed)
+	shown := actions
+	if len(shown) > maxRegistryActionRows {
+		shown = shown[len(shown)-maxRegistryActionRows:]
+	}
+	for _, action := range shown {
+		actor := ""
+		if action.Actor != "" {
+			actor = " by " + taint(action.Actor)
+		}
+		w("    %s %s %s%s", taint(action.At), taint(action.Action), taint(action.Version), actor)
+	}
+	if len(shown) < len(actions) {
+		w("    showing latest %d of %d matching actions; full returned history is in JSON", len(shown), len(actions))
 	}
 }
 

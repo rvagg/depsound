@@ -1,6 +1,8 @@
 package provenance
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -118,6 +120,92 @@ func TestBinNamesAndDelta(t *testing.T) {
 	}
 }
 
+func TestNPMDeprecationRequiresNonEmptyString(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{`"use replacement"`, "use replacement"},
+		{`""`, ""},
+		{`"   "`, ""},
+		{`null`, ""},
+		{`{"message":"not the npm contract"}`, ""},
+	}
+	for _, test := range cases {
+		if got := npmDeprecation([]byte(test.raw)); got != test.want {
+			t.Errorf("npmDeprecation(%s) = %q, want %q", test.raw, got, test.want)
+		}
+	}
+}
+
+func TestAssessNPMPreservesDeprecationMessageAndObservation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"repository":{"url":"https://github.com/request/request"},
+			"time":{"2.88.2":"2020-02-11T15:00:00Z"},
+			"versions":{"2.88.2":{"deprecated":"request has been deprecated; use another client"}}
+		}`))
+	}))
+	defer srv.Close()
+	old := npmRegistry
+	npmRegistry = srv.URL
+	defer func() { npmRegistry = old }()
+
+	r := &Result{}
+	if !assessNPM(t.Context(), srv.Client(), "request", "2.88.2", "", r) {
+		t.Fatal("npm metadata should be collected")
+	}
+	if !r.Deprecated || r.DeprecationReason != "request has been deprecated; use another client" {
+		t.Fatalf("deprecation = %+v", r)
+	}
+	if r.DeprecationScope != "npm-version" || r.DeprecationSource != srv.URL+"/request" || r.DeprecationObservedAt == "" {
+		t.Fatalf("deprecation provenance = %+v", r)
+	}
+}
+
+func TestAssessGoUsesLatestModForDeprecationAndRetractions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/@v/list"):
+			_, _ = w.Write([]byte("v1.0.0\nv1.2.0\nv1.3.0-rc.1\n"))
+		case strings.HasSuffix(r.URL.Path, "/@v/v1.2.0.mod"):
+			_, _ = w.Write([]byte(`// Deprecated: use example.com/mod/v2 instead.
+module example.com/mod
+
+retract v0.9.0 // published accidentally
+
+// data corruption
+retract [v1.0.0, v1.0.5]
+`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	old := goProxy
+	goProxy = srv.URL
+	defer func() { goProxy = old }()
+
+	r := &Result{}
+	if !assessGo(t.Context(), srv.Client(), "example.com/mod", "v1.0.3", r) {
+		t.Fatal("latest go.mod should be collected")
+	}
+	if !r.Deprecated || r.DeprecationReason != "use example.com/mod/v2 instead." || r.DeprecationScope != "go-module" {
+		t.Fatalf("deprecation = %+v", r)
+	}
+	if r.DeprecationObservedAt == "" || r.DeprecationSource != srv.URL+"/example.com/mod/@v/v1.2.0.mod" {
+		t.Fatalf("deprecation provenance = %+v", r)
+	}
+	if r.RetractionsVersion != "v1.2.0" || r.RetractionsObservedAt == "" || len(r.Retractions) != 2 {
+		t.Fatalf("retractions = %+v", r)
+	}
+	if r.Retractions[0].MatchesReviewed || !r.Retractions[1].MatchesReviewed ||
+		r.Retractions[1].Low != "v1.0.0" || r.Retractions[1].High != "v1.0.5" ||
+		r.Retractions[1].Rationale != "data corruption" {
+		t.Fatalf("retraction matching = %+v", r.Retractions)
+	}
+}
+
 // Complete is the bar for a coverage claim: any failed source breaks it,
 // unsupported sources do not (they are not lost coverage), and FailedSources
 // names what each failure cost.
@@ -137,7 +225,56 @@ func TestSourceStates(t *testing.T) {
 	if !goStyle.Complete() || goStyle.FailedSources() != nil {
 		t.Errorf("unsupported is not lost coverage: %+v", goStyle)
 	}
+	goFailed := &Result{Queried: true, Sources: map[string]string{"depsdev": "complete", "registry": "unsupported", "gomod": "failed"}}
+	if goFailed.Complete() {
+		t.Error("a failed current go.mod lookup must break Complete")
+	}
+	if f := goFailed.FailedSources(); len(f) != 1 || !strings.Contains(f[0], "gomod") || !strings.Contains(f[0], "retraction") {
+		t.Errorf("failure should name current Go declaration coverage: %v", f)
+	}
 	if (&Result{Queried: false}).Complete() {
 		t.Error("not-queried is never Complete")
+	}
+}
+
+func TestAssessCratesPreservesRegistryActions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"crate":{"repository":"https://github.com/droundy/arrayref"},
+			"versions":[
+				{"num":"0.3.10","created_at":"2026-08-20T07:15:00Z","yanked":false,"crate_size":10,
+				 "published_by":{"login":"droundy"},
+				 "audit_actions":[{"action":"publish","time":"2026-08-20T07:15:00Z","user":{"login":"droundy"}}]},
+				{"num":"0.3.9","created_at":"2024-01-01T00:00:00Z","yanked":false,"crate_size":9,
+				 "published_by":{"login":"droundy"},
+				 "audit_actions":[{"action":"yank","time":"2026-08-20T07:15:00.100Z","user":{"login":"droundy"}}]},
+				{"num":"0.3.8","created_at":"2023-01-01T00:00:00Z","yanked":true,"crate_size":8,
+				 "published_by":{"login":"droundy"},
+				 "audit_actions":[{"action":"unyank","time":"2026-08-20T07:16:00Z","user":{"login":"admin"}}]}
+			]
+		}`))
+	}))
+	defer srv.Close()
+	orig := cratesAPI
+	cratesAPI = srv.URL
+	defer func() { cratesAPI = orig }()
+
+	r := &Result{}
+	if !assessCrates(t.Context(), srv.Client(), "arrayref", "0.3.10", "0.3.9", r) {
+		t.Fatal("crates.io response should be collected")
+	}
+	if r.RegistryActionsSource != srv.URL+"/arrayref" || r.RegistryActionsObservedAt == "" {
+		t.Errorf("registry source/observation missing: %+v", r)
+	}
+	if r.RegistryActionsSinceVersion != "0.3.9" || r.RegistryActionsSince != "2024-01-01T00:00:00Z" {
+		t.Errorf("projection baseline = %q at %q", r.RegistryActionsSinceVersion, r.RegistryActionsSince)
+	}
+	if len(r.RegistryActions) != 3 {
+		t.Fatalf("registry actions = %+v", r.RegistryActions)
+	}
+	for i, want := range []string{"publish", "yank", "unyank"} {
+		if r.RegistryActions[i].Action != want {
+			t.Errorf("action[%d] = %+v, want %s", i, r.RegistryActions[i], want)
+		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/npmpkg"
+	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -97,5 +98,66 @@ func TestESMImportOnly(t *testing.T) {
 	}
 	if esmImportOnly(dual) {
 		t.Error("dual package must not read as ESM import-only")
+	}
+}
+
+func TestCensusRendersRegistryActionsAsFacts(t *testing.T) {
+	out := CensusText(&Census{
+		Ecosystem: "crates",
+		Name:      "arrayref",
+		Version:   "0.3.10",
+		Files:     1,
+		Provenance: &provenance.Result{
+			Queried:                     true,
+			RegistryActionsSinceVersion: "0.3.9",
+			RegistryActionsSince:        "2026-08-20T07:15:00Z",
+			RegistryActionsObservedAt:   "2026-08-20T08:00:00Z",
+			RegistryActions: []provenance.RegistryAction{
+				{Version: "0.3.10", Action: "publish", Actor: "droundy", At: "2026-08-20T07:15:00Z"},
+				{Version: "0.3.9", Action: "yank", Actor: "droundy", At: "2026-08-20T07:15:00.100Z"},
+			},
+		},
+	})
+	for _, want := range []string{"registry yank/unyank actions since 0.3.9 was published", "2026-08-20T07:15:00.100Z yank 0.3.9 by droundy"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "publish 0.3.10") {
+		t.Errorf("ordinary publish actions should remain JSON-only:\n%s", out)
+	}
+}
+
+func TestCensusRendersExactDeprecationAndRetractions(t *testing.T) {
+	out := CensusText(&Census{
+		Ecosystem: "go",
+		Name:      "example.com/mod",
+		Version:   "v1.0.3",
+		Files:     1,
+		Provenance: &provenance.Result{
+			Queried:               true,
+			Deprecated:            true,
+			DeprecationScope:      "go-module",
+			DeprecationReason:     "use example.com/mod/v2 instead",
+			DeprecationSource:     "https://proxy.golang.org/example.com/mod/@v/v1.2.0.mod",
+			DeprecationObservedAt: "2026-08-21T01:02:03Z",
+			RetractionsVersion:    "v1.2.0",
+			RetractionsObservedAt: "2026-08-21T01:02:03Z",
+			Retractions: []provenance.Retraction{
+				{Low: "v0.9.0", Rationale: "published accidentally"},
+				{Low: "v1.0.0", High: "v1.0.5", Rationale: "data corruption", MatchesReviewed: true},
+			},
+		},
+	})
+	for _, want := range []string{
+		"Go module deprecated by its latest go.mod: use example.com/mod/v2 instead",
+		"observed 2026-08-21T01:02:03Z; observation time, not change time",
+		"Go retractions declared by v1.2.0 go.mod",
+		"[v1.0.0, v1.0.5]: data corruption (matches reviewed version)",
+		"v0.9.0: published accidentally",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }

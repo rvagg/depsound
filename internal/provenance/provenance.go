@@ -18,6 +18,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
+
 	"github.com/rvagg/depsound/internal/depsdev"
 	"github.com/rvagg/depsound/internal/version"
 )
@@ -26,14 +30,21 @@ import (
 // (Go 404s), GetVersion/GetProject cover Go too.
 var ddSystem = map[string]string{"npm": "npm", "crates": "cargo", "go": "go"}
 
+var (
+	cratesAPI   = "https://crates.io/api/v1/crates"
+	npmRegistry = "https://registry.npmjs.org"
+	goProxy     = "https://proxy.golang.org"
+)
+
 // Result is the provenance panel: facts plus the anomaly flags (the signal).
 type Result struct {
 	Queried bool `json:"queried"`
 	// Sources records each source's outcome (complete | failed | unsupported)
-	// so a partial answer can never read as full coverage: "depsdev" carries
-	// cadence, source repo and scorecard; "registry" carries publisher,
-	// attestation and the delta history. Queried stays true when ANY source
-	// answered; consumers needing full coverage check Complete().
+	// so a partial answer can never read as full coverage. depsdev carries
+	// cadence, source repo and scorecard; registry carries npm/crates metadata;
+	// gomod carries current Go deprecation and retraction declarations.
+	// Queried stays true when any source answered; consumers needing full
+	// coverage check Complete().
 	Sources map[string]string `json:"sources,omitempty"`
 
 	PublishedAt   string `json:"publishedAt,omitempty"`
@@ -87,13 +98,45 @@ type Result struct {
 	PrevSize int64 `json:"prevSize,omitempty"`
 	SizeJump bool  `json:"sizeJump,omitempty"`
 
-	Deprecated bool `json:"deprecated,omitempty"`
-	Yanked     bool `json:"yanked,omitempty"`
+	Deprecated            bool   `json:"deprecated,omitempty"`
+	DeprecationReason     string `json:"deprecationReason,omitempty"`
+	DeprecationScope      string `json:"deprecationScope,omitempty"` // npm-version | go-module | ecosystem
+	DeprecationSource     string `json:"deprecationSource,omitempty"`
+	DeprecationObservedAt string `json:"deprecationObservedAt,omitempty"`
+	Yanked                bool   `json:"yanked,omitempty"`
+
+	Retractions           []Retraction `json:"retractions,omitempty"`
+	RetractionsVersion    string       `json:"retractionsVersion,omitempty"`
+	RetractionsSource     string       `json:"retractionsSource,omitempty"`
+	RetractionsObservedAt string       `json:"retractionsObservedAt,omitempty"`
+
+	// RegistryActions preserves crates.io's returned audit trail as raw facts.
+	// The renderer projects yank/unyank actions around the reviewed release;
+	// JSON retains every returned action for an agent to interpret.
+	RegistryActions             []RegistryAction `json:"registryActions,omitempty"`
+	RegistryActionsSource       string           `json:"registryActionsSource,omitempty"`
+	RegistryActionsObservedAt   string           `json:"registryActionsObservedAt,omitempty"`
+	RegistryActionsSince        string           `json:"registryActionsSince,omitempty"`
+	RegistryActionsSinceVersion string           `json:"registryActionsSinceVersion,omitempty"`
 
 	Stars        int      `json:"stars,omitempty"`
 	Scorecard    float64  `json:"scorecard,omitempty"`
 	ScorecardLow []string `json:"scorecardLow,omitempty"` // checks scoring low
 	Note         string   `json:"note,omitempty"`
+}
+
+type RegistryAction struct {
+	Version string `json:"version"`
+	Action  string `json:"action"`
+	Actor   string `json:"actor,omitempty"`
+	At      string `json:"at"`
+}
+
+type Retraction struct {
+	Low             string `json:"low"`
+	High            string `json:"high,omitempty"`
+	Rationale       string `json:"rationale,omitempty"`
+	MatchesReviewed bool   `json:"matchesReviewed,omitempty"`
 }
 
 // Assess assembles the provenance for eco:name@ver. prevVer is the baseline
@@ -114,7 +157,16 @@ func Assess(ctx context.Context, eco, name, ver, prevVer string) *Result {
 				r.PublishedAt = vi.PublishedAt.UTC().Format("2006-01-02")
 				r.AgeDays = int(time.Since(vi.PublishedAt).Hours() / 24)
 			}
-			r.Deprecated = vi.Deprecated
+			if vi.Deprecated {
+				r.Deprecated = true
+				r.DeprecationReason = vi.DeprecatedReason
+				r.DeprecationScope = eco + "-version"
+				if eco == "go" {
+					r.DeprecationScope = "go-module"
+				}
+				r.DeprecationSource = vi.SourceURL
+				r.DeprecationObservedAt = time.Now().UTC().Format(time.RFC3339)
+			}
 			r.SourceRepo = trimRepo(vi.SourceRepo)
 			if pi, err := depsdev.Project(ctx, client, r.SourceRepo); err == nil && pi != nil {
 				r.Stars = pi.Stars
@@ -131,13 +183,17 @@ func Assess(ctx context.Context, eco, name, ver, prevVer string) *Result {
 	switch eco {
 	case "npm":
 		r.Sources["registry"] = sourceState(assessNPM(ctx, client, name, ver, prevVer, r))
+		r.Sources["gomod"] = "unsupported"
 	case "crates":
 		r.Sources["registry"] = sourceState(assessCrates(ctx, client, name, ver, prevVer, r))
+		r.Sources["gomod"] = "unsupported"
 	case "go":
 		r.Sources["registry"] = "unsupported"
-		r.Note = "Go has no publisher/provenance (module path IS the repo; sumdb/zip-vs-tag is the anchor), so only cadence + scorecard apply"
+		r.Sources["gomod"] = sourceState(assessGo(ctx, client, name, ver, r))
+		r.Note = "Go has no registry publisher/attestation (module path is the repo; sumdb/zip-vs-tag is the anchor)"
 	default:
 		r.Sources["registry"] = "unsupported"
+		r.Sources["gomod"] = "unsupported"
 	}
 
 	r.RepoMismatch = repoMismatch(r.ClaimedRepo, r.SourceRepo)
@@ -162,7 +218,8 @@ func sourceState(ok bool) string {
 // coverage was lost.
 var sourceScope = map[string]string{
 	"depsdev":  "cadence, source repo, scorecard",
-	"registry": "publisher, attestation, install-script/bin deltas",
+	"registry": "publisher, attestation, manifest deltas, and registry metadata",
+	"gomod":    "current Go module deprecation and retraction declarations",
 }
 
 // FailedSources lists the sources that errored, with what each carries.
@@ -170,7 +227,7 @@ var sourceScope = map[string]string{
 // ecosystem is not lost coverage.
 func (r *Result) FailedSources() []string {
 	var out []string
-	for _, src := range []string{"depsdev", "registry"} {
+	for _, src := range []string{"depsdev", "registry", "gomod"} {
 		if r.Sources[src] == "failed" {
 			out = append(out, src+" ("+sourceScope[src]+")")
 		}
@@ -201,11 +258,17 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 		Time       map[string]string          `json:"time"`
 		Versions   map[string]json.RawMessage `json:"versions"`
 	}
-	if err := getJSON(ctx, client, "https://registry.npmjs.org/"+url.PathEscape(name), &doc); err != nil {
+	source := npmRegistry + "/" + url.PathEscape(name)
+	if err := getJSON(ctx, client, source, &doc); err != nil {
 		return false
 	}
 	r.Queried = true
 	r.ClaimedRepo = repoURL(doc.Repository)
+	r.Deprecated = false
+	r.DeprecationReason = ""
+	r.DeprecationScope = "npm-version"
+	r.DeprecationSource = source
+	r.DeprecationObservedAt = time.Now().UTC().Format(time.RFC3339)
 
 	type npmVer struct {
 		Publisher struct {
@@ -234,7 +297,10 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 		r.TrustedConfig = cur.Publisher.TrustedPublisher.ConfigID
 		r.Size = cur.Dist.UnpackedSize
 		r.Attestation = len(cur.Dist.Attestations) > 0
-		r.Deprecated = r.Deprecated || len(cur.Deprecated) > 0
+		if reason := npmDeprecation(cur.Deprecated); reason != "" {
+			r.Deprecated = true
+			r.DeprecationReason = reason
+		}
 		if r.Attestation {
 			// read the npm-VALIDATED predicate (no crypto: npm already checked
 			// the signature at publish) for its attested source, and flag it
@@ -285,6 +351,14 @@ func assessNPM(ctx context.Context, client *http.Client, name, ver, prevVer stri
 	return true
 }
 
+func npmDeprecation(raw json.RawMessage) string {
+	var message string
+	if json.Unmarshal(raw, &message) != nil || strings.TrimSpace(message) == "" {
+		return ""
+	}
+	return message
+}
+
 // --- crates ----------------------------------------------------------------
 
 func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer string, r *Result) bool {
@@ -300,14 +374,51 @@ func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer s
 			PublishedBy struct {
 				Login string `json:"login"`
 			} `json:"published_by"`
+			AuditActions []struct {
+				Action string `json:"action"`
+				Time   string `json:"time"`
+				User   struct {
+					Login string `json:"login"`
+				} `json:"user"`
+			} `json:"audit_actions"`
 		} `json:"versions"`
 	}
-	if err := getJSON(ctx, client, "https://crates.io/api/v1/crates/"+url.PathEscape(name), &doc); err != nil {
+	source := cratesAPI + "/" + url.PathEscape(name)
+	if err := getJSON(ctx, client, source, &doc); err != nil {
 		return false
 	}
 	r.Queried = true
 	r.ClaimedRepo = trimRepo(doc.Crate.Repository)
-
+	r.RegistryActionsSource = source
+	r.RegistryActionsObservedAt = time.Now().UTC().Format(time.RFC3339)
+	for _, v := range doc.Versions {
+		for _, action := range v.AuditActions {
+			r.RegistryActions = append(r.RegistryActions, RegistryAction{
+				Version: v.Num,
+				Action:  action.Action,
+				Actor:   action.User.Login,
+				At:      action.Time,
+			})
+		}
+	}
+	sort.Slice(r.RegistryActions, func(i, j int) bool {
+		a, b := r.RegistryActions[i], r.RegistryActions[j]
+		if at, aerr := time.Parse(time.RFC3339Nano, a.At); aerr == nil {
+			if bt, berr := time.Parse(time.RFC3339Nano, b.At); berr == nil && !at.Equal(bt) {
+				return at.Before(bt)
+			}
+		}
+		if a.At != b.At {
+			return a.At < b.At
+		}
+		if a.Version != b.Version {
+			return a.Version < b.Version
+		}
+		if a.Action != b.Action {
+			return a.Action < b.Action
+		}
+		return a.Actor < b.Actor
+	})
 	// versions are newest-first; find this one and the one published before it
 	idx := -1
 	for i, v := range doc.Versions {
@@ -344,11 +455,123 @@ func assessCrates(ctx context.Context, client *http.Client, name, ver, prevVer s
 		prev := doc.Versions[prevIdx]
 		r.PrevVersion = prev.Num
 		r.PrevSize = prev.CrateSize
+		r.RegistryActionsSince = prev.CreatedAt
+		r.RegistryActionsSinceVersion = prev.Num
 		if cur.PublishedBy.Login != "" && prev.PublishedBy.Login != "" {
 			r.MaintainerChanged = cur.PublishedBy.Login != prev.PublishedBy.Login
 		}
 	}
 	return true
+}
+
+// --- Go module metadata ----------------------------------------------------
+
+// assessGo reads the current module-wide declarations from the latest go.mod.
+// A reviewed old version's own go.mod is not authoritative: Go deliberately
+// loads deprecation and retraction metadata from the latest version.
+func assessGo(ctx context.Context, client *http.Client, name, reviewed string, r *Result) bool {
+	escPath, err := module.EscapePath(name)
+	if err != nil {
+		return false
+	}
+	latest, err := latestGoVersion(ctx, client, escPath)
+	if err != nil {
+		return false
+	}
+	escVersion, err := module.EscapeVersion(latest)
+	if err != nil {
+		return false
+	}
+	source := fmt.Sprintf("%s/%s/@v/%s.mod", goProxy, escPath, escVersion)
+	raw, err := getBytes(ctx, client, source, 4<<20)
+	if err != nil {
+		return false
+	}
+	f, err := modfile.Parse(source, raw, nil)
+	if err != nil {
+		return false
+	}
+
+	observed := time.Now().UTC().Format(time.RFC3339)
+	r.Queried = true
+	r.Deprecated = false
+	r.DeprecationReason = ""
+	r.DeprecationScope = ""
+	r.DeprecationSource = ""
+	r.DeprecationObservedAt = ""
+	if f.Module != nil && strings.TrimSpace(f.Module.Deprecated) != "" {
+		r.Deprecated = true
+		r.DeprecationReason = f.Module.Deprecated
+		r.DeprecationScope = "go-module"
+		r.DeprecationSource = source
+		r.DeprecationObservedAt = observed
+	}
+
+	r.Retractions = nil
+	r.RetractionsVersion = latest
+	r.RetractionsSource = source
+	r.RetractionsObservedAt = observed
+	for _, retract := range f.Retract {
+		high := retract.High
+		if high == "" {
+			high = retract.Low
+		}
+		item := Retraction{
+			Low:             retract.Low,
+			Rationale:       retract.Rationale,
+			MatchesReviewed: versionInRange(reviewed, retract.Low, high),
+		}
+		if high != retract.Low {
+			item.High = high
+		}
+		r.Retractions = append(r.Retractions, item)
+	}
+	return true
+}
+
+func latestGoVersion(ctx context.Context, client *http.Client, escPath string) (string, error) {
+	listURL := fmt.Sprintf("%s/%s/@v/list", goProxy, escPath)
+	if raw, err := getBytes(ctx, client, listURL, 4<<20); err == nil {
+		if latest := highestGoVersion(string(raw)); latest != "" {
+			return latest, nil
+		}
+	}
+
+	var latest struct {
+		Version string `json:"Version"`
+	}
+	if err := getJSON(ctx, client, fmt.Sprintf("%s/%s/@latest", goProxy, escPath), &latest); err != nil {
+		return "", err
+	}
+	if !semver.IsValid(latest.Version) {
+		return "", fmt.Errorf("go proxy returned invalid latest version %q", latest.Version)
+	}
+	return latest.Version, nil
+}
+
+func highestGoVersion(list string) string {
+	var release, prerelease string
+	for _, candidate := range strings.Fields(list) {
+		if !semver.IsValid(candidate) {
+			continue
+		}
+		if semver.Prerelease(candidate) == "" {
+			if release == "" || semver.Compare(candidate, release) > 0 {
+				release = candidate
+			}
+		} else if prerelease == "" || semver.Compare(candidate, prerelease) > 0 {
+			prerelease = candidate
+		}
+	}
+	if release != "" {
+		return release
+	}
+	return prerelease
+}
+
+func versionInRange(version, low, high string) bool {
+	return semver.IsValid(version) && semver.IsValid(low) && semver.IsValid(high) &&
+		semver.Compare(version, low) >= 0 && semver.Compare(version, high) <= 0
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -644,6 +867,32 @@ func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 		return fmt.Errorf("GET %s: %s", u, resp.Status)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(v)
+}
+
+func getBytes(ctx context.Context, client *http.Client, u string, limit int64) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", version.UserAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: %s", u, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("GET %s: response exceeds %d bytes", u, limit)
+	}
+	return body, nil
 }
 
 // PublisherShift classifies what a publisher change MEANS, because the same
