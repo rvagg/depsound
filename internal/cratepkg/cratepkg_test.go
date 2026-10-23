@@ -223,3 +223,39 @@ func TestForgiving(t *testing.T) {
 		t.Errorf("workspace edition = %q, want empty", c.Edition)
 	}
 }
+
+func TestParsePackageScalars(t *testing.T) {
+	inherited, err := Parse([]byte(`
+[package]
+name = "member"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+serde = "1.0.100"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inherited.Name != "member" || inherited.Version != "" || inherited.Edition != "" || inherited.RustVersion != "" {
+		t.Errorf("inherited package scalars = %+v", inherited)
+	}
+	if inherited.Deps["serde"] != "1.0.100" {
+		t.Errorf("inherited manifest dependencies = %+v", inherited.Deps)
+	}
+
+	literal, err := Parse([]byte("[package]\nname = \"member\"\nversion = \"1.2.3\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if literal.Name != "member" || literal.Version != "1.2.3" {
+		t.Errorf("literal package identity = %+v", literal)
+	}
+}
+
+func TestParseRejectsUnsupportedDependency(t *testing.T) {
+	if _, err := Parse([]byte("[dependencies]\nserde = [\"1.0\"]\n")); err == nil {
+		t.Fatal("want error for an unsupported dependency declaration")
+	}
+}

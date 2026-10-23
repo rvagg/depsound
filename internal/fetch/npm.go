@@ -90,8 +90,8 @@ const (
 	VerifyLocalRegistry256 = "local-registry-sha256"
 )
 
-// Meta is the provenance sidecar stored beside each cached artifact so
-// reports remain traceable to exact inputs.
+// Meta records an artifact's source and integrity. Registry fetches persist
+// it in sidecars; local imports return it with their immutable byte path.
 // A GitHub Actions pin tier (sha|tag|branch) deliberately does not live here:
 // it belongs to the ref a workflow holds, not to the bytes. This sidecar is
 // keyed by resolved commit, which a tag and a literal sha can share, so

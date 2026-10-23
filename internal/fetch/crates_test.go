@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -26,90 +28,228 @@ func TestIndexPath(t *testing.T) {
 	}
 }
 
+func useCratesIndex(t *testing.T, body string) *http.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	old := cratesIndex
+	cratesIndex = srv.URL
+	t.Cleanup(func() { cratesIndex = old })
+	return srv.Client()
+}
+
+func importLocalCrate(t *testing.T, client *http.Client, src, dir string) *LocalCrateEvidence {
+	t.Helper()
+	evidence, err := LocalCrate(t.Context(), client, "example", "1.2.3", src, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence
+}
+
 func TestLocalCrateRecordsOriginDigestAndRegistryMatch(t *testing.T) {
 	content := []byte("quarantined crate bytes")
 	sum := sha256.Sum256(content)
 	checksum := hex.EncodeToString(sum[:])
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"vers":"1.2.3","cksum":%q}`+"\n", checksum)
-	}))
-	defer srv.Close()
-	old := cratesIndex
-	cratesIndex = srv.URL
-	defer func() { cratesIndex = old }()
+	client := useCratesIndex(t, fmt.Sprintf(`{"vers":"1.2.3","cksum":%q}`+"\n", checksum))
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "source.crate")
-	dest := filepath.Join(dir, "cache", "imported.crate")
 	if err := os.WriteFile(src, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := LocalCrate(t.Context(), srv.Client(), "example", "1.2.3", src, dest); err != nil {
-		t.Fatal(err)
+	evidence := importLocalCrate(t, client, src, filepath.Join(dir, "cache"))
+	origin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(src)}).String()
+	if evidence.Meta.Verification != VerifyLocalRegistry256 ||
+		evidence.Meta.Digest != "sha256-"+checksum || evidence.Meta.URL != origin {
+		t.Fatalf("local evidence = %+v", evidence)
 	}
-	meta := ReadMeta(dest)
-	if meta == nil || meta.Verification != VerifyLocalRegistry256 ||
-		meta.Digest != "sha256-"+checksum || meta.URL == "" {
-		t.Fatalf("local metadata = %+v", meta)
-	}
-	if got, err := os.ReadFile(dest); err != nil || string(got) != string(content) {
+	if got, err := os.ReadFile(evidence.Path); err != nil || string(got) != string(content) {
 		t.Fatalf("imported bytes = %q, %v", got, err)
 	}
 }
 
 func TestLocalCrateRejectsRegistryChecksumMismatch(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintln(w, `{"vers":"1.2.3","cksum":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
-	}))
-	defer srv.Close()
-	old := cratesIndex
-	cratesIndex = srv.URL
-	defer func() { cratesIndex = old }()
+	client := useCratesIndex(t, "{\"vers\":\"1.2.3\",\"cksum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n")
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "source.crate")
 	if err := os.WriteFile(src, []byte("different"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := LocalCrate(t.Context(), srv.Client(), "example", "1.2.3", src, filepath.Join(dir, "dest.crate"))
+	_, err := LocalCrate(t.Context(), client, "example", "1.2.3", src, filepath.Join(dir, "cache"))
 	if err == nil {
 		t.Fatal("checksum mismatch should fail")
 	}
 }
 
 func TestLocalCrateRecordsUnanchoredDigestWhenVersionIsMissing(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintln(w, `{"vers":"9.9.9","cksum":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
-	}))
-	defer srv.Close()
-	old := cratesIndex
-	cratesIndex = srv.URL
-	defer func() { cratesIndex = old }()
+	client := useCratesIndex(t, "{\"vers\":\"9.9.9\",\"cksum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n")
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "withdrawn.crate")
 	if err := os.WriteFile(src, []byte("quarantined bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dest := filepath.Join(dir, "cache", "withdrawn.crate")
-	if err := LocalCrate(t.Context(), srv.Client(), "example", "1.2.3", src, dest); err != nil {
+	evidence := importLocalCrate(t, client, src, filepath.Join(dir, "cache"))
+	if evidence.Meta.Verification != VerifyLocalSHA256 {
+		t.Fatalf("missing-version evidence = %+v", evidence)
+	}
+}
+
+func TestLocalCrateKeepsConcurrentImportsWithSameRelativeName(t *testing.T) {
+	client := useCratesIndex(t, "")
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "cache")
+	sources := []struct {
+		path    string
+		content []byte
+	}{
+		{filepath.Join(dir, "left", "input.crate"), []byte("left bytes")},
+		{filepath.Join(dir, "right", "input.crate"), []byte("right bytes")},
+	}
+	for _, source := range sources {
+		if err := os.MkdirAll(filepath.Dir(source.path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(source.path, source.content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := make(chan struct{})
+	results := make(chan *LocalCrateEvidence, len(sources))
+	errs := make(chan error, len(sources))
+	var wg sync.WaitGroup
+	for _, source := range sources {
+		wg.Add(1)
+		go func(source struct {
+			path    string
+			content []byte
+		}) {
+			defer wg.Done()
+			<-start
+			evidence, err := LocalCrate(t.Context(), client, "example", "1.2.3", source.path, cache)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- evidence
+		}(source)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
 		t.Fatal(err)
 	}
-	if meta := ReadMeta(dest); meta == nil || meta.Verification != VerifyLocalSHA256 {
-		t.Fatalf("missing-version metadata = %+v", meta)
+
+	byDigest := make(map[string]*LocalCrateEvidence, len(sources))
+	for evidence := range results {
+		byDigest[evidence.Meta.Digest] = evidence
+	}
+	if len(byDigest) != len(sources) {
+		t.Fatalf("imports = %d, want %d", len(byDigest), len(sources))
+	}
+	for _, source := range sources {
+		sum := sha256.Sum256(source.content)
+		digest := "sha256-" + hex.EncodeToString(sum[:])
+		evidence := byDigest[digest]
+		if evidence == nil {
+			t.Fatalf("missing evidence for %q", source.content)
+		}
+		if got, err := os.ReadFile(evidence.Path); err != nil || string(got) != string(source.content) {
+			t.Fatalf("%s bytes = %q, %v", evidence.Path, got, err)
+		}
+	}
+}
+
+func TestLocalCrateSharesBytesNotOrigin(t *testing.T) {
+	client := useCratesIndex(t, "")
+	dir := t.TempDir()
+	content := []byte("shared archive")
+	left := filepath.Join(dir, "left", "input.crate")
+	right := filepath.Join(dir, "right", "input.crate")
+	for _, src := range []string{left, right} {
+		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(src, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cache := filepath.Join(dir, "cache")
+	first := importLocalCrate(t, client, left, cache)
+	second := importLocalCrate(t, client, right, cache)
+	if first.Path != second.Path {
+		t.Fatalf("identical bytes stored at %q and %q", first.Path, second.Path)
+	}
+	leftOrigin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(left)}).String()
+	rightOrigin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(right)}).String()
+	if first.Meta.URL != leftOrigin || second.Meta.URL != rightOrigin {
+		t.Fatalf("import origins = %q, %q; want %q, %q", first.Meta.URL, second.Meta.URL, leftOrigin, rightOrigin)
+	}
+	if first.Meta.Digest != second.Meta.Digest {
+		t.Fatalf("digests differ: %q and %q", first.Meta.Digest, second.Meta.Digest)
+	}
+}
+
+func TestLocalCrateRetainsEvidenceAcrossSourceReplacement(t *testing.T) {
+	client := useCratesIndex(t, "")
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "cache")
+	src := filepath.Join(dir, "input.crate")
+	original := []byte("original archive")
+	if err := os.WriteFile(src, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := importLocalCrate(t, client, src, cache)
+
+	replacement := filepath.Join(dir, "replacement.crate")
+	if err := os.WriteFile(replacement, []byte("replacement archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, src); err != nil {
+		t.Fatal(err)
+	}
+	second := importLocalCrate(t, client, src, cache)
+	if first.Path == second.Path || first.Meta.Digest == second.Meta.Digest {
+		t.Fatalf("replacement reused original evidence: first=%+v second=%+v", first, second)
+	}
+	if got, err := os.ReadFile(first.Path); err != nil || string(got) != string(original) {
+		t.Fatalf("first import changed to %q, %v", got, err)
+	}
+	wantDigest := fmt.Sprintf("sha256-%x", sha256.Sum256(original))
+	wantOrigin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(src)}).String()
+	if first.Meta.Digest != wantDigest || first.Meta.URL != wantOrigin {
+		t.Fatalf("first metadata changed: %+v", first.Meta)
+	}
+}
+
+func TestLocalCrateRejectsCorruptDigestPath(t *testing.T) {
+	client := useCratesIndex(t, "")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "input.crate")
+	if err := os.WriteFile(src, []byte("trusted archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evidence := importLocalCrate(t, client, src, filepath.Join(dir, "cache"))
+	if err := os.WriteFile(evidence.Path, []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LocalCrate(t.Context(), client, "example", "1.2.3", src, filepath.Dir(evidence.Path)); err == nil {
+		t.Fatal("corrupt digest path should not be trusted")
 	}
 }
 
 func TestCrateClassifiesVersionMissingFromIndex(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintln(w, `{"vers":"9.9.9","cksum":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
-	}))
-	defer srv.Close()
-	old := cratesIndex
-	cratesIndex = srv.URL
-	defer func() { cratesIndex = old }()
+	client := useCratesIndex(t, "{\"vers\":\"9.9.9\",\"cksum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n")
 
-	err := Crate(t.Context(), srv.Client(), "example", "1.2.3", filepath.Join(t.TempDir(), "example.crate"))
+	err := Crate(t.Context(), client, "example", "1.2.3", filepath.Join(t.TempDir(), "example.crate"))
 	unavailable, ok := err.(UnavailableError)
 	if !ok {
 		t.Fatalf("missing version error = %T %v", err, err)

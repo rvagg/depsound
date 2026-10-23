@@ -269,6 +269,54 @@ func TestDetectUnresolvedOnParseFailure(t *testing.T) {
 	if len(res.Changed) != 0 || len(res.Added) != 0 {
 		t.Errorf("nothing should resolve from a failed parse: %+v %+v", res.Changed, res.Added)
 	}
+
+	for _, manifest := range []string{
+		"[dependencies]\nserde =\n",
+		"[dependencies]\nserde = [\"1.0\"]\n",
+	} {
+		res := detectChanges([]detectPair{{path: "Cargo.toml", old: write("[dependencies]\nserde = \"1.0\"\n"), new: write(manifest)}})
+		if len(res.Unresolved) != 1 || len(res.Changed) != 0 || len(res.Added) != 0 {
+			t.Errorf("Cargo declaration failure must be unresolved: %+v", res)
+		}
+	}
+}
+
+func TestDetectCargoWorkspaceVersionDeclaration(t *testing.T) {
+	write := func(name, content string) string {
+		p := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := `
+[package]
+name = "member"
+version = { workspace = true }
+
+[dependencies]
+serde = "1.0.100"
+`
+	niu := `
+[package]
+name = "member"
+version = { workspace = true }
+
+[dependencies]
+serde = "1.0.200"
+added = "0.1.0"
+local = { path = "../local" }
+`
+	res := detectChanges([]detectPair{{path: "Cargo.toml", old: write("old.toml", old), new: write("new.toml", niu)}})
+	if findChange(res.Changed, "serde", "1.0.100", "1.0.200") == nil {
+		t.Errorf("inherited-version bump missed: %+v", res.Changed)
+	}
+	if len(res.Added) != 1 || res.Added[0].Name != "added" || res.Added[0].To != "0.1.0" {
+		t.Errorf("inherited-version addition missed: %+v", res.Added)
+	}
+	if len(res.Redirects) != 1 || res.Redirects[0].Name != "local" || res.Redirects[0].Target != "path=../local" {
+		t.Errorf("inherited-version redirect missed: %+v", res.Redirects)
+	}
 }
 
 // TestDetectReadPairsRejectsMalformed guards the stdin contract: exactly three

@@ -63,6 +63,10 @@ func (c *Cache) ArtifactPath(eco, name, version, ext string) string {
 	return filepath.Join(c.Root, "artifacts", eco, Component(name), Component(version)+ext)
 }
 
+func (c *Cache) LocalCrateDir() string {
+	return filepath.Join(c.Root, "artifacts", "local", "crates", "sha256")
+}
+
 func (c *Cache) WorkspacePath(eco, name, from, to string) string {
 	return filepath.Join(c.Root, "workspaces", eco, Component(name), Component(from)+"--"+Component(to))
 }

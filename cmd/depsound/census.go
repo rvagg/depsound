@@ -319,9 +319,12 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 	}
 	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate", spec.GHA: ".tar.gz"}[sp.Eco]
 	art := c.ArtifactPath(string(sp.Eco), sp.Name, artKey, ext)
+	var localArtifact *fetch.LocalCrateEvidence
 	if artifactPath != "" {
-		art = c.ArtifactPath(string(sp.Eco), sp.Name, v+"@local:"+artifactPath, ext)
-		err = fetch.LocalCrate(ctx, client, sp.Name, v, artifactPath, art)
+		localArtifact, err = fetch.LocalCrate(ctx, client, sp.Name, v, artifactPath, c.LocalCrateDir())
+		if err == nil {
+			art = localArtifact.Path
+		}
 	} else {
 		if _, err := os.Stat(art); err != nil {
 			fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", sp, v)
@@ -344,12 +347,16 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 		}
 		return nil, err
 	}
-	if m := fetch.ReadMeta(art); m != nil {
-		cen.Integrity = m.Verification
-		cen.Source = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
-		if artifactPath != "" {
-			artKey = v + "@" + m.Digest + "@" + m.URL + "@" + localCrateLabelVersion
-		}
+	var meta *fetch.Meta
+	if localArtifact != nil {
+		meta = &localArtifact.Meta
+		artKey = localCrateKey(v, *meta)
+	} else {
+		meta = fetch.ReadMeta(art)
+	}
+	if meta != nil {
+		cen.Integrity = meta.Verification
+		cen.Source = artifactSource(*meta)
 	}
 
 	// persist the tree so the agent can search it; re-extract only if the

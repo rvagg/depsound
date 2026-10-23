@@ -155,7 +155,16 @@ type artifactInputs struct {
 	to   string
 }
 
-const localCrateLabelVersion = "crate-label-v1"
+// The epoch gates local trees built with these import and identity checks.
+const localCrateEvidenceVersion = "crate-evidence-v2"
+
+func localCrateKey(version_ string, meta fetch.Meta) string {
+	return version_ + "@" + meta.Digest + "@" + meta.URL + "@" + localCrateEvidenceVersion
+}
+
+func artifactSource(meta fetch.Meta) *stats.Source {
+	return &stats.Source{URL: meta.URL, Digest: meta.Digest, Verification: meta.Verification}
+}
 
 // commonArgs parses the shared "<spec> <from> <to>" tail plus --cache-dir,
 // materializes the workspace, and returns it. extraFlags handles
@@ -280,7 +289,7 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 	if err != nil {
 		return nil, err
 	}
-	localArtifacts := map[string]string{}
+	localArtifacts := map[string]*fetch.LocalCrateEvidence{}
 	localKeys := map[string]string{}
 	for _, in := range []struct {
 		version string
@@ -289,16 +298,13 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 		if in.path == "" {
 			continue
 		}
-		dest := c.ArtifactPath(string(sp.Eco), sp.Name, in.version+"@local:"+in.path, ".crate")
-		if err := fetch.LocalCrate(context.Background(), &http.Client{}, sp.Name, in.version, in.path, dest); err != nil {
+		evidence, err := fetch.LocalCrate(context.Background(), &http.Client{},
+			sp.Name, in.version, in.path, c.LocalCrateDir())
+		if err != nil {
 			return nil, err
 		}
-		meta := fetch.ReadMeta(dest)
-		if meta == nil {
-			return nil, fmt.Errorf("local crate %q: integrity metadata missing", in.path)
-		}
-		localArtifacts[in.version] = dest
-		localKeys[in.version] = in.version + "@" + meta.Digest + "@" + meta.URL + "@" + localCrateLabelVersion
+		localArtifacts[in.version] = evidence
+		localKeys[in.version] = localCrateKey(in.version, evidence.Meta)
 	}
 	// the artifact is keyed on the repo (shared across sub-paths), but the
 	// workspace is scoped to the sub-path, so fold Sub into the workspace key
@@ -327,6 +333,12 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 		if st, err = materialize(c, sp, from, to, ws, ghaPins, localArtifacts); err != nil {
 			return nil, err
 		}
+	}
+	if local := localArtifacts[from]; local != nil {
+		st.Artifact.SourceFrom = artifactSource(local.Meta)
+	}
+	if local := localArtifacts[to]; local != nil {
+		st.Artifact.SourceTo = artifactSource(local.Meta)
 	}
 	if st.Artifact.Unavailable != nil {
 		st.Resolution = buildResolution(fromArg, fromRes, toArg, toRes)
@@ -555,7 +567,7 @@ func stampGHAPins(st *stats.Stats, from, to string, pins map[string]ghaPin) {
 	}
 }
 
-func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[string]ghaPin, localArtifacts map[string]string) (*stats.Stats, error) {
+func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[string]ghaPin, localArtifacts map[string]*fetch.LocalCrateEvidence) (*stats.Stats, error) {
 	ctx := context.Background()
 	// no total timeout: fetch applies a metadata deadline and a download
 	// stall watchdog, so slow links with big artifacts are never killed
@@ -566,11 +578,9 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 	arts := map[string]string{}
 	srcs := map[string]*stats.Source{}
 	for _, v := range []string{from, to} {
-		if local := localArtifacts[v]; local != "" {
-			arts[v] = local
-			if m := fetch.ReadMeta(local); m != nil {
-				srcs[v] = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
-			}
+		if local := localArtifacts[v]; local != nil {
+			arts[v] = local.Path
+			srcs[v] = artifactSource(local.Meta)
 			continue
 		}
 		// gha artifacts are keyed by resolved commit, not the (possibly
@@ -647,9 +657,9 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		if err != nil {
 			return nil, err
 		}
-		if localArtifacts[v] != "" && rep.Prefix != sp.Name+"-"+v {
+		if local := localArtifacts[v]; local != nil && rep.Prefix != sp.Name+"-"+v {
 			return nil, fmt.Errorf("local crate %q has archive root %q, want %q",
-				localArtifacts[v], rep.Prefix, sp.Name+"-"+v)
+				local.Path, rep.Prefix, sp.Name+"-"+v)
 		}
 		for _, l := range rep.SkippedLinks {
 			skippedLinks = append(skippedLinks, sub+": "+l)
@@ -731,15 +741,15 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 			return nil, fmt.Errorf("new tree: %w", err)
 		}
 		for _, local := range []struct {
-			path    string
-			crate   *cratepkg.Crate
-			version string
+			evidence *fetch.LocalCrateEvidence
+			crate    *cratepkg.Crate
+			version  string
 		}{
 			{localArtifacts[from], input.OldCrate, from},
 			{localArtifacts[to], input.NewCrate, to},
 		} {
-			if local.path != "" {
-				if err := validateLocalCrateLabel(local.path, local.crate, sp.Name, local.version); err != nil {
+			if local.evidence != nil {
+				if err := validateLocalCrateLabel(local.evidence.Path, local.crate, sp.Name, local.version); err != nil {
 					return nil, err
 				}
 			}

@@ -67,66 +67,91 @@ func Crate(ctx context.Context, client *http.Client, name, version_, dest string
 	return writeMeta(dest, Meta{URL: u, Digest: "sha256-" + cksum, Verification: VerifyRegistry256})
 }
 
+// LocalCrateEvidence records a local archive import. Its metadata belongs to
+// this import rather than the content-addressed archive, which can be shared
+// by imports from distinct origins.
+type LocalCrateEvidence struct {
+	Path string
+	Meta Meta
+}
+
 // LocalCrate imports a caller-supplied quarantined archive as inert evidence.
 // Its sha256 is always recorded. When crates.io's sparse index still carries
 // the version checksum, a mismatch aborts and a match is recorded separately
-// from ordinary registry acquisition.
-func LocalCrate(ctx context.Context, client *http.Client, name, version_, src, dest string) error {
+// from ordinary registry acquisition. dir stores immutable archive bytes by
+// their full SHA-256 digest.
+func LocalCrate(ctx context.Context, client *http.Client, name, version_, src, dir string) (*LocalCrateEvidence, error) {
 	if !validCrateName(name) {
-		return fmt.Errorf("crates:%s: invalid crate name (allowed: letters, digits, - _)", name)
+		return nil, fmt.Errorf("crates:%s: invalid crate name (allowed: letters, digits, - _)", name)
 	}
 	resolved, err := filepath.EvalSymlinks(src)
 	if err != nil {
-		return fmt.Errorf("local crate %q: %w", src, err)
+		return nil, fmt.Errorf("local crate %q: %w", src, err)
 	}
 	resolved, err = filepath.Abs(resolved)
 	if err != nil {
-		return fmt.Errorf("local crate %q: %w", src, err)
+		return nil, fmt.Errorf("local crate %q: %w", src, err)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return fmt.Errorf("local crate %q: %w", src, err)
+		return nil, fmt.Errorf("local crate %q: %w", src, err)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("local crate %q is not a regular file", src)
+		return nil, fmt.Errorf("local crate %q is not a regular file", src)
 	}
 	if info.Size() > maxArtifactBytes {
-		return fmt.Errorf("local crate %q exceeds the %d byte artifact ceiling", src, int64(maxArtifactBytes))
+		return nil, fmt.Errorf("local crate %q exceeds the %d byte artifact ceiling", src, int64(maxArtifactBytes))
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
 	}
 	in, err := os.Open(resolved)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer in.Close()
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".local-crate-*")
+	tmp, err := os.CreateTemp(dir, ".local-crate-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer os.Remove(tmp.Name())
 	hash := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, hash), capped(in)); err != nil {
 		tmp.Close()
-		return fmt.Errorf("local crate %q: %w", src, err)
+		return nil, fmt.Errorf("local crate %q: %w", src, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	digest := "sha256-" + hex.EncodeToString(hash.Sum(nil))
 	verification := VerifyLocalSHA256
 	if expected, err := indexChecksum(ctx, client, name, version_); err == nil && expected != "" {
 		if digest != "sha256-"+expected {
-			return fmt.Errorf("local crate %q: sha256 mismatch against crates.io index checksum for %s@%s", src, name, version_)
+			return nil, fmt.Errorf("local crate %q: sha256 mismatch against crates.io index checksum for %s@%s", src, name, version_)
 		}
 		verification = VerifyLocalRegistry256
 	}
-	if err := os.Rename(tmp.Name(), dest); err != nil {
-		return err
+	path := filepath.Join(dir, strings.TrimPrefix(digest, "sha256-"))
+	if err := publishLocalCrate(tmp.Name(), path, digest); err != nil {
+		return nil, err
 	}
 	origin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(resolved)}).String()
-	return writeMeta(dest, Meta{URL: origin, Digest: digest, Verification: verification})
+	return &LocalCrateEvidence{
+		Path: path,
+		Meta: Meta{URL: origin, Digest: digest, Verification: verification},
+	}, nil
+}
+
+func publishLocalCrate(tmp, path, digest string) error {
+	if err := os.Link(tmp, path); err == nil {
+		return nil
+	} else if !os.IsExist(err) {
+		return err
+	}
+	if !verifyCrate(path, digest) {
+		return fmt.Errorf("local crate cache %q does not match digest %s", path, digest)
+	}
+	return nil
 }
 
 // indexChecksum reads the sparse-index file for a crate and returns the

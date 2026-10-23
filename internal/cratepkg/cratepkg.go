@@ -1,6 +1,7 @@
 package cratepkg
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -40,10 +41,10 @@ type Crate struct {
 type rawManifest struct {
 	Package struct {
 		Name        string `toml:"name"`
-		Version     string `toml:"version"`
-		Edition     any    `toml:"edition"` // string, or {workspace=true}
-		RustVersion string `toml:"rust-version"`
-		Build       any    `toml:"build"` // a custom script PATH (string), or false to disable
+		Version     any    `toml:"version"`      // string, or {workspace=true}
+		Edition     any    `toml:"edition"`      // string, or {workspace=true}
+		RustVersion any    `toml:"rust-version"` // string, or {workspace=true}
+		Build       any    `toml:"build"`        // a custom script PATH (string), or false to disable
 	} `toml:"package"`
 	Lib struct {
 		ProcMacro bool `toml:"proc-macro"`
@@ -70,29 +71,45 @@ func Load(dir string) (*Crate, error) {
 			"; every published crate must ship one, so this artifact is anomalous, treat with suspicion")
 		return c, nil
 	}
-	return parseInto(c, dir, b), nil
+	if err := parseInto(c, dir, b); err != nil {
+		c.Warnings = append(c.Warnings, "Cargo.toml present but unparseable, ignored (treat manifest-derived fields as unknown): "+err.Error())
+	}
+	return c, nil
 }
 
 // Parse reads Cargo.toml bytes (Load's file-free form, for callers holding a
 // manifest that is not on disk, e.g. detect's git-blob pairs). Build-script
 // paths cannot be resolved without a tree, so BuildScript stays empty.
 func Parse(b []byte) (*Crate, error) {
-	return parseInto(&Crate{Features: map[string][]string{}}, "", b), nil
+	c := &Crate{Features: map[string][]string{}}
+	if err := parseInto(c, "", b); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
-func parseInto(c *Crate, dir string, b []byte) *Crate {
+func parseInto(c *Crate, dir string, b []byte) error {
 	var raw rawManifest
 	md, err := toml.Decode(string(b), &raw)
 	if err != nil {
-		// Parses-not: either a format we don't understand or a crafted
-		// manifest; either way we cannot vouch for its contents.
-		c.Warnings = append(c.Warnings, "Cargo.toml present but unparseable, ignored (treat manifest-derived fields as unknown): "+err.Error())
-		return c
+		return err
+	}
+	deps, err := renderDeps(md, raw.Dependencies)
+	if err != nil {
+		return err
+	}
+	devDeps, err := renderDeps(md, raw.DevDeps)
+	if err != nil {
+		return err
+	}
+	buildDeps, err := renderDeps(md, raw.BuildDeps)
+	if err != nil {
+		return err
 	}
 	c.Name = raw.Package.Name
-	c.Version = raw.Package.Version
-	c.Edition = editionString(raw.Package.Edition)
-	c.RustVersion = raw.Package.RustVersion
+	c.Version = packageString(raw.Package.Version)
+	c.Edition = packageString(raw.Package.Edition)
+	c.RustVersion = packageString(raw.Package.RustVersion)
 	c.ProcMacro = raw.Lib.ProcMacro
 	c.BuildScript = resolveBuildScript(dir, raw.Package.Build)
 	if c.BuildScript != "" && (path.IsAbs(c.BuildScript) || strings.HasPrefix(c.BuildScript, "..")) {
@@ -101,13 +118,13 @@ func parseInto(c *Crate, dir string, b []byte) *Crate {
 	if raw.Features != nil {
 		c.Features = raw.Features
 	}
-	c.Deps = renderDeps(md, raw.Dependencies)
-	c.DevDeps = renderDeps(md, raw.DevDeps)
-	c.BuildDeps = renderDeps(md, raw.BuildDeps)
-	return c
+	c.Deps = deps
+	c.DevDeps = devDeps
+	c.BuildDeps = buildDeps
+	return nil
 }
 
-func editionString(v any) string {
+func packageString(v any) string {
 	switch e := v.(type) {
 	case string:
 		return e
@@ -119,8 +136,10 @@ func editionString(v any) string {
 // renderDeps flattens each dependency to a comparable string. A table dep
 // renders its version plus any non-registry source (path/git) and a
 // `package =` rename, both of which are review-relevant.
-func renderDeps(md toml.MetaData, deps map[string]toml.Primitive) map[string]string {
+func renderDeps(md toml.MetaData, deps map[string]toml.Primitive) (map[string]string, error) {
 	out := map[string]string{}
+	var invalidName string
+	var invalidErr error
 	for name, prim := range deps {
 		var s string
 		if md.PrimitiveDecode(prim, &s) == nil {
@@ -133,8 +152,10 @@ func renderDeps(md toml.MetaData, deps map[string]toml.Primitive) map[string]str
 			Git     string `toml:"git"`
 			Package string `toml:"package"`
 		}
-		if md.PrimitiveDecode(prim, &t) != nil {
-			out[name] = "?"
+		if err := md.PrimitiveDecode(prim, &t); err != nil {
+			if invalidErr == nil || name < invalidName {
+				invalidName, invalidErr = name, err
+			}
 			continue
 		}
 		parts := []string{}
@@ -152,7 +173,10 @@ func renderDeps(md toml.MetaData, deps map[string]toml.Primitive) map[string]str
 		}
 		out[name] = strings.Join(parts, " ")
 	}
-	return out
+	if invalidErr != nil {
+		return nil, fmt.Errorf("dependency %q has an unsupported declaration: %w", invalidName, invalidErr)
+	}
+	return out, nil
 }
 
 // ConstraintsDelta reports forced-adjacency changes: edition and MSRV

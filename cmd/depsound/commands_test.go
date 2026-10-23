@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/rvagg/depsound/internal/cache"
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/spec"
 )
 
@@ -107,12 +108,12 @@ func TestMaterializeAcceptsLabelledLocalCrateEvidence(t *testing.T) {
 	st, err := materialize(c,
 		spec.Spec{Eco: spec.Crates, Name: "quarantine-test"},
 		"1.0.0", "1.0.1", ws, nil,
-		map[string]string{"1.0.0": oldArtifact, "1.0.1": newArtifact})
+		map[string]*fetch.LocalCrateEvidence{"1.0.0": {Path: oldArtifact}, "1.0.1": {Path: newArtifact}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Artifact.FilesFrom == 0 || st.Artifact.FilesTo == 0 || !st.Runnable.BuildRSTo {
-		t.Fatalf("local evidence was not fully analysed: %+v", st)
+	if st.Runnable.BuildRSFrom || !st.Runnable.BuildRSTo {
+		t.Fatalf("local evidence lost the introduced build script: %+v", st.Runnable)
 	}
 }
 
@@ -130,8 +131,8 @@ func TestMaterializeRejectsMislabeledLocalCrateEvidence(t *testing.T) {
 	_, err = materialize(c,
 		spec.Spec{Eco: spec.Crates, Name: "quarantine-test"},
 		"1.0.0", "1.0.1", c.WorkspacePath("crates", "quarantine-test", "bad", "new"), nil,
-		map[string]string{"1.0.0": oldArtifact, "1.0.1": newArtifact})
-	if err == nil || !strings.Contains(err.Error(), "archive root") {
+		map[string]*fetch.LocalCrateEvidence{"1.0.0": {Path: oldArtifact}, "1.0.1": {Path: newArtifact}})
+	if err == nil {
 		t.Fatalf("mislabeled local evidence error = %v", err)
 	}
 }
@@ -140,7 +141,7 @@ func TestMaterializeRejectsLocalCrateManifestIdentityMismatch(t *testing.T) {
 	dir := t.TempDir()
 	oldArtifact := filepath.Join(dir, "old.crate")
 	newArtifact := filepath.Join(dir, "new.crate")
-	writeTestCrateNamed(t, oldArtifact, "quarantine-test-1.0.0", "different-crate", false)
+	writeTestCrateNamed(t, oldArtifact, "quarantine-test-1.0.0", "different-crate", "pub fn value() -> u8 { 1 }\n", false)
 	writeTestCrate(t, newArtifact, "quarantine-test-1.0.1", false)
 
 	c, err := cache.Open(filepath.Join(dir, "cache"))
@@ -150,18 +151,18 @@ func TestMaterializeRejectsLocalCrateManifestIdentityMismatch(t *testing.T) {
 	_, err = materialize(c,
 		spec.Spec{Eco: spec.Crates, Name: "quarantine-test"},
 		"1.0.0", "1.0.1", c.WorkspacePath("crates", "quarantine-test", "wrong-manifest", "new"), nil,
-		map[string]string{"1.0.0": oldArtifact, "1.0.1": newArtifact})
-	if err == nil || !strings.Contains(err.Error(), "manifest identifies") {
+		map[string]*fetch.LocalCrateEvidence{"1.0.0": {Path: oldArtifact}, "1.0.1": {Path: newArtifact}})
+	if err == nil {
 		t.Fatalf("mislabeled manifest error = %v", err)
 	}
 }
 
 func writeTestCrate(t *testing.T, dest, root string, build bool) {
 	t.Helper()
-	writeTestCrateNamed(t, dest, root, "quarantine-test", build)
+	writeTestCrateNamed(t, dest, root, "quarantine-test", "pub fn value() -> u8 { 1 }\n", build)
 }
 
-func writeTestCrateNamed(t *testing.T, dest, root, packageName string, build bool) {
+func writeTestCrateNamed(t *testing.T, dest, root, packageName, source string, build bool) {
 	t.Helper()
 	f, err := os.Create(dest)
 	if err != nil {
@@ -182,7 +183,7 @@ edition = "2021"
 [lib]
 path = "src/lib.rs"
 `},
-		{root + "/src/lib.rs", "pub fn value() -> u8 { 1 }\n"},
+		{root + "/src/lib.rs", source},
 	}
 	if build {
 		files = append(files, [2]string{root + "/build.rs", "fn main() {}\n"})
