@@ -36,6 +36,18 @@ type Resolution struct {
 	ToNewer  []string `json:"toNewer,omitempty"`  // satisfying versions newer than the resolved to
 }
 
+// Unavailable records a failed artifact acquisition without collapsing the
+// rest of the report. Metadata and advisory collection can still complete;
+// package contents cannot.
+type Unavailable struct {
+	Side    string `json:"side,omitempty"` // from | to; empty for a census
+	Version string `json:"version"`
+	Kind    string `json:"kind"` // absent | denied | transient
+	Status  int    `json:"status,omitempty"`
+	URL     string `json:"url"`
+	Hint    string `json:"hint,omitempty"`
+}
+
 type Stats struct {
 	Tool         Tool                 `json:"tool"`
 	Package      PkgRef               `json:"package"`
@@ -104,8 +116,9 @@ type Artifact struct {
 	// byte names, skipped at extraction; their presence is a loud signal.
 	HostileEntries []string `json:"hostileEntries,omitempty"`
 	// Source provenance makes a report reproducible from the JSON alone.
-	SourceFrom *Source `json:"sourceFrom,omitempty"`
-	SourceTo   *Source `json:"sourceTo,omitempty"`
+	SourceFrom  *Source      `json:"sourceFrom,omitempty"`
+	SourceTo    *Source      `json:"sourceTo,omitempty"`
+	Unavailable *Unavailable `json:"unavailable,omitempty"`
 }
 
 type Source struct {

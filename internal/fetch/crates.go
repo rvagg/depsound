@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,11 +38,17 @@ func Crate(ctx context.Context, client *http.Client, name, version_, dest string
 		}
 	}
 
+	u := fmt.Sprintf("%s/%s/%s-%s.crate", cratesDL, name, name, version_)
 	cksum, err := indexChecksum(ctx, client, name, version_)
 	if err != nil {
 		return fmt.Errorf("crates:%s@%s: %w", name, version_, err)
 	}
-	u := fmt.Sprintf("%s/%s/%s-%s.crate", cratesDL, name, name, version_)
+	if cksum == "" {
+		return &RegistryMissing{
+			URL:  u,
+			Hint: fmt.Sprintf("version %s is absent from the crates.io sparse index, so no registry checksum remains; artifact contents were not inspected", version_),
+		}
+	}
 	tmp, err := fetchToTemp(ctx, client, u, filepath.Dir(dest))
 	if err != nil {
 		return fmt.Errorf("crates:%s@%s: %w", name, version_, err)
@@ -58,6 +65,68 @@ func Crate(ctx context.Context, client *http.Client, name, version_, dest string
 		return err
 	}
 	return writeMeta(dest, Meta{URL: u, Digest: "sha256-" + cksum, Verification: VerifyRegistry256})
+}
+
+// LocalCrate imports a caller-supplied quarantined archive as inert evidence.
+// Its sha256 is always recorded. When crates.io's sparse index still carries
+// the version checksum, a mismatch aborts and a match is recorded separately
+// from ordinary registry acquisition.
+func LocalCrate(ctx context.Context, client *http.Client, name, version_, src, dest string) error {
+	if !validCrateName(name) {
+		return fmt.Errorf("crates:%s: invalid crate name (allowed: letters, digits, - _)", name)
+	}
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return fmt.Errorf("local crate %q: %w", src, err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("local crate %q: %w", src, err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("local crate %q: %w", src, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("local crate %q is not a regular file", src)
+	}
+	if info.Size() > maxArtifactBytes {
+		return fmt.Errorf("local crate %q exceeds the %d byte artifact ceiling", src, int64(maxArtifactBytes))
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(resolved)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(dest), ".local-crate-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hash), capped(in)); err != nil {
+		tmp.Close()
+		return fmt.Errorf("local crate %q: %w", src, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	digest := "sha256-" + hex.EncodeToString(hash.Sum(nil))
+	verification := VerifyLocalSHA256
+	if expected, err := indexChecksum(ctx, client, name, version_); err == nil && expected != "" {
+		if digest != "sha256-"+expected {
+			return fmt.Errorf("local crate %q: sha256 mismatch against crates.io index checksum for %s@%s", src, name, version_)
+		}
+		verification = VerifyLocalRegistry256
+	}
+	if err := os.Rename(tmp.Name(), dest); err != nil {
+		return err
+	}
+	origin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(resolved)}).String()
+	return writeMeta(dest, Meta{URL: origin, Digest: digest, Verification: verification})
 }
 
 // indexChecksum reads the sparse-index file for a crate and returns the
@@ -91,7 +160,7 @@ func indexChecksum(ctx context.Context, client *http.Client, name, version_ stri
 			return e.Cksum, nil
 		}
 	}
-	return "", fmt.Errorf("version %s not found in crates.io index", version_)
+	return "", nil
 }
 
 func indexPath(name string) string {

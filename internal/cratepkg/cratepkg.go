@@ -17,6 +17,8 @@ import (
 // diffing; Cargo.toml.orig carries author intent but we read the
 // normalized one for semantics.
 type Crate struct {
+	Name        string
+	Version     string
 	Edition     string
 	RustVersion string
 	ProcMacro   bool
@@ -37,6 +39,8 @@ type Crate struct {
 // either a bare version string or a table with version/path/git/package.
 type rawManifest struct {
 	Package struct {
+		Name        string `toml:"name"`
+		Version     string `toml:"version"`
 		Edition     any    `toml:"edition"` // string, or {workspace=true}
 		RustVersion string `toml:"rust-version"`
 		Build       any    `toml:"build"` // a custom script PATH (string), or false to disable
@@ -85,6 +89,8 @@ func parseInto(c *Crate, dir string, b []byte) *Crate {
 		c.Warnings = append(c.Warnings, "Cargo.toml present but unparseable, ignored (treat manifest-derived fields as unknown): "+err.Error())
 		return c
 	}
+	c.Name = raw.Package.Name
+	c.Version = raw.Package.Version
 	c.Edition = editionString(raw.Package.Edition)
 	c.RustVersion = raw.Package.RustVersion
 	c.ProcMacro = raw.Lib.ProcMacro

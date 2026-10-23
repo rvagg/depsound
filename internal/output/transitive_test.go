@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/rvagg/depsound/internal/stats"
 )
 
 // A projected subtree is deps.dev's isolated resolve of the dep's own tree,
@@ -70,6 +72,36 @@ func TestTransitiveAddedNodeCarriesCensus(t *testing.T) {
 	for _, want := range []string{`"analysis":`, `"buildRs":true`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("JSON missing %s: %s", want, raw)
+		}
+	}
+}
+
+func TestTransitiveProjectionGapKeepsRootAnalysis(t *testing.T) {
+	result := TransitiveResult{
+		Ecosystem:     "crates",
+		Projected:     "arrayref",
+		Flat:          true,
+		ProjectionGap: "deps.dev has not resolved cargo:arrayref@0.3.10",
+		Changed: []BulkResult{{
+			Ref: "crates:arrayref 0.3.9 -> 0.3.10",
+			Stats: &stats.Stats{
+				Package: stats.PkgRef{Ecosystem: "crates", Name: "arrayref", From: "0.3.9", To: "0.3.10"},
+				Artifact: stats.Artifact{Unavailable: &stats.Unavailable{
+					Side: "to", Version: "0.3.10", Kind: "absent", URL: "https://example.invalid/arrayref.crate",
+				}},
+				Security: stats.Security{Queried: true},
+			},
+		}},
+	}
+	out := Transitive(result)
+	for _, want := range []string{"subtree projection unavailable", "root bump is still analysed", "artifact unavailable"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("projection gap missing %q:\n%s", want, out)
+		}
+	}
+	for _, falseClaim := range []string{"upper bound on what it adds", "whole resolved set"} {
+		if strings.Contains(out, falseClaim) {
+			t.Errorf("projection gap falsely claims %q:\n%s", falseClaim, out)
 		}
 	}
 }

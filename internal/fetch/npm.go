@@ -81,11 +81,13 @@ func NPM(ctx context.Context, client *http.Client, name, version, dest string) e
 // resting on TLS trust alone; the "tls-only" prefix is what stats keys
 // its degradation note on.
 const (
-	VerifySumDB       = "sumdb-lookup"
-	VerifyRegistry512 = "registry-sha512"
-	VerifyRegistry256 = "registry-sha256"
-	VerifyTLSOnly     = "tls-only"
-	VerifyTLSOnlySHA1 = "tls-only-sha1"
+	VerifySumDB            = "sumdb-lookup"
+	VerifyRegistry512      = "registry-sha512"
+	VerifyRegistry256      = "registry-sha256"
+	VerifyTLSOnly          = "tls-only"
+	VerifyTLSOnlySHA1      = "tls-only-sha1"
+	VerifyLocalSHA256      = "local-sha256"
+	VerifyLocalRegistry256 = "local-registry-sha256"
 )
 
 // Meta is the provenance sidecar stored beside each cached artifact so

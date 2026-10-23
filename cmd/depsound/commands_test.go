@@ -1,8 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/cache"
 	"github.com/rvagg/depsound/internal/spec"
 )
 
@@ -83,5 +89,120 @@ func TestHelpRouting(t *testing.T) {
 	}
 	if hasHelpFlag([]string{"transitive", "--old=x"}) {
 		t.Error("hasHelpFlag matched a non-help flag")
+	}
+}
+
+func TestMaterializeAcceptsLabelledLocalCrateEvidence(t *testing.T) {
+	dir := t.TempDir()
+	oldArtifact := filepath.Join(dir, "old.crate")
+	newArtifact := filepath.Join(dir, "new.crate")
+	writeTestCrate(t, oldArtifact, "quarantine-test-1.0.0", false)
+	writeTestCrate(t, newArtifact, "quarantine-test-1.0.1", true)
+
+	c, err := cache.Open(filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := c.WorkspacePath("crates", "quarantine-test", "old-local", "new-local")
+	st, err := materialize(c,
+		spec.Spec{Eco: spec.Crates, Name: "quarantine-test"},
+		"1.0.0", "1.0.1", ws, nil,
+		map[string]string{"1.0.0": oldArtifact, "1.0.1": newArtifact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Artifact.FilesFrom == 0 || st.Artifact.FilesTo == 0 || !st.Runnable.BuildRSTo {
+		t.Fatalf("local evidence was not fully analysed: %+v", st)
+	}
+}
+
+func TestMaterializeRejectsMislabeledLocalCrateEvidence(t *testing.T) {
+	dir := t.TempDir()
+	oldArtifact := filepath.Join(dir, "old.crate")
+	newArtifact := filepath.Join(dir, "new.crate")
+	writeTestCrate(t, oldArtifact, "wrong-name-1.0.0", false)
+	writeTestCrate(t, newArtifact, "quarantine-test-1.0.1", false)
+
+	c, err := cache.Open(filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = materialize(c,
+		spec.Spec{Eco: spec.Crates, Name: "quarantine-test"},
+		"1.0.0", "1.0.1", c.WorkspacePath("crates", "quarantine-test", "bad", "new"), nil,
+		map[string]string{"1.0.0": oldArtifact, "1.0.1": newArtifact})
+	if err == nil || !strings.Contains(err.Error(), "archive root") {
+		t.Fatalf("mislabeled local evidence error = %v", err)
+	}
+}
+
+func TestMaterializeRejectsLocalCrateManifestIdentityMismatch(t *testing.T) {
+	dir := t.TempDir()
+	oldArtifact := filepath.Join(dir, "old.crate")
+	newArtifact := filepath.Join(dir, "new.crate")
+	writeTestCrateNamed(t, oldArtifact, "quarantine-test-1.0.0", "different-crate", false)
+	writeTestCrate(t, newArtifact, "quarantine-test-1.0.1", false)
+
+	c, err := cache.Open(filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = materialize(c,
+		spec.Spec{Eco: spec.Crates, Name: "quarantine-test"},
+		"1.0.0", "1.0.1", c.WorkspacePath("crates", "quarantine-test", "wrong-manifest", "new"), nil,
+		map[string]string{"1.0.0": oldArtifact, "1.0.1": newArtifact})
+	if err == nil || !strings.Contains(err.Error(), "manifest identifies") {
+		t.Fatalf("mislabeled manifest error = %v", err)
+	}
+}
+
+func writeTestCrate(t *testing.T, dest, root string, build bool) {
+	t.Helper()
+	writeTestCrateNamed(t, dest, root, "quarantine-test", build)
+}
+
+func writeTestCrateNamed(t *testing.T, dest, root, packageName string, build bool) {
+	t.Helper()
+	f, err := os.Create(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	buildLine := ""
+	if build {
+		buildLine = "build = \"build.rs\"\n"
+	}
+	files := [][2]string{
+		{root + "/Cargo.toml", `[package]
+name = "` + packageName + `"
+version = "` + strings.TrimPrefix(root, "quarantine-test-") + `"
+edition = "2021"
+` + buildLine + `
+[lib]
+path = "src/lib.rs"
+`},
+		{root + "/src/lib.rs", "pub fn value() -> u8 { 1 }\n"},
+	}
+	if build {
+		files = append(files, [2]string{root + "/build.rs", "fn main() {}\n"})
+	}
+	for _, file := range files {
+		name, body := file[0], file[1]
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

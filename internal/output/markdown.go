@@ -251,17 +251,42 @@ const maxDigestRows = 10
 // out of the rows. It is scoped by what is actually in the set, so a GitHub
 // Actions PR is not told about import reachability.
 func coverageLine(results []BulkResult, rows []ledgerRow) string {
-	gha, pkg := false, false
+	gha, pkg, artifact, unavailable := false, false, false, false
 	for _, r := range results {
 		switch {
-		case r.Stats != nil && r.Stats.Action != nil:
-			gha = true
-		case r.Stats != nil || r.Census != nil:
-			pkg = true
+		case r.Stats != nil:
+			if r.Stats.Artifact.Unavailable != nil {
+				unavailable = true
+			} else {
+				artifact = true
+				if r.Stats.Package.Ecosystem == "gha" {
+					gha = true
+				} else {
+					pkg = true
+				}
+			}
+		case r.Census != nil:
+			if r.Census.Unavailable != nil {
+				unavailable = true
+			} else {
+				artifact = true
+				if r.Census.Ecosystem == "gha" {
+					gha = true
+				} else {
+					pkg = true
+				}
+			}
 		}
 	}
-	checked := []string{"the published artifact diff"}
+	var checked []string
 	notChecked := []string{"runtime behaviour", "intent (an obfuscated payload reads as ordinary code)"}
+	if artifact {
+		checked = append(checked, "the published artifact diff")
+	}
+	if unavailable {
+		checked = append(checked, "artifact acquisition status")
+		notChecked = append(notChecked, "the unavailable artifact contents")
+	}
 	if gha {
 		checked = append(checked, "pin grade", "execution model", "runner capability references (grep, evadable)")
 		notChecked = append(notChecked, "the permissions, secrets and trigger at each callsite", "self-hosted runner reach")

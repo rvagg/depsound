@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
 	"github.com/rvagg/depsound/internal/provenance"
@@ -207,6 +206,9 @@ func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.
 		c.Vulns, c.OSVFetchedAt, c.OSVQueried, c.OSVNote = osv.Present(context.Background(), &http.Client{},
 			censusCacheRoot(cacheDir), c.Ecosystem, c.Name, c.Version)
 	}
+	if c.Unavailable != nil {
+		c.Provenance = provenance.Assess(context.Background(), c.Ecosystem, c.Name, c.Version, "")
+	}
 	c.Coverage, c.NextActions = output.CensusGuide(c)
 	return c, nil
 }
@@ -216,10 +218,8 @@ func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.
 // so a taken-down artifact reads as a distinct fact rather than an opaque
 // error; anything else stays a generic analysis failure.
 func bulkFail(ref string, err error) output.BulkResult {
-	if he, ok := errors.AsType[*fetch.HTTPError](err); ok {
-		return output.BulkResult{Ref: ref, Unavailable: &output.Unavailable{
-			Kind: he.Kind(), Status: he.Status, URL: he.URL, Hint: he.Hint,
-		}}
+	if unavailable := reportUnavailable(err, "", ""); unavailable != nil {
+		return output.BulkResult{Ref: ref, Unavailable: unavailable}
 	}
 	if sre, ok := errors.AsType[*sameResolvedError](err); ok {
 		return output.BulkResult{Ref: ref, Note: sre.Error()}
@@ -275,7 +275,7 @@ func runBulk(cacheDir string, items []bulkItem, noOSV, noProv bool, cooldown tim
 			}
 			// provenance deltas vs the prior version (the account-takeover shape);
 			// Assess is a no-op for ecosystems deps.dev does not cover
-			if !noProv {
+			if !noProv || r.st.Artifact.Unavailable != nil {
 				r.st.Provenance = provenance.Assess(context.Background(),
 					r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.To, r.st.Package.From)
 			}

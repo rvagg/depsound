@@ -38,13 +38,29 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 	}
 
 	fmt.Fprintf(os.Stderr, "depsound: projecting %s:%s %s -> %s via deps.dev\n", sp.Eco, sp.Name, from, to)
-	oldG, err := depsdev.Resolve(ctx, client, system, sp.Name, from)
-	if err != nil {
-		return projectionGap(err, sp, to)
-	}
-	newG, err := depsdev.Resolve(ctx, client, system, sp.Name, to)
-	if err != nil {
-		return projectionGap(err, sp, to)
+	oldG, oldErr := depsdev.Resolve(ctx, client, system, sp.Name, from)
+	newG, newErr := depsdev.Resolve(ctx, client, system, sp.Name, to)
+	if oldErr != nil || newErr != nil {
+		gap := oldErr
+		if gap == nil {
+			gap = newErr
+		}
+		tr := output.TransitiveResult{
+			Ecosystem:     string(sp.Eco),
+			Projected:     sp.Name,
+			Flat:          true,
+			ProjectionGap: gap.Error(),
+			Changed: runBulk(cacheDir, []bulkItem{{
+				spec: string(sp.Eco) + ":" + sp.Name, from: from, to: to,
+			}}, noOSV, false, cooldown),
+		}
+		if format == "json" {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(tr)
+		}
+		fmt.Print(output.Transitive(tr))
+		return nil
 	}
 
 	res := diffResolved(nodesToResolved(oldG.Deps), nodesToResolved(newG.Deps))
@@ -78,14 +94,6 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 	}
 	fmt.Print(output.Transitive(tr))
 	return nil
-}
-
-// projectionGap turns a missing endpoint graph into a route rather than a
-// dead end: a delta needs both endpoints, but the new version's whole
-// footprint and the exact lockfile route are still open.
-func projectionGap(err error, sp spec.Spec, to string) error {
-	return fmt.Errorf("%w\n  a projected delta needs a resolved graph at both endpoints; still available:\n    depsound %s:%s %s --transitive   (the new version's whole footprint, no delta)\n    a lockfile pair for the exact delta -> depsound guide, \"No lockfile?\"",
-		err, sp.Eco, sp.Name, to)
 }
 
 // resolvePair resolves two version args (each may be a range or "latest") to

@@ -36,6 +36,9 @@ type TransitiveResult struct {
 	// than diffed from a lockfile pair: set only in the no-lockfile mode, and
 	// the renderer scopes trust on it.
 	Projected string `json:"projected,omitempty"`
+	// ProjectionGap records why deps.dev could not resolve one endpoint.
+	// Changed still carries the root bump's artifact/advisory/metadata report.
+	ProjectionGap string `json:"projectionGap,omitempty"`
 	// Flat marks a set with no direct/indirect distinction the consumer can
 	// use: Cargo.lock does not carry one, and a projected subtree's is
 	// relative to the dep, not to you. Suppressed rather than faked.
@@ -71,6 +74,11 @@ func Transitive(t TransitiveResult) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
 	switch {
+	case t.ProjectionGap != "":
+		w("depsound transitive %s: subtree projection unavailable.", t.label())
+		w("  deps.dev did not supply both endpoint graphs: %s", taint(t.ProjectionGap))
+		w("  the root bump is still analysed below; no transitive additions/removals are claimed.")
+		w("  For the exact subtree, diff a lockfile pair -> depsound guide, \"No lockfile?\".")
 	case t.Projected != "":
 		w("depsound transitive %s: %d version-change(s), %d added, %d removed.",
 			t.label(), len(t.Changed), len(t.Added), len(t.Removed))

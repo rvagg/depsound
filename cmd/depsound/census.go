@@ -31,7 +31,7 @@ import (
 // censusCmd vets a SINGLE version in absolute terms: "what am I signing up
 // for if I adopt this". No diff; from=none. The vet-a-virgin-dep mode.
 func censusCmd(args []string) error {
-	cacheDir, format, against := "", "stats", ""
+	cacheDir, format, against, artifactPath := "", "stats", "", ""
 	noOSV, transitive, prov := false, false, true // provenance on by default
 	var cooldown time.Duration
 	var pos []string
@@ -43,6 +43,11 @@ func censusCmd(args []string) error {
 			format = strings.TrimPrefix(a, "--format=")
 		case strings.HasPrefix(a, "--against="):
 			against = strings.TrimPrefix(a, "--against=")
+		case strings.HasPrefix(a, "--artifact="):
+			artifactPath = strings.TrimPrefix(a, "--artifact=")
+			if artifactPath == "" {
+				return fmt.Errorf("--artifact needs a .crate path")
+			}
 		case strings.HasPrefix(a, "--cooldown="):
 			d, err := parseCooldown(strings.TrimPrefix(a, "--cooldown="))
 			if err != nil {
@@ -73,7 +78,7 @@ func censusCmd(args []string) error {
 		return fmt.Errorf("census: want <ecosystem>:<name> [version]  (version defaults to latest)")
 	}
 
-	c, err := buildCensus(cacheDir, pos[0], pos[1], cooldown)
+	c, err := buildCensusWithArtifact(cacheDir, pos[0], pos[1], cooldown, artifactPath)
 	if err != nil {
 		return err
 	}
@@ -244,9 +249,24 @@ func censusCacheRoot(cacheDir string) string {
 // workspace), and computes its absolute signals. OSV is merged by the
 // caller.
 func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (*output.Census, error) {
+	return buildCensusWithArtifact(cacheDir, specStr, versionReq, cooldown, "")
+}
+
+func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time.Duration, artifactPath string) (*output.Census, error) {
 	sp, err := spec.Parse(specStr)
 	if err != nil {
 		return nil, err
+	}
+	if artifactPath != "" {
+		if sp.Eco != spec.Crates {
+			return nil, fmt.Errorf("--artifact currently accepts crates:.crate evidence only")
+		}
+		if versionReq == "" || versionReq == "latest" || strings.ContainsAny(versionReq, "^~*<>=|, ") {
+			return nil, fmt.Errorf("a local artifact needs an exact version label, not a range or latest")
+		}
+		if !strings.EqualFold(filepath.Ext(artifactPath), ".crate") {
+			return nil, fmt.Errorf("local artifact %q must be a .crate archive", artifactPath)
+		}
 	}
 	if sp.Eco == spec.GHA && (versionReq == "" || versionReq == "latest") {
 		return nil, fmt.Errorf("gha census needs a ref (no 'latest'): depsound gha:owner/repo[/sub] <tag|branch|sha>")
@@ -299,24 +319,37 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	}
 	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate", spec.GHA: ".tar.gz"}[sp.Eco]
 	art := c.ArtifactPath(string(sp.Eco), sp.Name, artKey, ext)
-	if _, err := os.Stat(art); err != nil {
-		fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", sp, v)
-	}
-	switch sp.Eco {
-	case spec.NPM:
-		err = fetch.NPM(ctx, client, sp.Name, v, art)
-	case spec.Go:
-		err = fetch.GoModule(ctx, client, sp.Name, v, art)
-	case spec.Crates:
-		err = fetch.Crate(ctx, client, sp.Name, v, art)
-	case spec.GHA:
-		err = fetch.GHA(ctx, client, sp.Name, v, pin.sha, art)
+	if artifactPath != "" {
+		art = c.ArtifactPath(string(sp.Eco), sp.Name, v+"@local:"+artifactPath, ext)
+		err = fetch.LocalCrate(ctx, client, sp.Name, v, artifactPath, art)
+	} else {
+		if _, err := os.Stat(art); err != nil {
+			fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", sp, v)
+		}
+		switch sp.Eco {
+		case spec.NPM:
+			err = fetch.NPM(ctx, client, sp.Name, v, art)
+		case spec.Go:
+			err = fetch.GoModule(ctx, client, sp.Name, v, art)
+		case spec.Crates:
+			err = fetch.Crate(ctx, client, sp.Name, v, art)
+		case spec.GHA:
+			err = fetch.GHA(ctx, client, sp.Name, v, pin.sha, art)
+		}
 	}
 	if err != nil {
+		if unavailable := reportUnavailable(err, v, ""); unavailable != nil {
+			cen.Unavailable = unavailable
+			return cen, nil
+		}
 		return nil, err
 	}
 	if m := fetch.ReadMeta(art); m != nil {
 		cen.Integrity = m.Verification
+		cen.Source = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
+		if artifactPath != "" {
+			artKey = v + "@" + m.Digest + "@" + m.URL + "@" + localCrateLabelVersion
+		}
 	}
 
 	// persist the tree so the agent can search it; re-extract only if the
@@ -340,6 +373,10 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 		}
 		if err != nil {
 			return nil, err
+		}
+		if artifactPath != "" && rep.Prefix != sp.Name+"-"+v {
+			return nil, fmt.Errorf("local crate %q has archive root %q, want %q",
+				artifactPath, rep.Prefix, sp.Name+"-"+v)
 		}
 		if err := os.MkdirAll(filepath.Dir(tree), 0o755); err != nil {
 			return nil, err
@@ -367,6 +404,15 @@ func buildCensus(cacheDir, specStr, versionReq string, cooldown time.Duration) (
 	}
 	cen.Tree = scoped
 	cen.ByClass, cen.Bytes, cen.UnreviewableBytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(scoped)
+	if artifactPath != "" {
+		cr, err := cratepkg.Load(tree)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateLocalCrateLabel(artifactPath, cr, sp.Name, v); err != nil {
+			return nil, err
+		}
+	}
 	if sp.Eco == spec.GHA {
 		if err := censusGHA(cen, scoped, art, v, sp.Sub, pin.kind); err != nil {
 			return nil, err

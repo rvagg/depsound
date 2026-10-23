@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -149,12 +150,20 @@ type resolved struct {
 	idx       *surface.Index
 }
 
+type artifactInputs struct {
+	from string
+	to   string
+}
+
+const localCrateLabelVersion = "crate-label-v1"
+
 // commonArgs parses the shared "<spec> <from> <to>" tail plus --cache-dir,
 // materializes the workspace, and returns it. extraFlags handles
 // command-specific flags, called per unrecognized --flag.
 func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*resolved, []string, error) {
 	cacheDir := ""
 	var cooldown time.Duration
+	var artifacts artifactInputs
 	var pos []string
 	for _, a := range args {
 		switch {
@@ -166,6 +175,16 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 				return nil, nil, err
 			}
 			cooldown = d
+		case strings.HasPrefix(a, "--from-artifact="):
+			artifacts.from = strings.TrimPrefix(a, "--from-artifact=")
+			if artifacts.from == "" {
+				return nil, nil, fmt.Errorf("--from-artifact needs a .crate path")
+			}
+		case strings.HasPrefix(a, "--to-artifact="):
+			artifacts.to = strings.TrimPrefix(a, "--to-artifact=")
+			if artifacts.to == "" {
+				return nil, nil, fmt.Errorf("--to-artifact needs a .crate path")
+			}
 		case strings.HasPrefix(a, "-"):
 			if extraFlags != nil {
 				handled, err := extraFlags(a)
@@ -185,7 +204,7 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 		return nil, nil, fmt.Errorf("want <ecosystem>:<name> <from> <to> (run `depsound help`)")
 	}
 
-	r, err := analyze(cacheDir, pos[0], pos[1], pos[2], cooldown)
+	r, err := analyzeWithArtifacts(cacheDir, pos[0], pos[1], pos[2], cooldown, artifacts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -198,6 +217,10 @@ func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*re
 // (cooldown-aware) before the artifact is fetched, and how it resolved is
 // recorded on the Stats. GHA refs (tags/shas) are used verbatim.
 func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (*resolved, error) {
+	return analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg, cooldown, artifactInputs{})
+}
+
+func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration, artifactPaths artifactInputs) (*resolved, error) {
 	sp, err := spec.Parse(specStr)
 	if err != nil {
 		return nil, err
@@ -221,6 +244,20 @@ func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (
 	if err != nil {
 		return nil, err
 	}
+	if artifactPaths.from != "" || artifactPaths.to != "" {
+		if sp.Eco != spec.Crates {
+			return nil, fmt.Errorf("--from-artifact/--to-artifact currently accept crates:.crate evidence only")
+		}
+		if (artifactPaths.from != "" && (fromRes.Range != "" || fromArg == "latest")) ||
+			(artifactPaths.to != "" && (toRes.Range != "" || toArg == "latest")) {
+			return nil, fmt.Errorf("a local artifact needs an exact version label, not a range or latest")
+		}
+		for _, p := range []string{artifactPaths.from, artifactPaths.to} {
+			if p != "" && !strings.EqualFold(filepath.Ext(p), ".crate") {
+				return nil, fmt.Errorf("local artifact %q must be a .crate archive", p)
+			}
+		}
+	}
 	if from == to {
 		if fromRes.Range != "" || toRes.Range != "" {
 			// a benign finding, not a failure: the ranges admit the same
@@ -243,13 +280,40 @@ func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (
 	if err != nil {
 		return nil, err
 	}
+	localArtifacts := map[string]string{}
+	localKeys := map[string]string{}
+	for _, in := range []struct {
+		version string
+		path    string
+	}{{from, artifactPaths.from}, {to, artifactPaths.to}} {
+		if in.path == "" {
+			continue
+		}
+		dest := c.ArtifactPath(string(sp.Eco), sp.Name, in.version+"@local:"+in.path, ".crate")
+		if err := fetch.LocalCrate(context.Background(), &http.Client{}, sp.Name, in.version, in.path, dest); err != nil {
+			return nil, err
+		}
+		meta := fetch.ReadMeta(dest)
+		if meta == nil {
+			return nil, fmt.Errorf("local crate %q: integrity metadata missing", in.path)
+		}
+		localArtifacts[in.version] = dest
+		localKeys[in.version] = in.version + "@" + meta.Digest + "@" + meta.URL + "@" + localCrateLabelVersion
+	}
 	// the artifact is keyed on the repo (shared across sub-paths), but the
 	// workspace is scoped to the sub-path, so fold Sub into the workspace key
 	wsKey := sp.Name
 	if sp.Sub != "" {
 		wsKey += "/" + sp.Sub
 	}
-	ws := c.WorkspacePath(string(sp.Eco), wsKey, from, to)
+	fromKey, toKey := from, to
+	if localKeys[from] != "" {
+		fromKey = localKeys[from]
+	}
+	if localKeys[to] != "" {
+		toKey = localKeys[to]
+	}
+	ws := c.WorkspacePath(string(sp.Eco), wsKey, fromKey, toKey)
 	st, err := loadWorkspace(ws)
 	var moved []stats.MovedRef
 	if err == nil && sp.Eco == spec.GHA {
@@ -260,9 +324,13 @@ func analyze(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration) (
 		}
 	}
 	if err != nil {
-		if st, err = materialize(c, sp, from, to, ws, ghaPins); err != nil {
+		if st, err = materialize(c, sp, from, to, ws, ghaPins, localArtifacts); err != nil {
 			return nil, err
 		}
+	}
+	if st.Artifact.Unavailable != nil {
+		st.Resolution = buildResolution(fromArg, fromRes, toArg, toRes)
+		return &resolved{cacheRoot: c.Root, sp: sp, st: st}, nil
 	}
 	if sp.Eco == spec.GHA {
 		stampGHAPins(st, from, to, ghaPins)
@@ -335,6 +403,10 @@ func diffCmd(args []string) error {
 	// in the deterministic workspace build) and attach for text and JSON
 	if format == "stats" || format == "json" {
 		r.st.Coverage, r.st.NextActions = output.Guide(r.st)
+	}
+	if r.st.Artifact.Unavailable != nil && format != "stats" && format != "json" {
+		return fmt.Errorf("artifact %s is unavailable; %s output needs both artifact trees",
+			r.st.Artifact.Unavailable.Side, format)
 	}
 
 	switch format {
@@ -483,7 +555,7 @@ func stampGHAPins(st *stats.Stats, from, to string, pins map[string]ghaPin) {
 	}
 }
 
-func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[string]ghaPin) (*stats.Stats, error) {
+func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[string]ghaPin, localArtifacts map[string]string) (*stats.Stats, error) {
 	ctx := context.Background()
 	// no total timeout: fetch applies a metadata deadline and a download
 	// stall watchdog, so slow links with big artifacts are never killed
@@ -494,6 +566,13 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 	arts := map[string]string{}
 	srcs := map[string]*stats.Source{}
 	for _, v := range []string{from, to} {
+		if local := localArtifacts[v]; local != "" {
+			arts[v] = local
+			if m := fetch.ReadMeta(local); m != nil {
+				srcs[v] = &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
+			}
+			continue
+		}
 		// gha artifacts are keyed by resolved commit, not the (possibly
 		// mutable) ref, so the cached bytes are genuinely immutable
 		artKey := v
@@ -518,6 +597,13 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 			err = fetch.GHA(ctx, client, sp.Name, v, ghaPins[v].sha, dest)
 		}
 		if err != nil {
+			side := "to"
+			if v == from {
+				side = "from"
+			}
+			if unavailable := reportUnavailable(err, v, side); unavailable != nil {
+				return partialStats(sp, from, to, srcs, unavailable), nil
+			}
 			return nil, err
 		}
 		arts[v] = dest
@@ -560,6 +646,10 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		}
 		if err != nil {
 			return nil, err
+		}
+		if localArtifacts[v] != "" && rep.Prefix != sp.Name+"-"+v {
+			return nil, fmt.Errorf("local crate %q has archive root %q, want %q",
+				localArtifacts[v], rep.Prefix, sp.Name+"-"+v)
 		}
 		for _, l := range rep.SkippedLinks {
 			skippedLinks = append(skippedLinks, sub+": "+l)
@@ -640,6 +730,20 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		if input.NewCrate, err = cratepkg.Load(input.NewTree); err != nil {
 			return nil, fmt.Errorf("new tree: %w", err)
 		}
+		for _, local := range []struct {
+			path    string
+			crate   *cratepkg.Crate
+			version string
+		}{
+			{localArtifacts[from], input.OldCrate, from},
+			{localArtifacts[to], input.NewCrate, to},
+		} {
+			if local.path != "" {
+				if err := validateLocalCrateLabel(local.path, local.crate, sp.Name, local.version); err != nil {
+					return nil, err
+				}
+			}
+		}
 	case spec.GHA:
 		// trees are already scoped to the action's path, so action.yml is
 		// at their root
@@ -684,4 +788,40 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		}
 	}
 	return nil, installErr
+}
+
+func reportUnavailable(err error, version_, side string) *stats.Unavailable {
+	var unavailable fetch.UnavailableError
+	if !errors.As(err, &unavailable) {
+		return nil
+	}
+	kind, status, sourceURL, hint := unavailable.Unavailable()
+	return &stats.Unavailable{
+		Side: side, Version: version_, Kind: kind, Status: status,
+
+		URL: sourceURL, Hint: hint,
+	}
+}
+func validateLocalCrateLabel(artifact string, crate *cratepkg.Crate, name, version_ string) error {
+	if crate.Name != name || crate.Version != version_ {
+		return fmt.Errorf("local crate %q manifest identifies %s@%s, want %s@%s",
+			artifact, crate.Name, crate.Version, name, version_)
+	}
+	return nil
+}
+func partialStats(sp spec.Spec, from, to string, srcs map[string]*stats.Source, unavailable *stats.Unavailable) *stats.Stats {
+
+	name := sp.Name
+	if sp.Sub != "" {
+		name += "/" + sp.Sub
+	}
+	return &stats.Stats{
+		Tool:    stats.Tool{Name: "depsound", Version: version.Version, Schema: stats.SchemaVersion},
+		Package: stats.PkgRef{Ecosystem: string(sp.Eco), Name: name, From: from, To: to},
+		Artifact: stats.Artifact{
+			SourceFrom:  srcs[from],
+			SourceTo:    srcs[to],
+			Unavailable: unavailable,
+		},
+	}
 }

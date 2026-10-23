@@ -11,6 +11,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/npmpkg"
+	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -159,5 +160,73 @@ func TestCensusRendersExactDeprecationAndRetractions(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestUnavailableDiffKeepsAdvisoriesAndRegistryHistory(t *testing.T) {
+	s := &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "crates", Name: "arrayref", From: "0.3.9", To: "0.3.10"},
+		Artifact: stats.Artifact{Unavailable: &stats.Unavailable{
+			Side: "to", Version: "0.3.10", Kind: "absent",
+			URL:  "https://static.crates.io/crates/arrayref/arrayref-0.3.10.crate",
+			Hint: "version absent from sparse index",
+		}},
+		Security: stats.Security{Queried: true, Introduced: []osv.Vuln{
+			{ID: "RUSTSEC-2026-0260", Kind: osv.KindMalware},
+		}},
+		Provenance: &provenance.Result{
+			Queried: true,
+			Sources: map[string]string{"depsdev": "complete", "registry": "complete"},
+			RegistryActions: []provenance.RegistryAction{
+				{Version: "0.3.9", Action: "yank", Actor: "owner", At: "2026-08-20T07:15:24Z"},
+			},
+		},
+	}
+	s.Coverage, s.NextActions = Guide(s)
+	out := Text(s)
+	for _, want := range []string{
+		"artifact unavailable", "RUSTSEC-2026-0260",
+		"registry yank/unyank actions", "artifact acquisition status",
+		"--to-artifact=<quarantined-0.3.10.crate>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unavailable report missing %q:\n%s", want, out)
+		}
+	}
+	for _, falseClaim := range []string{"files: 0 changed", "workspace:"} {
+		if strings.Contains(out, falseClaim) {
+			t.Errorf("unavailable report claims content coverage via %q:\n%s", falseClaim, out)
+		}
+	}
+}
+
+func TestUnavailableCensusKeepsAdvisoriesAndRegistryHistory(t *testing.T) {
+	c := &Census{
+		Ecosystem: "crates", Name: "arrayref", Version: "0.3.10",
+		Unavailable: &stats.Unavailable{
+			Version: "0.3.10", Kind: "absent", URL: "https://example.invalid/arrayref.crate",
+		},
+		OSVQueried: true,
+		Vulns:      []osv.Vuln{{ID: "MAL-2026-14336", Kind: osv.KindMalware}},
+		Provenance: &provenance.Result{
+			Queried: true,
+			Sources: map[string]string{"depsdev": "complete", "registry": "complete"},
+			RegistryActions: []provenance.RegistryAction{
+				{Version: "0.3.9", Action: "unyank", Actor: "admin", At: "2026-08-20T09:15:51Z"},
+			},
+		},
+	}
+	c.Coverage, c.NextActions = CensusGuide(c)
+	out := CensusText(c)
+	for _, want := range []string{
+		"artifact unavailable", "MAL-2026-14336",
+		"registry yank/unyank actions", "--artifact=<quarantined-0.3.10.crate>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unavailable census missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "artifact: 0 files") {
+		t.Fatalf("unavailable census falsely rendered an empty artifact:\n%s", out)
 	}
 }

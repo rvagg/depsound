@@ -76,7 +76,7 @@ const (
 	CodeCensusExec         Code = "census.exec"
 	CodeCensusBig          Code = "census.bigExcluded"
 	CodeAnalysisFailed     Code = "analysis.failed"
-	CodeArtifactAbsent     Code = "artifact.absent"          // the artifact URL is not retrievable (404/410)
+	CodeArtifactAbsent     Code = "artifact.absent"          // registry metadata absent, or artifact URL returned 404/410
 	CodeArtifactDenied     Code = "artifact.denied"          // access denied (401/403)
 	CodeArtifactFetch      Code = "artifact.fetchFail"       // transient acquisition failure
 	CodeHostileEntry       Code = "artifact.hostile"         // hostile archive member skipped at extraction
@@ -166,6 +166,9 @@ func osvSupported(eco string) bool { _, ok := osv.Ecosystem(eco); return ok }
 // that decides what counts; every renderer consumes the result.
 func Derive(ref string, s *stats.Stats) Ledger {
 	l := Ledger{Ref: ref}
+	if s.Artifact.Unavailable != nil {
+		l.Signals = append(l.Signals, DeriveUnavailable(ref, s.Artifact.Unavailable).Signals...)
+	}
 	add := func(code Code, k SignalKind, lens Lens, w int, title, detail string) {
 		l.Signals = append(l.Signals, Signal{Code: code, Kind: k, Lens: lens, Weight: w, Title: title, Detail: detail})
 	}
@@ -614,8 +617,12 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	add := func(code Code, k SignalKind, lens Lens, w int, title, detail string) {
 		l.Signals = append(l.Signals, Signal{Code: code, Kind: k, Lens: lens, Weight: w, Title: title, Detail: detail})
 	}
-	add(CodeCensusNew, KindFact, LensCompat, weightWeigh,
-		fmt.Sprintf("new dependency, %s file(s) unreviewed", commas(c.Files)), "")
+	if c.Unavailable != nil {
+		l.Signals = append(l.Signals, DeriveUnavailable(ref, c.Unavailable).Signals...)
+	} else {
+		add(CodeCensusNew, KindFact, LensCompat, weightWeigh,
+			fmt.Sprintf("new dependency, %s file(s) unreviewed", commas(c.Files)), "")
+	}
 	// OSV status honestly: a scan that ran reports its records (or nothing); a
 	// scan that did NOT run is a coverage gap, never a silent clean-on-security.
 	// A malware record on a package you are about to adopt is the loudest thing
@@ -731,22 +738,21 @@ func DeriveFailure(ref, errMsg string) Ledger {
 	}}}
 }
 
-// Unavailable is a classified acquisition failure from the fetch layer: Kind is
-// "absent" (404/410, the URL is not retrievable now), "denied" (401/403), or
-// "transient".
-type Unavailable struct {
-	Kind   string
-	Status int
-	URL    string
-	Hint   string
-}
+// Unavailable is the acquisition failure carried by report models.
+type Unavailable = stats.Unavailable
 
 // DeriveUnavailable turns an acquisition failure into a signal. Absent is a
-// FACT (the URL is not retrievable and the contents were not inspected, worth a
-// look); it does NOT establish prior publication, so it never asserts a takedown
-// as fact. Denied and transient are degradations.
+// FACT (registry metadata is absent, or the URL returned 404/410; contents were
+// not inspected). It never infers a takedown or prior publication. Denied and
+// transient are degradations.
 func DeriveUnavailable(ref string, u *Unavailable) Ledger {
 	detail := u.URL
+	if u.Side != "" || u.Version != "" {
+		subject := strings.TrimSpace(u.Side + " " + u.Version)
+		if subject != "" {
+			detail = subject + ": " + detail
+		}
+	}
 	if u.Hint != "" {
 		detail += " (" + u.Hint + ")"
 	}
@@ -754,7 +760,11 @@ func DeriveUnavailable(ref string, u *Unavailable) Ledger {
 	switch u.Kind {
 	case "absent":
 		sig.Code, sig.Kind, sig.Lens, sig.Weight = CodeArtifactAbsent, KindFact, LensSecurity, weightLook
-		sig.Title = fmt.Sprintf("artifact unavailable (HTTP %d): the URL is not retrievable now and its contents were not inspected; whether it was ever published is not established", u.Status)
+		if u.Status == 0 {
+			sig.Title = "artifact unavailable: version absent from registry metadata and its contents were not inspected"
+		} else {
+			sig.Title = fmt.Sprintf("artifact unavailable (HTTP %d): the URL is not retrievable now and its contents were not inspected; whether it was ever published is not established", u.Status)
+		}
 	case "denied":
 		sig.Code, sig.Kind, sig.Weight = CodeArtifactDenied, KindDegradation, weightWeigh
 		sig.Title = fmt.Sprintf("artifact access denied (HTTP %d): authentication or policy", u.Status)

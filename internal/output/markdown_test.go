@@ -320,3 +320,22 @@ func TestMarkdownProvenanceFooterCounts(t *testing.T) {
 		t.Errorf("no provenance at all must keep the gap:\n%s", out)
 	}
 }
+
+func TestMarkdownUnavailableCoverageDoesNotClaimArtifactInspection(t *testing.T) {
+	s := &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "crates", Name: "arrayref", From: "0.3.9", To: "0.3.10"},
+		Artifact: stats.Artifact{Unavailable: &stats.Unavailable{
+			Side: "to", Version: "0.3.10", Kind: "absent", URL: "https://example.invalid/arrayref.crate",
+		}},
+		Security: stats.Security{Queried: true},
+	}
+	out := Markdown([]BulkResult{{Ref: "crates:arrayref 0.3.9 -> 0.3.10", Stats: s}})
+	for _, want := range []string{"artifact unavailable", "artifact acquisition status", "unavailable artifact contents"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Checked: the published artifact diff") {
+		t.Fatalf("markdown falsely claims content inspection:\n%s", out)
+	}
+}

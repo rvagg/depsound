@@ -88,7 +88,7 @@ type bulkSection struct {
 
 var bulkSections = []bulkSection{
 	{[]Code{CodeMalwareAdvisory}, "malicious-package advisory matches a reviewed version (not a flaw to upgrade past)"},
-	{[]Code{CodeArtifactAbsent}, "artifact unavailable (URL not retrievable now; contents not inspected; prior publication not established)"},
+	{[]Code{CodeArtifactAbsent}, "artifact unavailable (registry metadata or URL absent; contents not inspected)"},
 	{[]Code{CodeHostileEntry}, "hostile archive member(s) skipped (traversal/absolute/control-byte name: an attack-shaped artifact)"},
 	{[]Code{CodeProvenanceAnomaly}, "provenance anomaly: account-takeover shape (publisher shift, attestation dropped or attesting elsewhere, yank)"},
 	{[]Code{CodeRepoMismatch}, "claimed repo differs from the registry source repo (often a rename or redirect; confirm which is current)"},
@@ -165,9 +165,11 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	}
 	buckets := map[Code][]sigEntry{}
 	diffCount := 0 // deps carrying a version diff (the OSV-via-diff denominator)
+	artifactCount, unavailableCount := 0, 0
 	for _, r := range results {
 		switch {
 		case r.Unavailable != nil:
+			unavailableCount++
 			for _, sig := range DeriveUnavailable(r.Ref, r.Unavailable).Signals {
 				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
 			}
@@ -175,6 +177,11 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 			redirects = append(redirects, r)
 		case r.Census != nil:
 			newDeps = append(newDeps, r)
+			if r.Census.Unavailable != nil {
+				unavailableCount++
+			} else {
+				artifactCount++
+			}
 		case r.Note != "":
 			for _, sig := range DeriveBenign(r.Ref, r.Note).Signals {
 				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
@@ -182,6 +189,11 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		case r.Stats == nil:
 			failed = append(failed, r)
 		default:
+			if r.Stats.Artifact.Unavailable != nil {
+				unavailableCount++
+			} else {
+				artifactCount++
+			}
 			diffCount++
 			l := Derive(r.Ref, r.Stats)
 			if len(l.Signals) == 0 {
@@ -249,7 +261,14 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	// repeated per dep). CVE scan is named backward-looking, not "security"
 	w("")
 	w("=== coverage: heuristic triage, NOT a verdict ===")
-	w("checked: artifact diff, file classes, manifest compat, execution surface.")
+	switch {
+	case artifactCount > 0 && unavailableCount > 0:
+		w("checked: %d artifact report(s): diff/footprint, file classes, manifest compat, execution surface; %d acquisition failure(s): status only.", artifactCount, unavailableCount)
+	case artifactCount > 0:
+		w("checked: artifact diff/footprint, file classes, manifest compat, execution surface.")
+	default:
+		w("checked: artifact acquisition status only; contents were not inspected.")
+	}
 	// OSV status is derived from what actually ran, not asserted flat: a
 	// disabled/failed scan is a gap, an unsupported ecosystem is not.
 	osvGap := len(buckets[CodeOSVDisabled]) + len(buckets[CodeOSVFailed])
@@ -270,18 +289,29 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	if transitive {
 		w("NOT checked: does your code reach each change; what changed inside added modules;")
 		w(" runtime semantics; test coverage; whatever the lockfile itself omits (pruned,")
-		w(" test-only or platform-conditional); publish provenance. Added modules were")
-		w(" censused at the resolved version, not diffed. Silence != safe.")
+		w(" test-only or platform-conditional). Added modules were censused at the")
+		w(" resolved version, not diffed. Silence != safe.")
+		if g := provenanceGap(results); g != "" {
+			w("  NOT checked: %s.", g)
+		}
 	} else {
 		prov := ""
 		if g := provenanceGap(results); g != "" {
 			prov = "; " + g
 		}
 		w("NOT checked: does your code reach each change; what it does; test coverage;")
+		if unavailableCount > 0 {
+			w(" unavailable artifact contents;")
+		}
 		w(" transitive deps these bumps pull in%s. Silence != safe.", prov)
 	}
-	w("next: for each dep you rely on, intersect the diff with your usage ->")
-	w(" depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
+	if artifactCount > 0 {
+		w("next: for each dep you rely on, intersect the diff with your usage ->")
+		w(" depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
+	} else {
+		w("next: obtain the exact artifact from a trusted quarantine or registry operator;")
+		w(" for crates, re-run with --from-artifact/--to-artifact or --artifact.")
+	}
 }
 
 func digestOf(s *stats.Stats) digest {

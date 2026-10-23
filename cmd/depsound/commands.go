@@ -38,6 +38,10 @@ func surfaceCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	if r.st.Artifact.Unavailable != nil {
+		return fmt.Errorf("artifact %s is unavailable; surface needs both artifact trees",
+			r.st.Artifact.Unavailable.Side)
+	}
 
 	// class per changed file, from stats; the index itself stays pure
 	class := map[string]string{}
@@ -140,6 +144,10 @@ func showCmd(args []string) error {
 	})
 	if err != nil {
 		return err
+	}
+	if r.st.Artifact.Unavailable != nil {
+		return fmt.Errorf("artifact %s is unavailable; show needs both artifact trees",
+			r.st.Artifact.Unavailable.Side)
 	}
 	set := 0
 	for _, s := range []string{file, dir, symbol} {

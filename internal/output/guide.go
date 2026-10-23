@@ -61,10 +61,28 @@ var projectable = map[string]bool{"npm": true, "crates": true}
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
 func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	checked, notChecked := coverageChecked, coverageNotChecked
+	if s.Artifact.Unavailable != nil {
+		checked = []string{"artifact acquisition status"}
+		notChecked = []string{
+			"published artifact contents (the unavailable artifact was not inspected)",
+			"file classification and content diff",
+			"manifest compatibility and dependency deltas",
+			"execution surface",
+			"whether YOUR code reaches the changed code (reachability)",
+			"what the change does at runtime (behavioural / semantic effects)",
+			"whether your own tests cover the change",
+			"transitive dependencies this bump pulls in",
+			"how the release was published (provenance, anomaly vs history)",
+		}
+	}
+	if s.Artifact.Unavailable == nil && (localSource(s.Artifact.SourceFrom) || localSource(s.Artifact.SourceTo)) {
+		checked = append([]string(nil), coverageChecked...)
+		checked[0] = "caller-supplied quarantined artifact diff (origin + sha256 recorded; registry checksum cross-checked when obtained)"
+	}
 	// an action is reviewed on its own terms: it runs on a runner rather than
 	// inside your code, so what it can reach is decided by the calling
 	// workflow, and import reachability says nothing about it
-	if s.Action != nil {
+	if s.Artifact.Unavailable == nil && s.Action != nil {
 		checked = []string{
 			"the repo tree at the pinned commit (what the runner checks out)",
 			"file classification (source vs generated/test/docs, heuristic)",
@@ -117,6 +135,20 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	ref := fmt.Sprintf("%s:%s %s %s", s.Package.Ecosystem, s.Package.Name, s.Package.From, s.Package.To)
 	var na []stats.NextAction
 	add := func(reason, cmd string) { na = append(na, stats.NextAction{Reason: reason, Command: cmd}) }
+	if u := s.Artifact.Unavailable; u != nil {
+		cmd := ""
+		if s.Package.Ecosystem == "crates" && (u.Side == "from" || u.Side == "to") {
+			cmd = "depsound " + ref + " --" + u.Side + "-artifact=<quarantined-" + u.Version + ".crate>"
+		}
+		add("obtain the exact labelled artifact from a trusted quarantine or registry operator, then inspect it as inert data", cmd)
+		if n := len(s.Security.Introduced); n > 0 {
+			add(fmt.Sprintf("%d advisory record(s) match only the unavailable target version; respond from the advisory facts, not missing bytes", n), "")
+		}
+		if n := len(s.Security.StillPresent); n > 0 {
+			add(fmt.Sprintf("%d advisory record(s) match both endpoints; check exposure", n), "")
+		}
+		return cov, na
+	}
 
 	r := s.Runnable
 	if len(r.Lifecycle) > 0 || (!r.GypFrom && r.GypTo) || (!r.CgoFrom && r.CgoTo) ||
@@ -191,6 +223,10 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 			"depsound surface "+ref+" --uses=<your import paths>")
 	}
 	return cov, na
+
+}
+func localSource(source *stats.Source) bool {
+	return source != nil && strings.HasPrefix(source.Verification, "local-")
 }
 
 // pinOf returns the named side's pin, nil if absent.

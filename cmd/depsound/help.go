@@ -63,7 +63,7 @@ output, and the two lenses (security vs compatibility).`
 // cmdHelp holds per-command detail, reached via help <command>, so the top-
 // level help stays a routing table rather than a wall.
 var cmdHelp = map[string]string{
-	"diff": `depsound <ecosystem>:<name> <from> <to> [--cooldown=<days>] [--format=stats|json|patch|files] [--no-osv] [--no-provenance]
+	"diff": `depsound <ecosystem>:<name> <from> <to> [--cooldown=<days>] [--format=stats|json|patch|files] [--from-artifact=<file.crate>] [--to-artifact=<file.crate>] [--no-osv] [--no-provenance]
 
 Diffs two PUBLISHED versions (what installs, not the repo) and reports the
 file diff, execution surface, manifest compatibility, and OSV. Versions come
@@ -78,9 +78,16 @@ instead, which this review did not cover.
   --format=json    the full stats.json contract for machine consumers
   --format=patch   the raw diff.patch on stdout
   --format=files   the changed-file table (tree-relative paths to grep)
+  --from-artifact / --to-artifact
+                   import an exact-version crates:.crate from trusted
+                   quarantine as inert evidence. depsound records its origin
+                   and sha256, and cross-checks a remaining registry checksum.
+When an artifact URL is unavailable, stats/json still report OSV, provenance
+and registry history with explicit content-coverage loss; patch/files need both
+trees.
   --no-osv         skip the known-CVE scan`,
 
-	"census": `depsound <ecosystem>:<name> [version] [--transitive] [--cooldown=<days>] [--format=stats|json] [--no-osv]
+	"census": `depsound <ecosystem>:<name> [version] [--transitive] [--cooldown=<days>] [--artifact=<file.crate>] [--format=stats|json] [--no-osv]
 
 Vets a SINGLE version in absolute terms: what you sign up for by adopting it
 (no diff). Version may be exact, a semver RANGE ('^10.2.0', npm/crates), or
@@ -97,7 +104,10 @@ guess stale versions from weights). Publish/anomaly provenance runs by default
                   current+newdep lockfile and diff it (see depsound guide).
   --cooldown=<d>  pick the newest release at least d days old (the pnpm
                   minimumReleaseAge posture; a fresh compromised release is
-                  withheld)`,
+                  withheld)
+  --artifact=<file.crate>
+                  import an exact-version crates:.crate from trusted quarantine
+                  as inert evidence, recording origin and sha256`,
 
 	"bulk": `depsound bulk [--file=<list>] [--cooldown=<days>] [--format=stats|json] [--no-osv]
 
