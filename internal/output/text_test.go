@@ -1,7 +1,7 @@
 package output
 
 // The tests below embed raw control and bidi bytes in string literals on
-// purpose, to prove taint() escapes them in output; ST1018 (which suggests
+// purpose, to prove EscapeText escapes them in output; ST1018 (which suggests
 // \u escapes) is exactly the thing under test, so silence it for this file.
 //lint:file-ignore ST1018 intentional raw control/bidi bytes in trojan-source fixtures
 
@@ -56,21 +56,21 @@ func TestTextTaintsHostileStrings(t *testing.T) {
 }
 
 func TestTaint(t *testing.T) {
-	if got := taint("normal-string.js"); got != "normal-string.js" {
+	if got := EscapeText("normal-string.js"); got != "normal-string.js" {
 		t.Errorf("benign string altered: %q", got)
 	}
-	if got := taint("a\x00b\x7fc"); got != `a\x00b\x7fc` {
+	if got := EscapeText("a\x00b\x7fc"); got != `a\x00b\x7fc` {
 		t.Errorf("control escape = %q", got)
 	}
-	if got := taint(string([]byte{0xff, 0xfe})); strings.ContainsRune(got, 0xff) {
+	if got := EscapeText(string([]byte{0xff, 0xfe})); strings.ContainsRune(got, 0xff) {
 		t.Errorf("invalid UTF-8 leaked: %q", got)
 	}
-	if got := taint("‮"); got != `\x9b\u202e` {
+	if got := EscapeText("‮"); got != `\x9b\u202e` {
 		t.Errorf("C1/bidi escape = %q", got)
 	}
 	// truncation must cut at a rune boundary, never mid-rune
 	long := strings.Repeat("x", 199) + "日本語"
-	got := taint(long)
+	got := EscapeText(long)
 	if !strings.HasSuffix(got, "...[truncated]") || strings.ContainsRune(got, '�') {
 		t.Errorf("rune-boundary truncation broken: %q", got)
 	}
@@ -184,7 +184,7 @@ func TestUnavailableDiffKeepsAdvisoriesAndRegistryHistory(t *testing.T) {
 			},
 		},
 	}
-	s.Coverage, s.NextActions = Guide(s)
+	s.Coverage, s.NextActions = Guide(s, "")
 	out := Text(s)
 	for _, want := range []string{
 		"RUSTSEC-2026-0260", "2026-08-20", "owner",

@@ -30,7 +30,7 @@ func writeAction(w func(string, ...any), a *stats.ActionSection, moved []stats.M
 			vector = "an exact release tag re-pointing is the tj-actions vector, look at the new commit"
 		}
 		w("  moved: %s ref %q re-pointed since last fetch, %.12s -> %.12s (%s)",
-			m.Side, taint(m.Ref), m.Prev, m.SHA, vector)
+			m.Side, EscapeText(m.Ref), m.Prev, m.SHA, vector)
 	}
 
 	// execution model is context, never a red flag (running code is the
@@ -40,24 +40,24 @@ func writeAction(w func(string, ...any), a *stats.ActionSection, moved []stats.M
 	case a.UsingFrom == "" && a.UsingTo == "":
 		w("  execution model: no action.yml parsed (composite/nested detail unavailable)")
 	case a.UsingFrom == a.UsingTo:
-		w("  execution model: %s", taint(a.UsingTo))
+		w("  execution model: %s", EscapeText(a.UsingTo))
 	default:
 		note := "runtime bump, maintenance"
 		if usingClass(a.UsingFrom) != usingClass(a.UsingTo) {
 			note = "model class changed, a bigger shift in what it can do"
 		}
-		w("  execution model: %s -> %s (%s)", taint(orNone(a.UsingFrom)), taint(orNone(a.UsingTo)), note)
+		w("  execution model: %s -> %s (%s)", EscapeText(orNone(a.UsingFrom)), EscapeText(orNone(a.UsingTo)), note)
 	}
 	for _, c := range a.Exec {
 		// pre/post/main are execution STRUCTURE, not install-hook alarms:
 		// every action runs code, so a changed entrypoint is context to read
 		// alongside the code diff, not a red flag in itself
-		w("  entrypoint %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
+		w("  entrypoint %s %s: %s", EscapeText(c.Key), c.Status, changeDetail(c))
 	}
 	if n := len(a.Nested); n > 0 {
 		w("  composite uses %d nested action(s) (transitive supply chain, each its own pin to vet):", n)
 		for _, u := range a.Nested {
-			w("    %s", taint(u))
+			w("    %s", EscapeText(u))
 		}
 	}
 	writeCaps(w, a.Caps, a.CapsIntroduced)
@@ -114,11 +114,11 @@ func usingClass(using string) string {
 func renderPin(p stats.ActionPin) string {
 	switch p.Kind {
 	case "sha":
-		return fmt.Sprintf("%s: SHA pin %s (immutable, good practice)", p.Side, taint(p.Ref))
+		return fmt.Sprintf("%s: SHA pin %s (immutable, good practice)", p.Side, EscapeText(p.Ref))
 	case "branch":
-		return fmt.Sprintf("%s: branch pin %q is unpinned (moves on every push; you run whatever is there at run time, worst practice). It is %s now, pin a tag or a SHA", p.Side, taint(p.Ref), p.SHA)
+		return fmt.Sprintf("%s: branch pin %q is unpinned (moves on every push; you run whatever is there at run time, worst practice). It is %s now, pin a tag or a SHA", p.Side, EscapeText(p.Ref), p.SHA)
 	default: // tag
-		return fmt.Sprintf("%s: tag pin %q is mutable (re-pointable, the tj-actions vector); resolves to %s today, prefer a SHA pin", p.Side, taint(p.Ref), p.SHA)
+		return fmt.Sprintf("%s: tag pin %q is mutable (re-pointable, the tj-actions vector); resolves to %s today, prefer a SHA pin", p.Side, EscapeText(p.Ref), p.SHA)
 	}
 }
 

@@ -2,6 +2,8 @@ package output
 
 import (
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/rvagg/depsound/internal/stats"
@@ -47,6 +49,8 @@ var coverageNotChecked = []string{
 	"how the release was published (provenance, anomaly vs history)",
 }
 
+const checksumLookupGap = "registry checksum index lookup failed (local sha256 only)"
+
 // transitiveLock names the lockfile each ecosystem's transitive mode diffs,
 // so a single-pair diff can point at it (pnpm shares npm's analysis).
 var transitiveLock = map[string]string{"go": "go.mod", "npm": "package-lock.json", "crates": "Cargo.lock"}
@@ -59,7 +63,7 @@ var projectable = map[string]bool{"npm": true, "crates": true}
 // Guide computes the coverage boundary and directed next-steps for a
 // report. It is deliberately loud about limits: depsound is a heuristic
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
-func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
+func Guide(s *stats.Stats, cacheRoot string) (*stats.Coverage, []stats.NextAction) {
 	checked, notChecked := coverageChecked, coverageNotChecked
 	if len(s.Artifact.Unavailable) > 0 {
 		checked = []string{"artifact acquisition status"}
@@ -132,21 +136,20 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	}
 	for _, source := range []*stats.Source{s.Artifact.SourceFrom, s.Artifact.SourceTo} {
 		if source != nil && source.RegistryChecksum != nil && source.RegistryChecksum.State == "lookup-failed" {
-			notChecked = append(append([]string(nil), notChecked...), "registry checksum index lookup (failed: "+source.RegistryChecksum.URL+")")
+			notChecked = append(append([]string(nil), notChecked...), checksumLookupGap)
 		}
 	}
 	cov := &stats.Coverage{Checked: checked, NotChecked: notChecked}
 
-	ref := fmt.Sprintf("%s:%s %s %s", s.Package.Ecosystem, s.Package.Name, s.Package.From, s.Package.To)
 	var na []stats.NextAction
 	add := func(reason, cmd string) { na = append(na, stats.NextAction{Reason: reason, Command: cmd}) }
 	for _, u := range s.Artifact.Unavailable {
 		cmd := ""
-		reason := "obtain the exact labelled artifact from a trusted quarantine or registry operator, then inspect it as inert data"
+		reason := "obtain the exact labelled artifact from a source you trust, then supply it for inert inspection"
 		if u.Reason == "policy-blocked" {
 			reason = "ask the platform operator for the policy basis or a permitted evidence path; do not bypass the policy"
 		} else if s.Package.Ecosystem == "crates" && (u.Side == "from" || u.Side == "to") {
-			cmd = "depsound " + ref + " --" + u.Side + "-artifact=<quarantined-" + u.Version + ".crate>"
+			cmd = reviewCommand(s, cacheRoot, "", "--"+u.Side+"-artifact=<quarantined-"+u.Version+".crate>")
 		}
 		add(reason, cmd)
 	}
@@ -163,8 +166,15 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	r := s.Runnable
 	if len(r.Lifecycle) > 0 || (!r.GypFrom && r.GypTo) || (!r.CgoFrom && r.CgoTo) ||
 		(!r.BuildRSFrom && r.BuildRSTo) || (!r.ProcMacroFrom && r.ProcMacroTo) {
+		file := "<the script>"
+		switch {
+		case !r.BuildRSFrom && r.BuildRSTo:
+			file = "build.rs"
+		case !r.GypFrom && r.GypTo:
+			file = "binding.gyp"
+		}
 		add("install/build code runs on the consumer's machine; read it",
-			"depsound show "+ref+" --file=<the script>")
+			reviewCommand(s, cacheRoot, "show", "--file="+file))
 	}
 	// Only NEW or RESIDUAL risk earns a next-step; FixedByUpgrade needs no
 	// action (it is the argument FOR the upgrade) and is shown in the
@@ -189,7 +199,7 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		switch r := s.Resolution; {
 		case r != nil && (r.FromSpec != "" || r.ToSpec != "") && projectable[eco]:
 			add("this bump moves your whole transitive subtree, and no lockfile resolved it here: project it (deps.dev resolves in isolation, an upper bound, not your tree; exact route in `depsound guide`)",
-				fmt.Sprintf("depsound transitive %s:%s %s %s", eco, s.Package.Name, s.Package.From, s.Package.To))
+				fmt.Sprintf("depsound transitive %s %s %s", shellQuote(eco+":"+s.Package.Name), shellQuote(s.Package.From), shellQuote(s.Package.To)))
 		default:
 			add("this bump moves your whole transitive subtree, not just this dep; diff the lockfile pair (pass github:owner/repo@sha, no download)",
 				fmt.Sprintf("depsound transitive %s --old=<base %s> --new=<PR %s>", eco, transitiveLock[eco], transitiveLock[eco]))
@@ -203,7 +213,7 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		// only a mutable ref can be re-pointed under a completed review
 		if p := pinOf(a.Pins, "to"); p != nil && p.Kind != "sha" {
 			add(fmt.Sprintf("a %s can be re-pointed after this review; pin the commit the review actually covered", p.Kind),
-				fmt.Sprintf("uses: %s@%s # %s", s.Package.Name, p.SHA, s.Package.To))
+				fmt.Sprintf("uses: %s@%s # %s", EscapeText(s.Package.Name), EscapeText(p.SHA), EscapeText(s.Package.To)))
 		}
 		// route to the payload only where there is one: a composite action has
 		// no bundle, and an empty scoped diff has nothing to read
@@ -212,8 +222,8 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		case a.UsingTo == "composite":
 			add("a composite action executes its own steps plus the actions it nests; read the changed steps in the workspace diff", "")
 		case a.MainTo != "":
-			add(fmt.Sprintf("%s is what executes on the runner; read it in the workspace diff", a.MainTo),
-				"depsound show "+ref+" --file="+a.MainTo)
+			add(fmt.Sprintf("%s is what executes on the runner; read it in the workspace diff", EscapeText(a.MainTo)),
+				reviewCommand(s, cacheRoot, "show", "--file="+a.MainTo))
 		default:
 			add("the executed entrypoint is what runs on the runner; read the changed files in the workspace diff", "")
 		}
@@ -224,17 +234,17 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 		// the standing gha nudge: what the runner hands the action is decided
 		// at the callsite, which is in the consumer's workflows, not here
 		add("an action runs with whatever the calling workflow grants it; check permissions, secrets and trigger at each callsite",
-			fmt.Sprintf("grep -rn %q .github/workflows/", s.Package.Name))
+			"grep -rn -- "+shellQuote(s.Package.Name)+" .github/workflows/")
 	} else {
 		// Always last, and always present: reachability is the tool's blind
 		// spot, so the standing next-step is to intersect the diff with actual
 		// usage. This is the anti-closure nudge on an otherwise-quiet result.
 		add("reachability and semantics are not assessed; if you rely on this dependency, intersect the diff with your usage",
-			"depsound surface "+ref+" --uses=<your import paths>")
+			reviewCommand(s, cacheRoot, "surface", "--uses=<your import paths>"))
 	}
 	return cov, na
-
 }
+
 func localSource(source *stats.Source) bool {
 	return source != nil && strings.HasPrefix(source.Verification, "local-")
 }
@@ -247,4 +257,66 @@ func pinOf(pins []stats.ActionPin, side string) *stats.ActionPin {
 		}
 	}
 	return nil
+}
+
+func reviewCommand(s *stats.Stats, cacheRoot, verb string, extra ...string) string {
+	identities := []string{s.Package.Ecosystem + ":" + s.Package.Name, s.Package.From, s.Package.To}
+	for _, identity := range identities {
+		if EscapeText(identity) != identity {
+			return ""
+		}
+	}
+	args := []string{"depsound"}
+	if verb != "" {
+		args = append(args, verb)
+	}
+	args = append(args, identities...)
+	if cacheRoot != "" {
+		root, err := filepath.Abs(cacheRoot)
+		if err != nil {
+			return ""
+		}
+		args = append(args, "--cache-dir="+root)
+	}
+	for _, local := range []struct {
+		side   string
+		source *stats.Source
+	}{{"from", s.Artifact.SourceFrom}, {"to", s.Artifact.SourceTo}} {
+		if !localSource(local.source) {
+			continue
+		}
+		u, err := url.Parse(local.source.URL)
+		if err != nil || u.Scheme != "file" || u.Host != "" || u.Path == "" {
+			return ""
+		}
+		path := u.Path
+		// File URLs prefix Windows drive paths with a slash.
+		if len(path) > 1 && filepath.VolumeName(path[1:]) != "" {
+			path = path[1:]
+		}
+		path = filepath.FromSlash(path)
+		if !filepath.IsAbs(path) {
+			return ""
+		}
+		args = append(args, "--"+local.side+"-artifact="+path)
+	}
+	for _, arg := range extra {
+		if value, ok := strings.CutPrefix(arg, "--file="); ok && EscapeText(value) != value {
+			return ""
+		}
+	}
+	args = append(args, extra...)
+	for i, arg := range args {
+		args[i] = shellQuote(arg)
+	}
+	return strings.Join(args, " ")
+}
+
+func shellQuote(s string) string {
+	if s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_./:@%+=,-", r))
+	}) == -1 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

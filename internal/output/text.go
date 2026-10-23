@@ -16,14 +16,14 @@ func Text(s *stats.Stats) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depsound %s:%s %s -> %s", s.Package.Ecosystem, taint(s.Package.Name), taint(s.Package.From), taint(s.Package.To))
+	w("depsound %s:%s %s -> %s", s.Package.Ecosystem, EscapeText(s.Package.Name), EscapeText(s.Package.From), EscapeText(s.Package.To))
 	writeResolution(w, s)
 	w("")
 	if len(s.Artifact.Unavailable) > 0 {
 		for _, u := range s.Artifact.Unavailable {
 			sig := DeriveUnavailable("", u).Signals[0]
 			w("%s", sig.Title)
-			w("  %s", signalDetail(sig, taint))
+			w("  %s", signalDetail(sig, EscapeText))
 		}
 		writeRegistryChecksum(w, "from", s.Artifact.SourceFrom)
 		writeRegistryChecksum(w, "to", s.Artifact.SourceTo)
@@ -31,7 +31,7 @@ func Text(s *stats.Stats) string {
 		writeSecurity(w, s.Security)
 		writeProvenance(w, s.Provenance, s.Package.Ecosystem)
 		for _, n := range s.Notes {
-			w("note: %s", taint(n))
+			w("note: %s", EscapeText(n))
 		}
 		writeGuidance(w, s)
 		writeNotice(w)
@@ -51,7 +51,7 @@ func Text(s *stats.Stats) string {
 		// count uses, so the numbers reconcile and a payload cannot hide
 		if big := largestExcluded(s.Files.Entries); big.Path != "" {
 			w("    biggest excluded: %s (%s) +%d/-%d; a guess (markers are attacker-writable),",
-				taint(big.Path), big.Class, big.Added, big.Removed)
+				EscapeText(big.Path), big.Class, big.Added, big.Removed)
 			w("    inspect if intent is unclear, exclusion is reading-order, not safety")
 			// for npm, dist/ is not incidental output: it IS the published
 			// runtime, the code that runs on import, so it is the thing to read
@@ -78,11 +78,11 @@ func Text(s *stats.Stats) string {
 		// package content (attacker-controllable); artifact provenance
 		// does not vouch for vendored sub-contents, so confirm against the
 		// true upstream (e.g. sqlite.org) before trusting it.
-		w("  embedded marker %s (%s): %s -> %s  [lead only; unverified vs upstream]", taint(e.Name), taint(e.File), taint(e.From), taint(e.To))
+		w("  embedded marker %s (%s): %s -> %s  [lead only; unverified vs upstream]", EscapeText(e.Name), EscapeText(e.File), EscapeText(e.From), EscapeText(e.To))
 	}
 	for _, f := range s.Files.Flagged {
 		w("  flag %s: %s (maxLine=%d avgLine=%d sourcemap=%v)",
-			taint(f.Path), f.Reason, f.Metrics.MaxLine, f.Metrics.AvgLine, f.Metrics.SourceMap)
+			EscapeText(f.Path), f.Reason, f.Metrics.MaxLine, f.Metrics.AvgLine, f.Metrics.SourceMap)
 	}
 	if n := len(s.Artifact.SkippedLinks); n > 0 {
 		w("  %d symlink/hardlink entries not materialized; trees diverge from the install artifact (see stats.json artifact.skippedLinks)", n)
@@ -98,7 +98,7 @@ func Text(s *stats.Stats) string {
 		w("")
 		writeSecurity(w, s.Security)
 		for _, n := range s.Notes {
-			w("note: %s", taint(n))
+			w("note: %s", EscapeText(n))
 		}
 		writeGuidance(w, s)
 		writeWorkspaceAndNotice(w, s)
@@ -114,11 +114,11 @@ func Text(s *stats.Stats) string {
 	} else {
 		w("execution surface:")
 		for _, c := range r.Lifecycle {
-			w("  lifecycle %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
+			w("  lifecycle %s %s: %s", EscapeText(c.Key), c.Status, changeDetail(c))
 		}
 		for _, c := range r.LifecycleGitOnly {
 			w("  lifecycle %s %s: %s  [git/link/file dependencies only, not a registry install]",
-				taint(c.Key), c.Status, changeDetail(c))
+				EscapeText(c.Key), c.Status, changeDetail(c))
 		}
 		if r.GypFrom || r.GypTo {
 			w("  binding.gyp (node-gyp runs at install): %v -> %v", r.GypFrom, r.GypTo)
@@ -154,7 +154,7 @@ func Text(s *stats.Stats) string {
 			w("%s", line)
 		}
 		for _, c := range r.Bin {
-			w("  bin %s %s: %s", taint(c.Key), c.Status, changeDetail(c))
+			w("  bin %s %s: %s", EscapeText(c.Key), c.Status, changeDetail(c))
 		}
 	}
 
@@ -175,14 +175,14 @@ func Text(s *stats.Stats) string {
 	} else {
 		w("dependencies:")
 		for _, d := range s.Dependencies {
-			line := fmt.Sprintf("%s %s %s", d.Section, taint(d.Name), d.Status)
+			line := fmt.Sprintf("%s %s %s", d.Section, EscapeText(d.Name), d.Status)
 			switch d.Status {
 			case "added":
-				line += " " + taint(d.To)
+				line += " " + EscapeText(d.To)
 			case "removed":
-				line += " (was " + taint(d.From) + ")"
+				line += " (was " + EscapeText(d.From) + ")"
 			default:
-				line += fmt.Sprintf(" %s -> %s", taint(d.From), taint(d.To))
+				line += fmt.Sprintf(" %s -> %s", EscapeText(d.From), EscapeText(d.To))
 			}
 			if d.Flag != "" {
 				line = line + "  [" + d.Flag + "]"
@@ -194,7 +194,7 @@ func Text(s *stats.Stats) string {
 	w("")
 	writeSecurity(w, s.Security)
 	for _, n := range s.Notes {
-		w("note: %s", taint(n))
+		w("note: %s", EscapeText(n))
 	}
 	writeProvenance(w, s.Provenance, s.Package.Ecosystem)
 
@@ -223,29 +223,26 @@ func writeNotice(w func(string, ...any)) {
 func writeGuidance(w func(string, ...any), s *stats.Stats) {
 	cov, next := s.Coverage, s.NextActions
 	if cov == nil {
-		cov, next = Guide(s)
+		cov, next = Guide(s, "")
 	}
 	w("")
 	w("=== coverage: a heuristic triage, NOT a verdict ===")
 	w("checked:")
 	for _, c := range cov.Checked {
-		w("  + %s", taint(c))
+		w("  + %s", EscapeText(c))
 	}
 	w("NOT checked ('no flags' is a starting point, not a clean bill):")
 	for _, c := range cov.NotChecked {
-		w("  - %s", taint(c))
+		w("  - %s", EscapeText(c))
 	}
 	if len(next) > 0 {
 		w("next steps:")
 		for _, a := range next {
-			// commands embed the package ref (name/versions), which is
-			// attacker-influenced once detect feeds manifest names, so
-			// taint like every other emission
 			if a.Command != "" {
-				w("  * %s", taint(a.Reason))
-				w("      %s", taint(a.Command))
+				w("  * %s", EscapeText(a.Reason))
+				w("      %s", EscapeControls(a.Command))
 			} else {
-				w("  * %s", taint(a.Reason))
+				w("  * %s", EscapeText(a.Reason))
 			}
 		}
 	}
@@ -282,10 +279,10 @@ func largestBy(entries []stats.FileEntry, keep func(stats.FileEntry) bool) stats
 func compat(s *stats.Stats) []string {
 	var out []string
 	if s.Compat.TypeFrom != s.Compat.TypeTo && (s.Compat.TypeFrom != "" || s.Compat.TypeTo != "") {
-		out = append(out, fmt.Sprintf("type: %s -> %s", taint(s.Compat.TypeFrom), taint(s.Compat.TypeTo)))
+		out = append(out, fmt.Sprintf("type: %s -> %s", EscapeText(s.Compat.TypeFrom), EscapeText(s.Compat.TypeTo)))
 	}
 	for _, c := range s.Compat.Constraints {
-		out = append(out, fmt.Sprintf("%s: %s", taint(c.Key), changeDetail(c)))
+		out = append(out, fmt.Sprintf("%s: %s", EscapeText(c.Key), changeDetail(c)))
 	}
 	// lead the raw exports rows with the plain-language consequence when a
 	// package drops its CJS entry: "ESM import-only" is faster to grasp than
@@ -294,7 +291,7 @@ func compat(s *stats.Stats) []string {
 		out = append(out, "package now ESM import-only: require() no longer resolves \".\" (breaks CJS consumers)")
 	}
 	for _, e := range s.Compat.Exports {
-		line := fmt.Sprintf("exports %q %s: %s -> %s", taint(e.Subpath), e.Condition, blank(taint(e.From)), blank(taint(e.To)))
+		line := fmt.Sprintf("exports %q %s: %s -> %s", EscapeText(e.Subpath), e.Condition, blank(EscapeText(e.From)), blank(EscapeText(e.To)))
 		if e.Note != "" {
 			line += "  [" + e.Note + "]"
 		}
@@ -314,17 +311,17 @@ func writeResolution(w func(string, ...any), s *stats.Stats) {
 	}
 	var parts []string
 	if r.FromSpec != "" {
-		parts = append(parts, fmt.Sprintf("from %q -> %s", taint(r.FromSpec), taint(s.Package.From)))
+		parts = append(parts, fmt.Sprintf("from %q -> %s", EscapeText(r.FromSpec), EscapeText(s.Package.From)))
 	}
 	if r.ToSpec != "" {
-		parts = append(parts, fmt.Sprintf("to %q -> %s", taint(r.ToSpec), taint(s.Package.To)))
+		parts = append(parts, fmt.Sprintf("to %q -> %s", EscapeText(r.ToSpec), EscapeText(s.Package.To)))
 	}
 	if len(parts) > 0 {
 		w("resolved: %s", strings.Join(parts, ", "))
 	}
 	if len(r.ToNewer) > 0 {
 		w("  note %s also admits %d newer, unreviewed version(s) (%s); a shorter or no",
-			taint(r.ToSpec), len(r.ToNewer), taint(strings.Join(r.ToNewer, ", ")))
+			EscapeText(r.ToSpec), len(r.ToNewer), EscapeText(strings.Join(r.ToNewer, ", ")))
 		w("  cooldown installs one of those, review those targets too if policy differs")
 	}
 }
@@ -367,9 +364,9 @@ func Files(s *stats.Stats) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	w("%d files changed (+%d/-%d)", s.Files.Changed, s.Files.Added, s.Files.Removed)
 	for _, e := range s.Files.Entries {
-		path := taint(e.Path)
+		path := EscapeText(e.Path)
 		if e.OldPath != "" {
-			path = taint(e.OldPath) + " => " + path
+			path = EscapeText(e.OldPath) + " => " + path
 		}
 		w("  %-1s %-9s %+5d/-%-5d %s", e.Status, e.Class, e.Added, e.Removed, path)
 	}
@@ -420,12 +417,12 @@ func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {
 	}
 	w("  %s:", label)
 	for _, v := range vulns {
-		line := "    " + vulnClass(v) + taint(v.ID)
+		line := "    " + vulnClass(v) + EscapeText(v.ID)
 		if len(v.Aliases) > 0 {
-			line += " (" + taint(strings.Join(v.Aliases, ", ")) + ")"
+			line += " (" + EscapeText(strings.Join(v.Aliases, ", ")) + ")"
 		}
 		if v.Summary != "" {
-			line += ": " + taint(v.Summary)
+			line += ": " + EscapeText(v.Summary)
 		}
 		w("%s", line)
 	}
@@ -434,11 +431,11 @@ func writeVulns(w func(string, ...any), label string, vulns []osv.Vuln) {
 func changeDetail(c manifest.Change) string {
 	switch c.Status {
 	case "added":
-		return fmt.Sprintf("added %q", taint(c.To))
+		return fmt.Sprintf("added %q", EscapeText(c.To))
 	case "removed":
-		return fmt.Sprintf("removed (was %q)", taint(c.From))
+		return fmt.Sprintf("removed (was %q)", EscapeText(c.From))
 	default:
-		return fmt.Sprintf("%q -> %q", taint(c.From), taint(c.To))
+		return fmt.Sprintf("%q -> %q", EscapeText(c.From), EscapeText(c.To))
 	}
 }
 
@@ -457,26 +454,10 @@ const bothPresentNote = "  [present in both; the build-time code it runs may sti
 // stats.json keeps full fidelity behind JSON's structural escaping.
 const maxTaintedLen = 200
 
-// taint renders an attacker-influenced string safely for terminals:
-// invalid UTF-8 replaced; C0, DEL and C1 controls escaped (0x9b is CSI
-// on some terminals); bidi controls escaped (trojan-source reordering);
-// length capped at a rune boundary. The rule at every callsite: taint
-// by where the bytes originated, not by whether the field looks like a
-// value; map keys from a manifest are as attacker-chosen as map values.
-func taint(s string) string {
-	s = strings.ToValidUTF8(s, "�")
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
-			fmt.Fprintf(&b, "\\x%02x", r)
-		case isBidiControl(r):
-			fmt.Fprintf(&b, "\\u%04x", r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
+// EscapeText renders and caps an attacker-influenced value for human output.
+// Apply it by byte origin, including manifest map keys.
+func EscapeText(s string) string {
+	out := EscapeControls(s)
 	if len(out) > maxTaintedLen {
 		cut := maxTaintedLen
 		for cut > 0 && !utf8.RuneStart(out[cut]) {
@@ -485,6 +466,30 @@ func taint(s string) string {
 		out = out[:cut] + "...[truncated]"
 	}
 	return out
+}
+
+// EscapeControls escapes terminal controls and invalid UTF-8 without truncating
+// an authored message or shell command. Bound tainted component values first.
+func EscapeControls(s string) string {
+	s = strings.ToValidUTF8(s, "�")
+	var b strings.Builder
+	start := 0
+	for i, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || isBidiControl(r) {
+			b.WriteString(s[start:i])
+			if isBidiControl(r) {
+				fmt.Fprintf(&b, "\\u%04x", r)
+			} else {
+				fmt.Fprintf(&b, "\\x%02x", r)
+			}
+			start = i + utf8.RuneLen(r)
+		}
+	}
+	if start == 0 {
+		return s
+	}
+	b.WriteString(s[start:])
+	return b.String()
 }
 
 func isBidiControl(r rune) bool {

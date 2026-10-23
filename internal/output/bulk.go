@@ -74,7 +74,7 @@ func Bulk(results []BulkResult) string {
 	w("depsound bulk: %d dependencies analysed (cached).", len(results))
 	w("this is a router: a fired signal is a pointer to inspect, not a summary.")
 	w("drill any dep with: depsound <eco>:<name> <from> <to>  (now instant, cached)")
-	writeRouter(w, results, false)
+	writeRouter(w, results, false, nil)
 	return b.String()
 }
 
@@ -122,7 +122,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeIntegrityWeak}, "coverage gap: artifact verified by TLS trust only (no registry integrity or checksum-DB record)"},
 	{[]Code{CodeOSVDisabled, CodeOSVFailed}, "coverage gap: known-advisory scan did not complete for these deps"},
 	{[]Code{CodeOSVFixed}, "advisories fixed by the upgrade (the merge argument)"},
-	{[]Code{CodeProvenanceHardened}, "publishing chain strengthened (moved onto a trusted publisher)"},
+	{[]Code{CodeProvenanceHardened}, "trusted publishing adopted (a mechanism, not release approval)"},
 	{[]Code{CodeNoContentChange}, "no content change: the version moved, what installs did not"},
 	{[]Code{CodeOSVUnsupported}, "note: known-advisory scan not applicable (OSV has no index for this ecosystem)"},
 }
@@ -134,14 +134,24 @@ var bulkSections = []bulkSection{
 func provenanceGap(results []BulkResult) string {
 	total, complete := 0, 0
 	for _, r := range results {
-		if r.Stats == nil {
+		var answered bool
+		switch {
+		case r.Stats != nil:
+			answered = r.Stats.Provenance != nil && r.Stats.Provenance.Complete()
+		case r.Census != nil:
+			answered = r.Census.Provenance != nil && r.Census.Provenance.Complete()
+		default:
 			continue
 		}
 		total++
-		if p := r.Stats.Provenance; p != nil && p.Complete() {
+		if answered {
 			complete++
 		}
 	}
+	return provenanceGapCounts(total, complete)
+}
+
+func provenanceGapCounts(total, complete int) string {
 	switch {
 	case total == 0 || complete == 0:
 		return "provenance and maintenance metadata"
@@ -152,25 +162,73 @@ func provenanceGap(results []BulkResult) string {
 	}
 }
 
+type routerCoverage struct {
+	reports, artifacts, unavailable int
+	osvRan, osvMissing, osvNA       int
+	provenanceComplete              int
+}
+
+func (c *routerCoverage) include(r *BulkResult) {
+	switch {
+	case r.Stats != nil:
+		s := r.Stats
+		c.report(s.Package.Ecosystem, s.Security.Queried, len(s.Artifact.Unavailable),
+			s.Provenance != nil && s.Provenance.Complete())
+	case r.Census != nil:
+		s := r.Census
+		failures := 0
+		if s.Unavailable != nil {
+			failures = 1
+		}
+		c.report(s.Ecosystem, s.OSVQueried, failures, s.Provenance != nil && s.Provenance.Complete())
+	case r.Unavailable != nil:
+		c.unavailable++
+	}
+}
+
+func (c *routerCoverage) report(eco string, queried bool, unavailable int, provenanceComplete bool) {
+	c.reports++
+	if unavailable > 0 {
+		c.unavailable += unavailable
+	} else {
+		c.artifacts++
+	}
+	switch {
+	case queried:
+		c.osvRan++
+	case !osvSupported(eco):
+		c.osvNA++
+	default:
+		c.osvMissing++
+	}
+	if provenanceComplete {
+		c.provenanceComplete++
+	}
+}
+
 // writeRouter renders the prioritised signal sections + coverage boundary over
 // a set of analysed deps, entirely from the shared ledger (so it surfaces every
 // fact markdown does; digestOf is now an internal input to Derive, not a second
 // engine). Shared by bulk and transitive (the transitive changed-module set IS
 // a bulk list); transitive adjusts the coverage line that would otherwise
 // wrongly claim the transitive graph is unchecked.
-func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) {
+func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, added []ModuleRef) {
 	var failed, redirects, newDeps, clean []BulkResult
 	type sigEntry struct {
 		ref string
 		sig Signal
 	}
 	buckets := map[Code][]sigEntry{}
-	diffCount := 0 // deps carrying a version diff (the OSV-via-diff denominator)
-	artifactCount, unavailableCount := 0, 0
+	var coverage routerCoverage
+	for _, module := range added {
+		if module.Analysis != nil {
+			coverage.include(module.Analysis)
+		}
+	}
 	for _, r := range results {
+		coverage.include(&r)
 		switch {
 		case r.Unavailable != nil:
-			unavailableCount++
 			for _, sig := range DeriveUnavailable(r.Ref, r.Unavailable).Signals {
 				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
 			}
@@ -178,11 +236,6 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 			redirects = append(redirects, r)
 		case r.Census != nil:
 			newDeps = append(newDeps, r)
-			if r.Census.Unavailable != nil {
-				unavailableCount++
-			} else {
-				artifactCount++
-			}
 			for _, sig := range DeriveCensus(r.Ref, r.Census).Signals {
 				switch sig.Code {
 				case CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch, CodeRegistryChecksum:
@@ -196,12 +249,6 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		case r.Stats == nil:
 			failed = append(failed, r)
 		default:
-			if len(r.Stats.Artifact.Unavailable) > 0 {
-				unavailableCount += len(r.Stats.Artifact.Unavailable)
-			} else {
-				artifactCount++
-			}
-			diffCount++
 			l := Derive(r.Ref, r.Stats)
 			if len(l.Signals) == 0 {
 				clean = append(clean, r)
@@ -218,7 +265,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w("")
 		w("dependency redirected off the registry (fork/git/local: trust-laundering shape):")
 		for _, r := range redirects {
-			w("  %s  -> %s", taint(r.Ref), taint(r.Redirect))
+			w("  %s  -> %s", EscapeText(r.Ref), EscapeText(r.Redirect))
 		}
 	}
 	// diff signals in priority order, from the ledger
@@ -233,18 +280,18 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w("")
 		w("%s:", sec.title)
 		for _, e := range ents {
-			line := taint(e.sig.Title)
-			if detail := signalDetail(e.sig, taint); detail != "" {
+			line := EscapeText(e.sig.Title)
+			if detail := signalDetail(e.sig, EscapeText); detail != "" {
 				line += ": " + detail
 			}
-			w("  %s  %s", taint(e.ref), line)
+			w("  %s  %s", EscapeText(e.ref), line)
 		}
 	}
 	if len(newDeps) > 0 {
 		w("")
 		w("new dependencies (whole footprint unreviewed; adopt-review, not a diff):")
 		for _, r := range newDeps {
-			w("  %s  %s", taint(r.Ref), taint(censusFootprint(r.Census)))
+			w("  %s  %s", EscapeText(r.Ref), censusFootprint(r.Census))
 		}
 	}
 	if len(clean) > 0 {
@@ -252,14 +299,14 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w("no flags raised (%d): NOT the same as safe. These were not assessed", len(clean))
 		w("for reachability, semantics, intent, or test coverage, a starting point:")
 		for _, r := range clean {
-			w("  %s", taint(r.Ref))
+			w("  %s", EscapeText(r.Ref))
 		}
 	}
 	if len(failed) > 0 {
 		w("")
 		w("failed (not analysed):")
 		for _, r := range failed {
-			w("  %s: %s", taint(r.Ref), taint(r.Err))
+			w("  %s: %s", EscapeText(r.Ref), EscapeText(r.Err))
 		}
 	}
 
@@ -269,27 +316,31 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 	w("")
 	w("=== coverage: heuristic triage, NOT a verdict ===")
 	switch {
-	case artifactCount > 0 && unavailableCount > 0:
-		w("checked: %d artifact report(s): diff/footprint, file classes, manifest compat, execution surface; %d acquisition failure(s): status only.", artifactCount, unavailableCount)
-	case artifactCount > 0:
+	case coverage.reports == 0 && coverage.unavailable == 0:
+		if transitive {
+			w("checked: dependency graph and name/version changes; no artifacts inspected.")
+		} else {
+			w("checked: routing outcomes only; no artifacts inspected.")
+		}
+	case coverage.artifacts > 0 && coverage.unavailable > 0:
+		w("checked: %d artifact report(s): diff/footprint, file classes, manifest compat, execution surface; %d acquisition failure(s): status only.", coverage.artifacts, coverage.unavailable)
+	case coverage.artifacts > 0:
 		w("checked: artifact diff/footprint, file classes, manifest compat, execution surface.")
 	default:
 		w("checked: artifact acquisition status only; contents were not inspected.")
 	}
 	// OSV status is derived from what actually ran, not asserted flat: a
 	// disabled/failed scan is a gap, an unsupported ecosystem is not.
-	osvGap := len(buckets[CodeOSVDisabled]) + len(buckets[CodeOSVFailed])
-	osvNA := len(buckets[CodeOSVUnsupported])
-	if diffCount > 0 {
+	if coverage.reports > 0 {
 		var st []string
-		if ran := diffCount - osvGap - osvNA; ran > 0 {
-			st = append(st, fmt.Sprintf("run for %d", ran))
+		if coverage.osvRan > 0 {
+			st = append(st, fmt.Sprintf("run for %d", coverage.osvRan))
 		}
-		if osvGap > 0 {
-			st = append(st, fmt.Sprintf("did not complete for %d (see the coverage-gap section above)", osvGap))
+		if coverage.osvMissing > 0 {
+			st = append(st, fmt.Sprintf("not run or incomplete for %d", coverage.osvMissing))
 		}
-		if osvNA > 0 {
-			st = append(st, fmt.Sprintf("not applicable for %d (ecosystem unsupported)", osvNA))
+		if coverage.osvNA > 0 {
+			st = append(st, fmt.Sprintf("not applicable for %d (ecosystem unsupported)", coverage.osvNA))
 		}
 		w("  known-advisory scan (OSV, backward-looking; blind to novel/unreported code): %s.", strings.Join(st, "; "))
 	}
@@ -298,26 +349,28 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w(" runtime semantics; test coverage; whatever the lockfile itself omits (pruned,")
 		w(" test-only or platform-conditional). Added modules were censused at the")
 		w(" resolved version, not diffed. Silence != safe.")
-		if g := provenanceGap(results); g != "" {
+		if g := provenanceGapCounts(coverage.reports, coverage.provenanceComplete); g != "" {
 			w("  NOT checked: %s.", g)
 		}
 	} else {
 		prov := ""
-		if g := provenanceGap(results); g != "" {
+		if g := provenanceGapCounts(coverage.reports, coverage.provenanceComplete); g != "" {
 			prov = "; " + g
 		}
 		w("NOT checked: does your code reach each change; what it does; test coverage;")
-		if unavailableCount > 0 {
+		if coverage.unavailable > 0 {
 			w(" unavailable artifact contents;")
 		}
 		w(" transitive deps these bumps pull in%s. Silence != safe.", prov)
 	}
-	if artifactCount > 0 {
+	if coverage.artifacts > 0 {
 		w("next: for each dep you rely on, intersect the diff with your usage ->")
 		w(" depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
-	} else {
-		w("next: obtain the exact artifact from a trusted quarantine or registry operator;")
+	} else if coverage.unavailable > 0 {
+		w("next: obtain the exact artifact from a source you trust, such as a registry operator;")
 		w(" for crates, re-run with --from-artifact/--to-artifact or --artifact.")
+	} else {
+		w("next: inspect the dependency declarations and graph changes -> depsound guide")
 	}
 }
 

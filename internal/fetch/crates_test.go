@@ -57,6 +57,22 @@ func importLocalCrate(t *testing.T, client *http.Client, src, dir string) *Local
 	return evidence
 }
 
+func TestLocalCrateFileURLKeepsAbsolutePath(t *testing.T) {
+	for _, tc := range []struct {
+		path, uri string
+	}{
+		{"/evidence/archive #1.crate", "file:///evidence/archive%20%231.crate"},
+		{"C:/evidence/archive #1.crate", "file:///C:/evidence/archive%20%231.crate"},
+		{"//server/share/archive #1.crate", "file:////server/share/archive%20%231.crate"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := localCrateURL(tc.path); got != tc.uri {
+				t.Fatalf("file URI = %q, want %q", got, tc.uri)
+			}
+		})
+	}
+}
+
 func TestLocalCrateRecordsOriginDigestAndRegistryMatch(t *testing.T) {
 	content := []byte("quarantined crate bytes")
 	sum := sha256.Sum256(content)
@@ -69,7 +85,7 @@ func TestLocalCrateRecordsOriginDigestAndRegistryMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	evidence := importLocalCrate(t, client, src, filepath.Join(dir, "cache"))
-	origin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(src)}).String()
+	origin := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(src), "/")}).String()
 	if evidence.Meta.Verification != VerifyLocalRegistry256 ||
 		evidence.Meta.Digest != "sha256-"+checksum || evidence.Meta.URL != origin {
 		t.Fatalf("local evidence = %+v", evidence)
@@ -196,8 +212,8 @@ func TestLocalCrateSharesBytesNotOrigin(t *testing.T) {
 	if first.Path != second.Path {
 		t.Fatalf("identical bytes stored at %q and %q", first.Path, second.Path)
 	}
-	leftOrigin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(left)}).String()
-	rightOrigin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(right)}).String()
+	leftOrigin := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(left), "/")}).String()
+	rightOrigin := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(right), "/")}).String()
 	if first.Meta.URL != leftOrigin || second.Meta.URL != rightOrigin {
 		t.Fatalf("import origins = %q, %q; want %q, %q", first.Meta.URL, second.Meta.URL, leftOrigin, rightOrigin)
 	}
@@ -232,7 +248,7 @@ func TestLocalCrateRetainsEvidenceAcrossSourceReplacement(t *testing.T) {
 		t.Fatalf("first import changed to %q, %v", got, err)
 	}
 	wantDigest := fmt.Sprintf("sha256-%x", sha256.Sum256(original))
-	wantOrigin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(src)}).String()
+	wantOrigin := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(src), "/")}).String()
 	if first.Meta.Digest != wantDigest || first.Meta.URL != wantOrigin {
 		t.Fatalf("first metadata changed: %+v", first.Meta)
 	}

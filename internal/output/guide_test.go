@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
@@ -11,7 +12,7 @@ import (
 
 func TestGuideCoverageAlwaysPresent(t *testing.T) {
 	s := &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm", Name: "x", From: "1", To: "2"}}
-	cov, next := Guide(s)
+	cov, next := Guide(s, "")
 	if cov == nil || len(cov.Checked) == 0 || len(cov.NotChecked) == 0 {
 		t.Fatal("coverage boundary must always be present")
 	}
@@ -47,7 +48,7 @@ func TestGuideTransitiveRouteFollowsResolution(t *testing.T) {
 		{"range endpoints", &stats.Resolution{ToSpec: "^2.0.0"}, "depsound transitive npm:x 1.0.0 2.0.0", "--old=<base package-lock.json>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, next := Guide(&stats.Stats{Package: pkg, Resolution: tc.res})
+			_, next := Guide(&stats.Stats{Package: pkg, Resolution: tc.res}, "")
 			var joined string
 			for _, a := range next {
 				joined += a.Reason + "\n" + a.Command + "\n"
@@ -71,7 +72,7 @@ func TestGuideReasonsFitTheLineCap(t *testing.T) {
 			Runnable:   stats.Runnable{Lifecycle: []npmpkg.Change{{Key: "postinstall", Status: "added"}}},
 			Security:   osv.Assessment{Introduced: []osv.Vuln{{ID: "GHSA-x"}}, StillPresent: []osv.Vuln{{ID: "GHSA-y"}}},
 			Resolution: res,
-		})
+		}, "")
 		for _, a := range next {
 			if len(a.Reason) > maxTaintedLen {
 				t.Errorf("reason is %d bytes, cap is %d, so it renders truncated: %q", len(a.Reason), maxTaintedLen, a.Reason)
@@ -80,23 +81,20 @@ func TestGuideReasonsFitTheLineCap(t *testing.T) {
 	}
 }
 
-func TestGuideDerivesSignalSteps(t *testing.T) {
-	s := &stats.Stats{
-		Package:  stats.PkgRef{Ecosystem: "npm", Name: "x", From: "1", To: "2"},
-		Runnable: stats.Runnable{Lifecycle: []npmpkg.Change{{Key: "postinstall", Status: "added"}}},
-		Security: osv.Assessment{StillPresent: []osv.Vuln{{ID: "GHSA-x"}}},
-	}
-	_, next := Guide(s)
-	var sawExec, sawStill bool
-	for _, a := range next {
-		if strings.Contains(a.Reason, "install/build code") {
-			sawExec = true
+func TestChecksumLookupGapFitsCoverageBudget(t *testing.T) {
+	source := &stats.Source{RegistryChecksum: &fetch.RegistryChecksum{
+		State: "lookup-failed", URL: "https://index.example/" + strings.Repeat("x", 260),
+	}}
+	diff, _ := Guide(&stats.Stats{
+		Package:  stats.PkgRef{Ecosystem: "crates", Name: "example", From: "1.0.0", To: "1.0.1"},
+		Artifact: stats.Artifact{SourceTo: source},
+	}, "")
+	census, _ := CensusGuide(&Census{Ecosystem: "crates", Name: "example", Version: "1.0.1", Source: source})
+	for _, coverage := range []*stats.Coverage{diff, census} {
+		for _, gap := range coverage.NotChecked {
+			if len(gap) > maxTaintedLen {
+				t.Errorf("coverage explanation would be clipped: %q", gap)
+			}
 		}
-		if strings.Contains(a.Reason, "remain") {
-			sawStill = true
-		}
-	}
-	if !sawExec || !sawStill {
-		t.Errorf("expected exec + still-present next-steps, got %+v", next)
 	}
 }

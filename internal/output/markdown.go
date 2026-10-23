@@ -584,14 +584,14 @@ func plural(n int) string {
 }
 
 // mdTaint makes an attacker-influenced value safe as inline GitHub-Flavored
-// Markdown: taint() strips control/bidi bytes and newlines (so it stays on one
+// Markdown: EscapeText strips control/bidi bytes and newlines (so it stays on one
 // line, no block injection), then GFM metacharacters are entity-encoded (tags/
 // images, emphasis, links, code, table pipes, @mention/#issue autolinks).
 // Entities still display as the character (&#64; -> @), so @scope/pkg reads
 // right but stays inert. Residual: bare-URL autolinks, a link not an
 // auto-loading image, so no zero-click channel.
 func mdTaint(s string) string {
-	s = taint(s)
+	s = EscapeText(s)
 	return strings.NewReplacer(
 		"&", "&amp;",
 		"<", "&lt;",

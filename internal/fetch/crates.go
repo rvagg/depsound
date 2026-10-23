@@ -44,7 +44,7 @@ func Crate(ctx context.Context, client *http.Client, name, version_, dest string
 	if checksum.State == "version-absent" {
 		return &RegistryMissing{
 			URL: checksum.URL, ArtifactURL: u, Status: checksum.Status,
-			Hint: fmt.Sprintf("version %s is absent from the crates.io sparse index; artifact contents were not inspected", version_),
+			Hint: "requested version not listed in the observed index",
 		}
 	}
 	tmp, err := fetchToTemp(ctx, client, u, filepath.Dir(dest))
@@ -134,7 +134,7 @@ func LocalCrate(ctx context.Context, client *http.Client, name, version_, src, d
 	if err := publishLocalCrate(tmp.Name(), path, digest); err != nil {
 		return nil, err
 	}
-	origin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(resolved)}).String()
+	origin := localCrateURL(resolved)
 	return &LocalCrateEvidence{
 		Path: path,
 		Meta: Meta{
@@ -142,6 +142,14 @@ func LocalCrate(ctx context.Context, client *http.Client, name, version_, src, d
 			RegistryChecksum: checksum,
 		},
 	}, nil
+}
+
+func localCrateURL(path string) string {
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 func publishLocalCrate(tmp, path, digest string) error {

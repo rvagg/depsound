@@ -121,7 +121,7 @@ func surfaceCmd(args []string) error {
 			"limitations": output.SurfaceLimitations(string(r.sp.Eco)),
 		})
 	}
-	fmt.Print(output.Surface(r.st, results, r.idx, r.ws))
+	fmt.Print(output.Surface(r.st, results, r.idx, r.ws, r.cacheRoot))
 	return nil
 }
 
@@ -185,7 +185,7 @@ func showCmd(args []string) error {
 	if len(sel) == 0 {
 		return fmt.Errorf("no changed content matches that selector")
 	}
-	fmt.Fprintf(os.Stderr, "depsound: workspace %s\n", r.ws)
+	fmt.Fprintf(os.Stderr, "depsound: workspace %s\n", output.EscapeText(r.ws))
 	_, err = os.Stdout.Write(r.idx.Extract(raw, sel))
 	return err
 }

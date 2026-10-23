@@ -35,10 +35,15 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "depsound:", err)
+		fmt.Fprintln(os.Stderr, "depsound:", output.EscapeControls(err.Error()))
 		os.Exit(1)
 	}
 }
+
+type diagnosticCause struct{ error }
+
+func (e diagnosticCause) Error() string { return output.EscapeText(e.error.Error()) }
+func (e diagnosticCause) Unwrap() error { return e.error }
 
 func run(args []string) error {
 	// top-level meta words in first position
@@ -169,7 +174,7 @@ func artifactSource(meta fetch.Meta) *stats.Source {
 	}
 }
 
-// commonArgs parses the shared "<spec> <from> <to>" tail plus --cache-dir,
+// resolveWorkspace parses the shared "<spec> <from> <to>" tail plus cache/evidence flags,
 // materializes the workspace, and returns it. extraFlags handles
 // command-specific flags, called per unrecognized --flag.
 func resolveWorkspace(args []string, extraFlags func(string) (bool, error)) (*resolved, []string, error) {
@@ -242,10 +247,10 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 	if sp.Eco != spec.GHA {
 		ctx, client := context.Background(), &http.Client{}
 		if fromRes, err = fetch.ResolveVersion(ctx, client, string(sp.Eco), sp.Name, fromArg, cooldown); err != nil {
-			return nil, fmt.Errorf("resolve from %q: %w", fromArg, err)
+			return nil, fmt.Errorf("resolve from %s: %w", output.EscapeText(fromArg), diagnosticCause{err})
 		}
 		if toRes, err = fetch.ResolveVersion(ctx, client, string(sp.Eco), sp.Name, toArg, cooldown); err != nil {
-			return nil, fmt.Errorf("resolve to %q: %w", toArg, err)
+			return nil, fmt.Errorf("resolve to %s: %w", output.EscapeText(toArg), diagnosticCause{err})
 		}
 	}
 	from, err := spec.NormalizeVersion(sp.Eco, fromRes.Version)
@@ -266,7 +271,7 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 		}
 		for _, p := range []string{artifactPaths.from, artifactPaths.to} {
 			if p != "" && !strings.EqualFold(filepath.Ext(p), ".crate") {
-				return nil, fmt.Errorf("local artifact %q must be a .crate archive", p)
+				return nil, fmt.Errorf("local artifact %q must be a .crate archive", output.EscapeText(p))
 			}
 		}
 	}
@@ -277,7 +282,7 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 			// bulk renders it as the non-event it is.
 			return nil, &sameResolvedError{fromArg, toArg, from}
 		}
-		return nil, fmt.Errorf("from and to are the same version (%s); nothing to diff", from)
+		return nil, fmt.Errorf("from and to are the same version (%s); nothing to diff", output.EscapeText(from))
 	}
 	// gha refs resolve to commits fresh on every run (a moved tag must never
 	// hide behind a cache); the resolved shas key the artifacts and validate
@@ -426,7 +431,7 @@ func diffCmd(args []string) error {
 	// coverage + next-steps depend on the merged OSV, so compute here (not
 	// in the deterministic workspace build) and attach for text and JSON
 	if format == "stats" || format == "json" {
-		r.st.Coverage, r.st.NextActions = output.Guide(r.st)
+		r.st.Coverage, r.st.NextActions = output.Guide(r.st, r.cacheRoot)
 	}
 	if len(r.st.Artifact.Unavailable) > 0 && format != "stats" && format != "json" {
 		return fmt.Errorf("artifact contents unavailable (%s); %s output needs both artifact trees",
@@ -441,12 +446,12 @@ func diffCmd(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(r.st)
 	case "patch":
-		fmt.Fprintf(os.Stderr, "depsound: workspace %s\n", r.ws)
+		fmt.Fprintf(os.Stderr, "depsound: workspace %s\n", output.EscapeText(r.ws))
 		return copyFile(filepath.Join(r.ws, "diff.patch"), os.Stdout)
 	case "files":
 		// changed-file table on stdout; tree paths for direct grepping
 		// on stderr so stdout stays a clean list
-		fmt.Fprintf(os.Stderr, "depsound: trees at %s/old %s/new\n", r.ws, r.ws)
+		fmt.Fprintf(os.Stderr, "depsound: trees at %s/old %s/new\n", output.EscapeText(r.ws), output.EscapeText(r.ws))
 		fmt.Print(output.Files(r.st))
 	default:
 		return fmt.Errorf("unknown format %q", format)
@@ -624,7 +629,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		}
 		dest := c.ArtifactPath(string(sp.Eco), sp.Name, artKey, ext)
 		if _, err := os.Stat(dest); err != nil {
-			fmt.Fprintf(os.Stderr, "depsound: fetching %s@%s\n", sp, v)
+			fmt.Fprintf(os.Stderr, "depsound: fetching %s@%s\n", output.EscapeText(sp.String()), output.EscapeText(v))
 		}
 		// always goes through fetch: cache hits are rehashed against the
 		// sidecar digest there, and failures refetch
@@ -643,7 +648,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 			if missing := reportUnavailable(err, v, side); missing != nil {
 				unavailable = append(unavailable, missing)
 			} else {
-				failure = errors.Join(failure, err)
+				failure = errors.Join(failure, fmt.Errorf("acquire %s@%s: %w", output.EscapeText(sp.String()), output.EscapeText(v), diagnosticCause{err}))
 			}
 			continue
 		}
@@ -673,7 +678,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 	}
 	defer os.RemoveAll(tmp)
 
-	fmt.Fprintf(os.Stderr, "depsound: %s %s->%s: extracting and diffing\n", sp, from, to)
+	fmt.Fprintf(os.Stderr, "depsound: %s %s->%s: extracting and diffing\n", output.EscapeText(sp.String()), output.EscapeText(from), output.EscapeText(to))
 	var skippedLinks, hostileEntries []string
 	for v, sub := range map[string]string{from: "old", to: "new"} {
 		var rep *extract.Report
@@ -692,11 +697,11 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 			rep, err = extract.TarGz(arts[v], filepath.Join(tmp, sub), extract.DefaultLimits)
 		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("extract %s artifact: %w", sub, diagnosticCause{err})
 		}
 		if local := localArtifacts[v]; local != nil && rep.Prefix != sp.Name+"-"+v {
 			return nil, fmt.Errorf("local crate %q has archive root %q, want %q",
-				local.Path, rep.Prefix, sp.Name+"-"+v)
+				output.EscapeText(local.Path), output.EscapeText(rep.Prefix), output.EscapeText(sp.Name+"-"+v))
 		}
 		for _, l := range rep.SkippedLinks {
 			skippedLinks = append(skippedLinks, sub+": "+l)
@@ -714,7 +719,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 	if sp.Sub != "" {
 		for _, side := range []string{"old", "new"} {
 			if !exists(filepath.Join(tmp, side, sp.Sub)) {
-				return nil, fmt.Errorf("gha sub-path %q not present in %s tree (%s@%s); check the path", sp.Sub, side, sp.Name, map[string]string{"old": from, "new": to}[side])
+				return nil, fmt.Errorf("gha sub-path %q not present in %s tree (%s@%s); check the path", output.EscapeText(sp.Sub), side, output.EscapeText(sp.Name), output.EscapeText(map[string]string{"old": from, "new": to}[side]))
 			}
 		}
 		oldRoot = filepath.Join("old", sp.Sub)
@@ -758,24 +763,24 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 	switch sp.Eco {
 	case spec.NPM:
 		if input.OldPkg, err = npmpkg.Load(input.OldTree); err != nil {
-			return nil, fmt.Errorf("old tree: %w", err)
+			return nil, fmt.Errorf("old tree: %w", diagnosticCause{err})
 		}
 		if input.NewPkg, err = npmpkg.Load(input.NewTree); err != nil {
-			return nil, fmt.Errorf("new tree: %w", err)
+			return nil, fmt.Errorf("new tree: %w", diagnosticCause{err})
 		}
 	case spec.Go:
 		if input.OldMod, err = gopkg.Load(input.OldTree); err != nil {
-			return nil, fmt.Errorf("old tree: %w", err)
+			return nil, fmt.Errorf("old tree: %w", diagnosticCause{err})
 		}
 		if input.NewMod, err = gopkg.Load(input.NewTree); err != nil {
-			return nil, fmt.Errorf("new tree: %w", err)
+			return nil, fmt.Errorf("new tree: %w", diagnosticCause{err})
 		}
 	case spec.Crates:
 		if input.OldCrate, err = cratepkg.Load(input.OldTree); err != nil {
-			return nil, fmt.Errorf("old tree: %w", err)
+			return nil, fmt.Errorf("old tree: %w", diagnosticCause{err})
 		}
 		if input.NewCrate, err = cratepkg.Load(input.NewTree); err != nil {
-			return nil, fmt.Errorf("new tree: %w", err)
+			return nil, fmt.Errorf("new tree: %w", diagnosticCause{err})
 		}
 		for _, local := range []struct {
 			evidence *fetch.LocalCrateEvidence
@@ -864,12 +869,12 @@ func unavailableSides(failures []*stats.Unavailable) string {
 func validateLocalCrateLabel(artifact string, crate *cratepkg.Crate, name, version_ string) error {
 	if crate.Name != name || crate.Version != version_ {
 		return fmt.Errorf("local crate %q manifest identifies %s@%s, want %s@%s",
-			artifact, crate.Name, crate.Version, name, version_)
+			output.EscapeText(artifact), output.EscapeText(crate.Name), output.EscapeText(crate.Version), output.EscapeText(name), output.EscapeText(version_))
 	}
 	return nil
 }
-func partialStats(sp spec.Spec, from, to string, srcs map[string]*stats.Source, unavailable []*stats.Unavailable) *stats.Stats {
 
+func partialStats(sp spec.Spec, from, to string, srcs map[string]*stats.Source, unavailable []*stats.Unavailable) *stats.Stats {
 	name := sp.Name
 	if sp.Sub != "" {
 		name += "/" + sp.Sub

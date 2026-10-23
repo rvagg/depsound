@@ -282,11 +282,11 @@ func TestMdTaint(t *testing.T) {
 			t.Errorf("mdTaint(%q) left active %q: %q", in, active, got)
 		}
 	}
-	// newlines cannot survive taint(), so a value cannot inject a block
+	// Escaped newlines cannot inject a Markdown block.
 	if strings.ContainsAny(mdTaint("a\nb\r\n## heading"), "\n\r") {
 		t.Errorf("newline survived mdTaint (block-injection risk): %q", mdTaint("a\nb\r\n## heading"))
 	}
-	// taint() runs first and emits its own metacharacters (\ in \xNN, [] in
+	// EscapeText emits metacharacters (\ in \xNN, [] in
 	// its truncation marker); mdTaint must encode those ONCE, no double-escape
 	if got := mdTaint("\x1b[x]"); got != "&#92;x1b&#91;x&#93;" {
 		t.Errorf("taint+encode composition = %q, want single-encoded", got)

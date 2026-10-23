@@ -92,11 +92,11 @@ func censusCmd(args []string) error {
 	}
 	if transitive {
 		if err := censusResolveSubtree(c); err != nil {
-			fmt.Fprintf(os.Stderr, "depsound: transitive footprint unavailable: %v\n", err)
+			fmt.Fprintf(os.Stderr, "depsound: transitive footprint unavailable: %s\n", output.EscapeText(err.Error()))
 		} else {
 			if against != "" {
 				if err := censusAnnotateAgainst(c, against); err != nil {
-					fmt.Fprintf(os.Stderr, "depsound: --against ignored: %v\n", err)
+					fmt.Fprintf(os.Stderr, "depsound: --against ignored: %s\n", output.EscapeText(err.Error()))
 				}
 			}
 			if !noOSV {
@@ -265,7 +265,7 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 			return nil, fmt.Errorf("a local artifact needs an exact version label, not a range or latest")
 		}
 		if !strings.EqualFold(filepath.Ext(artifactPath), ".crate") {
-			return nil, fmt.Errorf("local artifact %q must be a .crate archive", artifactPath)
+			return nil, fmt.Errorf("local artifact %q must be a .crate archive", output.EscapeText(artifactPath))
 		}
 	}
 	if sp.Eco == spec.GHA && (versionReq == "" || versionReq == "latest") {
@@ -334,7 +334,7 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 		}
 	} else {
 		if _, err := os.Stat(art); err != nil {
-			fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", sp, v)
+			fmt.Fprintf(os.Stderr, "depsound: %s %s: fetching\n", output.EscapeText(sp.String()), output.EscapeText(v))
 		}
 		switch sp.Eco {
 		case spec.NPM:
@@ -390,7 +390,7 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 		}
 		if artifactPath != "" && rep.Prefix != sp.Name+"-"+v {
 			return nil, fmt.Errorf("local crate %q has archive root %q, want %q",
-				artifactPath, rep.Prefix, sp.Name+"-"+v)
+				output.EscapeText(artifactPath), output.EscapeText(rep.Prefix), output.EscapeText(sp.Name+"-"+v))
 		}
 		if err := os.MkdirAll(filepath.Dir(tree), 0o755); err != nil {
 			return nil, err
@@ -412,7 +412,7 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 	if sp.Sub != "" {
 		scoped = filepath.Join(tree, sp.Sub)
 		if !exists(scoped) {
-			return nil, fmt.Errorf("gha sub-path %q not present at %s@%s; check the path", sp.Sub, sp.Name, v)
+			return nil, fmt.Errorf("gha sub-path %q not present at %s@%s; check the path", output.EscapeText(sp.Sub), output.EscapeText(sp.Name), output.EscapeText(v))
 		}
 	}
 	cen.Tree = scoped

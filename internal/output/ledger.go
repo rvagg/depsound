@@ -76,6 +76,7 @@ const (
 	CodeCensusCVE          Code = "census.cve"
 	CodeCensusExec         Code = "census.exec"
 	CodeCensusBig          Code = "census.bigExcluded"
+	CodeCensusSubtree      Code = "census.subtree"
 	CodeAnalysisFailed     Code = "analysis.failed"
 	CodeArtifactAbsent     Code = "artifact.absent"           // registry metadata absent, or artifact URL returned 404/410
 	CodeArtifactDenied     Code = "artifact.denied"           // access denied (401/403)
@@ -418,12 +419,14 @@ func Derive(ref string, s *stats.Stats) Ledger {
 				p.ClaimedRepo+" vs "+p.SourceRepo+"; often a rename or redirect, so confirm which is current rather than assuming compromise")
 		}
 		if p.Shift() == provenance.ShiftHardened {
-			what := "publishing moved to trusted publishing (" + p.TrustedPublisher + " OIDC), retiring a long-lived token"
+			evidence := []EvidenceField{{Label: "publisher", Value: p.TrustedPublisher}, {Label: "mechanism", Value: "OIDC"}}
 			if p.AttestationAdded {
-				what += "; build attestation now present where the prior version had none"
+				evidence = append(evidence, EvidenceField{Label: "attestation", Value: "build provenance added; not approval of release behavior"})
 			}
-			add(CodeProvenanceHardened, KindFact, LensSecurity, weightPositive,
-				"publishing chain strengthened", what)
+			l.Signals = append(l.Signals, Signal{
+				Code: CodeProvenanceHardened, Kind: KindFact, Lens: LensSecurity, Weight: weightPositive,
+				Title: "trusted publishing adopted", Evidence: evidence,
+			})
 		}
 		if len(shapes) > 0 {
 			add(CodeProvenanceAnomaly, KindFact, LensSecurity, weightLook,
@@ -657,6 +660,25 @@ func DeriveCensus(ref string, c *Census) Ledger {
 	} else {
 		add(CodeCensusNew, KindFact, LensCompat, weightWeigh,
 			fmt.Sprintf("new dependency, %s file(s) unreviewed", commas(c.Files)), "")
+	}
+	if c.Subtree != nil {
+		title := fmt.Sprintf("resolved subtree: %d deps (deps.dev estimate)", len(c.Subtree))
+		if c.Against {
+			title = fmt.Sprintf("marginal subtree: %d new, %d conflict, %d already have (deps.dev estimate)", c.SubtreeNew, c.SubtreeConflict, c.SubtreeHave)
+		}
+		var evidence []EvidenceField
+		if c.SubtreeOSVQueried {
+			for _, dep := range c.Subtree {
+				if len(dep.Advisories) == 0 {
+					continue
+				}
+				evidence = append(evidence, EvidenceField{Label: "dependency", Value: dep.Name}, EvidenceField{Label: "version", Value: dep.Version})
+				for _, id := range dep.Advisories {
+					evidence = append(evidence, EvidenceField{Label: "advisory", Value: id})
+				}
+			}
+		}
+		l.Signals = append(l.Signals, Signal{Code: CodeCensusSubtree, Kind: KindFact, Lens: LensCoverage, Weight: weightPositive, Title: title, Evidence: evidence})
 	}
 	if c.Source != nil && c.Source.RegistryChecksum != nil {
 		checksum := c.Source.RegistryChecksum

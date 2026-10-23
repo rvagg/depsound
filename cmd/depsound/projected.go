@@ -37,7 +37,8 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "depsound: projecting %s:%s %s -> %s via deps.dev\n", sp.Eco, sp.Name, from, to)
+	fmt.Fprintf(os.Stderr, "depsound: projecting %s:%s %s -> %s via deps.dev\n",
+		sp.Eco, output.EscapeText(sp.Name), output.EscapeText(from), output.EscapeText(to))
 	oldG, oldErr := depsdev.Resolve(ctx, client, system, sp.Name, from)
 	newG, newErr := depsdev.Resolve(ctx, client, system, sp.Name, to)
 	if oldErr != nil || newErr != nil {
@@ -52,7 +53,7 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 			ProjectionGap: gap.Error(),
 			Changed: runBulk(cacheDir, []bulkItem{{
 				spec: string(sp.Eco) + ":" + sp.Name, from: from, to: to,
-			}}, noOSV, false, cooldown),
+			}}, noOSV, provenanceUnavailableFallback, cooldown),
 		}
 		if format == "json" {
 			enc := json.NewEncoder(os.Stdout)
@@ -73,12 +74,12 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 		items = append(items, bulkItem{spec: string(sp.Eco) + ":" + c.Path, from: c.From, to: c.To})
 	}
 	fmt.Fprintf(os.Stderr, "depsound: %s projected: %d changed (incl. the bump), %d added, %d removed; analysing changes and added modules\n",
-		sp.Name, len(res.changed), len(res.added), len(res.removed))
+		output.EscapeText(sp.Name), len(res.changed), len(res.added), len(res.removed))
 	tr := output.TransitiveResult{
 		Ecosystem: string(sp.Eco),
 		Projected: sp.Name,
 		Flat:      true, // deps.dev's direct/indirect is relative to the dep, not to you
-		Changed:   runBulk(cacheDir, items, noOSV, true, cooldown),
+		Changed:   runBulk(cacheDir, items, noOSV, provenanceUnavailableFallback, cooldown),
 		Added:     res.added,
 		Removed:   res.removed,
 	}

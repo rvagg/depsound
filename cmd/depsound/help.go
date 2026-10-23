@@ -79,13 +79,14 @@ instead, which this review did not cover.
   --format=patch   the raw diff.patch on stdout
   --format=files   the changed-file table (tree-relative paths to grep)
   --from-artifact / --to-artifact
-                   import an exact-version crates:.crate from trusted
-                   quarantine as inert evidence. depsound records its origin
-                   and sha256, and cross-checks a remaining registry checksum.
-When an artifact URL is unavailable, stats/json still report OSV, provenance
-and registry history with explicit content-coverage loss; patch/files need both
+                   inspect a caller-supplied, exact-version .crate archive.
+                   Records origin and sha256; cross-checks a registry checksum
+                   when available. Emitted drill-downs retain these inputs.
+When an artifact URL is unavailable, stats/json can still report OSV, provenance
+and registry history, subject to --no-osv/--no-provenance; patch/files need both
 trees.
-  --no-osv         skip the known-CVE scan`,
+  --no-osv         skip the known-CVE scan
+  --no-provenance  skip publish metadata collection, including missing artifacts`,
 
 	"census": `depsound <ecosystem>:<name> [version] [--transitive] [--cooldown=<days>] [--artifact=<file.crate>] [--format=stats|json] [--no-osv]
 
@@ -106,17 +107,18 @@ guess stale versions from weights). Publish/anomaly provenance runs by default
                   minimumReleaseAge posture; a fresh compromised release is
                   withheld)
   --artifact=<file.crate>
-                  import an exact-version crates:.crate from trusted quarantine
+                  inspect a caller-supplied, exact-version .crate archive
                   as inert evidence, recording origin and sha256`,
 
-	"bulk": `depsound bulk [--file=<list>] [--cooldown=<days>] [--format=stats|json] [--no-osv]
+	"bulk": `depsound bulk [--file=<list>] [--cooldown=<days>] [--format=stats|json] [--no-osv] [--no-provenance]
 
 Runs the per-pair analysis over a LIST of bumps (one "<eco>:<name> <from> <to>"
 per line, or a JSON array) from stdin or --file, and renders a prioritized
 ROUTER: which deps tripped which signals, most-severe first, each a POINTER to
 inspect (drill with the single-pair command, instant once cached). The list is
 yours to supply, from a PR diff, a go.mod diff, etc. A from/to may be a semver
-range; --cooldown applies to the whole list (see help diff).`,
+range; --cooldown applies to the whole list (see help diff).
+--no-provenance skips publishing metadata, including for missing artifacts.`,
 
 	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
 depsound transitive <ecosystem>:<name> <from> <to>   (projected, no lockfile)
@@ -157,13 +159,17 @@ match, since importing a package does not import its subpackages).
   --source-only    drop test/docs/generated matches
   --subtree        subtree (whole-area) matching, not per-package
   --format=json    machine output
+  --cache-dir=DIR / --from-artifact / --to-artifact
+                  reuse the cache and caller-supplied archives from the report
 Matching is by PATH, not reachability: a match is not proof you are affected,
 and a non-match is not proof you are safe. It narrows where to look.`,
 
 	"show": `depsound show <ecosystem>:<name> <from> <to> --file=X | --dir=Y | --symbol=Z
 
 Extracts a targeted slice of the diff as a valid patch on stdout, for reading
-one file, directory, or symbol without the whole diff. Exactly one selector.`,
+one file, directory, or symbol without the whole diff. Exactly one selector.
+Accepts --cache-dir, --from-artifact and --to-artifact to reopen a local-evidence
+review; preserve those arguments from the report's emitted command.`,
 
 	"gha": `GitHub Actions: depsound gha:owner/repo[/sub-path] <from> <to>  (diff)
                 depsound gha:owner/repo[/sub-path] <ref>       (census)

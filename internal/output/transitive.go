@@ -76,13 +76,13 @@ func Transitive(t TransitiveResult) string {
 	switch {
 	case t.ProjectionGap != "":
 		w("depsound transitive %s: subtree projection unavailable.", t.label())
-		w("  deps.dev did not supply both endpoint graphs: %s", taint(t.ProjectionGap))
+		w("  deps.dev did not supply both endpoint graphs: %s", EscapeText(t.ProjectionGap))
 		w("  the root bump is still analysed below; no transitive additions/removals are claimed.")
 		w("  For the exact subtree, diff a lockfile pair -> depsound guide, \"No lockfile?\".")
 	case t.Projected != "":
 		w("depsound transitive %s: %d version-change(s), %d added, %d removed.",
 			t.label(), len(t.Changed), len(t.Added), len(t.Removed))
-		w("  %s's own tree at each endpoint, resolved live by deps.dev in isolation:", taint(t.Projected))
+		w("  %s's own tree at each endpoint, resolved live by deps.dev in isolation:", EscapeText(t.Projected))
 		w("  an upper bound on what it adds to you (your tree may already carry some, and")
 		w("  optional/platform-conditional deps are counted whole), and not reproducible")
 		w("  the way a diff is. For your actual tree, generate a lockfile per endpoint")
@@ -107,32 +107,29 @@ func Transitive(t TransitiveResult) string {
 	if len(t.Added) > 0 {
 		where := "added to your tree"
 		if t.Projected != "" {
-			where = "added under " + taint(t.Projected)
+			where = "added under " + EscapeText(t.Projected)
 		}
 		w("")
 		w("%s (%d), new code; each node was censused at its resolved version:",
 			where, len(t.Added))
-		t.writeGrouped(w, t.Added, func(m ModuleRef) string {
-			return m.To + "; " + moduleAnalysis(m)
-		})
+		t.writeGrouped(w, t.Added, true)
 	}
 	if len(t.Removed) > 0 {
 		where := "removed from your tree"
 		if t.Projected != "" {
-			where = "no longer pulled by " + taint(t.Projected)
+			where = "no longer pulled by " + EscapeText(t.Projected)
 		}
 		w("")
 		w("%s (%d), gone, nothing to fetch:", where, len(t.Removed))
-		t.writeGrouped(w, t.Removed, func(m ModuleRef) string { return m.From })
+		t.writeGrouped(w, t.Removed, false)
 	}
 
-	if len(t.Changed) > 0 {
-		w("")
-		writeRouter(w, t.Changed, true)
-	} else {
+	if len(t.Changed) == 0 {
 		w("")
 		w("no version-changes to analyse (only additions/removals above).")
 	}
+	w("")
+	writeRouter(w, t.Changed, true, t.Added)
 	return b.String()
 }
 
@@ -143,7 +140,7 @@ func Transitive(t TransitiveResult) string {
 func (t TransitiveResult) label() string {
 	switch {
 	case t.Projected != "":
-		return t.Ecosystem + ":" + taint(t.Projected) + " (projected)"
+		return t.Ecosystem + ":" + EscapeText(t.Projected) + " (projected)"
 	case t.Kind != "" && t.Kind != t.Ecosystem:
 		return t.Kind + " (" + t.Ecosystem + " packages)"
 	}
@@ -154,9 +151,8 @@ func (t TransitiveResult) label() string {
 // cause first, so a wide churn reads as "X pulled these N" instead of an
 // alphabetical wall (the why-path collapse). Groups keep every name: this
 // compresses the render, never the set. Modules the source could not
-// attribute get their own heading rather than folding into a neighbour's
-// cause. version picks the end of the change this list is about.
-func (t TransitiveResult) writeGrouped(w func(string, ...any), refs []ModuleRef, version func(ModuleRef) string) {
+// attribute get their own heading. added selects the endpoint and census facts.
+func (t TransitiveResult) writeGrouped(w func(string, ...any), refs []ModuleRef, added bool) {
 	byVia := map[string][]ModuleRef{}
 	var vias []string
 	for _, m := range refs {
@@ -175,11 +171,18 @@ func (t TransitiveResult) writeGrouped(w func(string, ...any), refs []ModuleRef,
 		items := byVia[via]
 		labels := make([]string, len(items))
 		for i, m := range items {
-			labels[i] = taint(m.Path) + " " + taint(version(m)) + t.tag(m.Indirect)
+			version := m.From
+			if added {
+				version = m.To
+			}
+			labels[i] = EscapeText(m.Path) + " " + EscapeText(version) + t.tag(m.Indirect)
+			if added {
+				labels[i] += "; " + moduleAnalysis(m)
+			}
 		}
 		indent := "  "
 		if via != "" {
-			w("  via %s (%d):", taint(via), len(items))
+			w("  via %s (%d):", EscapeText(via), len(items))
 			indent = "    "
 		} else if len(vias) > 1 {
 			// with other groups attributed, the gap is worth naming; alone it
@@ -199,16 +202,18 @@ func moduleAnalysis(m ModuleRef) string {
 		return "census not available"
 	case m.Analysis.Census != nil:
 		c := m.Analysis.Census
+		var b strings.Builder
+		b.WriteString(censusFootprint(c))
 		if c.Unavailable != nil {
 			sig := DeriveUnavailable("", c.Unavailable).Signals[0]
-			return taint(sig.Title) + "; " + signalDetail(sig, taint)
+			b.WriteString("; " + signalDetail(sig, EscapeText))
 		}
-		return censusFootprint(c)
+		return b.String()
 	case m.Analysis.Unavailable != nil:
 		sig := DeriveUnavailable("", m.Analysis.Unavailable).Signals[0]
-		return taint(sig.Title) + "; " + signalDetail(sig, taint)
+		return EscapeText(sig.Title) + "; " + signalDetail(sig, EscapeText)
 	case m.Analysis.Err != "":
-		return "census failed: " + taint(m.Analysis.Err)
+		return "census failed: " + EscapeText(m.Analysis.Err)
 	default:
 		return "census produced no artifact facts"
 	}
@@ -264,7 +269,7 @@ func writeChurnTree(w func(string, ...any), roots []*ChurnNode) {
 		if last {
 			branch, next = "└── ", "    "
 		}
-		label := taint(n.Label)
+		label := EscapeText(n.Label)
 		if n.Mark != "" {
 			label = n.Mark + " " + label
 		}

@@ -63,7 +63,11 @@ func bulkCmd(args []string) error {
 		return fmt.Errorf("bulk needs `<eco>:<name> <from> <to>` lines (or a JSON array) on stdin or --file=")
 	}
 
-	results := runBulk(cacheDir, items, noOSV, noProv, cooldown)
+	policy := provenanceFull
+	if noProv {
+		policy = provenanceDisabled
+	}
+	results := runBulk(cacheDir, items, noOSV, policy, cooldown)
 
 	if format == "json" {
 		enc := json.NewEncoder(os.Stdout)
@@ -193,11 +197,21 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 	return items, nil
 }
 
+// provenancePolicy separates an explicit operator opt-out from the lean
+// unavailable-content fallback used by transitive collection.
+type provenancePolicy uint8
+
+const (
+	provenanceFull provenancePolicy = iota
+	provenanceDisabled
+	provenanceUnavailableFallback
+)
+
 // censusForBulk builds a lean footprint of a newly-added dependency for the
 // bulk stream: the direct census plus a known-CVE scan, the signals
 // that matter when there is no prior version to diff. Transitive/provenance depth
 // is left to the deeper per-dep census the report routes to.
-func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.Duration) (*output.Census, error) {
+func censusForBulk(cacheDir, specStr, version string, noOSV bool, policy provenancePolicy, cooldown time.Duration) (*output.Census, error) {
 	c, err := buildCensus(cacheDir, specStr, version, cooldown)
 	if err != nil {
 		return nil, err
@@ -206,7 +220,7 @@ func censusForBulk(cacheDir, specStr, version string, noOSV bool, cooldown time.
 		c.Vulns, c.OSVFetchedAt, c.OSVQueried, c.OSVNote = osv.Present(context.Background(), &http.Client{},
 			censusCacheRoot(cacheDir), c.Ecosystem, c.Name, c.Version)
 	}
-	if c.Unavailable != nil {
+	if c.Unavailable != nil && policy != provenanceDisabled {
 		c.Provenance = provenance.Assess(context.Background(), c.Ecosystem, c.Name, c.Version, "")
 	}
 	c.Coverage, c.NextActions = output.CensusGuide(c)
@@ -229,7 +243,7 @@ func bulkFail(ref string, err error) output.BulkResult {
 
 // runBulk fans analyze()+OSV+provenance over the list, bounded-parallel,
 // preserving input order in the results.
-func runBulk(cacheDir string, items []bulkItem, noOSV, noProv bool, cooldown time.Duration) []output.BulkResult {
+func runBulk(cacheDir string, items []bulkItem, noOSV bool, policy provenancePolicy, cooldown time.Duration) []output.BulkResult {
 	results := make([]output.BulkResult, len(items))
 	sem := make(chan struct{}, bulkConcurrency)
 	var wg sync.WaitGroup
@@ -255,7 +269,7 @@ func runBulk(cacheDir string, items []bulkItem, noOSV, noProv bool, cooldown tim
 			// there is no prior version to diff against
 			if it.from == "" {
 				ref := it.spec + " " + it.to
-				c, err := censusForBulk(cacheDir, it.spec, it.to, noOSV, cooldown)
+				c, err := censusForBulk(cacheDir, it.spec, it.to, noOSV, policy, cooldown)
 				if err != nil {
 					results[i] = output.BulkResult{Ref: ref, Err: err.Error()}
 					return
@@ -274,12 +288,15 @@ func runBulk(cacheDir string, items []bulkItem, noOSV, noProv bool, cooldown tim
 					r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.From, r.st.Package.To)
 			}
 			// provenance deltas vs the prior version (the account-takeover shape);
-			// Assess is a no-op for ecosystems deps.dev does not cover
-			if !noProv || len(r.st.Artifact.Unavailable) > 0 {
+			// Assess is a no-op for ecosystems deps.dev does not cover. The
+			// transitive fallback preserves metadata when content is unavailable
+			// without querying every resolved module.
+			if policy == provenanceFull ||
+				(policy == provenanceUnavailableFallback && len(r.st.Artifact.Unavailable) > 0) {
 				r.st.Provenance = provenance.Assess(context.Background(),
 					r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.To, r.st.Package.From)
 			}
-			r.st.Coverage, r.st.NextActions = output.Guide(r.st)
+			r.st.Coverage, r.st.NextActions = output.Guide(r.st, r.cacheRoot)
 			results[i] = output.BulkResult{Ref: ref, Stats: r.st}
 		}(i, it)
 	}

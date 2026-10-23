@@ -109,8 +109,8 @@ func transitiveCmd(args []string) error {
 	tr := output.TransitiveResult{
 		Ecosystem:       te.analysis,
 		Kind:            kind,
-		Flat:            te.analysis != "go",                      // only go.mod carries direct/indirect
-		Changed:         runBulk(cacheDir, items, noOSV, true, 0), // versions resolved; provenance off (subtree too large to hammer deps.dev)
+		Flat:            te.analysis != "go",                                               // only go.mod carries direct/indirect
+		Changed:         runBulk(cacheDir, items, noOSV, provenanceUnavailableFallback, 0), // versions resolved; unavailable-content provenance only
 		Added:           res.added,
 		Removed:         res.removed,
 		DirectChanged:   res.directChanged,
@@ -153,7 +153,7 @@ func analyseAdded(cacheDir, eco string, refs []output.ModuleRef, noOSV bool) {
 	for i, ref := range refs {
 		items[i] = bulkItem{spec: eco + ":" + ref.Path, to: ref.To}
 	}
-	results := runBulk(cacheDir, items, noOSV, true, 0)
+	results := runBulk(cacheDir, items, noOSV, provenanceUnavailableFallback, 0)
 	for i := range refs {
 		refs[i].Analysis = &results[i]
 	}

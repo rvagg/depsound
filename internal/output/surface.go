@@ -14,11 +14,11 @@ import (
 // (unmapped and out-of-scope are NOT no-change results), and always the
 // unindexable and attribution disclosures so a clean result cannot be
 // mistaken for complete coverage.
-func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, ws string) string {
+func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, ws, cacheRoot string) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depsound surface %s:%s %s -> %s", s.Package.Ecosystem, taint(s.Package.Name), taint(s.Package.From), taint(s.Package.To))
+	w("depsound surface %s:%s %s -> %s", s.Package.Ecosystem, EscapeText(s.Package.Name), EscapeText(s.Package.From), EscapeText(s.Package.To))
 	w("")
 
 	var matched, subpkg, clear, unmapped, oos []surface.UnitResult
@@ -45,9 +45,9 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 		for _, f := range r.Files {
 			hunks += len(f.Hunks)
 		}
-		w("matched %s  (%d files, %d hunks; %s)", taint(r.Unit), len(r.Files), hunks, classBreakdown(r.Files))
+		w("matched %s  (%d files, %d hunks; %s)", EscapeText(r.Unit), len(r.Files), hunks, classBreakdown(r.Files))
 		for _, f := range topFiles(r.Files, 8) {
-			w("  %s%s", taint(f.Path), fileHint(f))
+			w("  %s%s", EscapeText(f.Path), fileHint(f))
 		}
 		if len(r.Files) > 8 {
 			w("  ... and %d more files", len(r.Files)-8)
@@ -62,36 +62,36 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	// packages changed. NOT a match, reported honestly, with the exact
 	// commands to drill deeper if the agent judges them reachable.
 	for _, r := range subpkg {
-		w("subpackages only %s  (own package unchanged; verify you import these)", taint(r.Unit))
+		w("subpackages only %s  (own package unchanged; verify you import these)", EscapeText(r.Unit))
 		for _, f := range topFiles(r.Descendants, 8) {
-			w("  %s%s", taint(f.Path), fileHint(f))
+			w("  %s%s", EscapeText(f.Path), fileHint(f))
 		}
 		if len(r.Descendants) > 8 {
 			w("  ... and %d more files", len(r.Descendants)-8)
 		}
 		w("  drill in: re-run --uses=%s/<subpkg>, or show --dir=<subpkg>; --subtree counts the whole area",
-			taint(r.Unit))
+			EscapeText(r.Unit))
 	}
 
 	if len(clear) > 0 {
 		w("")
 		w("no changed files under these mapped paths (a match location, NOT a clean bill):")
 		for _, r := range clear {
-			w("  %s", taint(r.Unit))
+			w("  %s", EscapeText(r.Unit))
 		}
 	}
 	if len(unmapped) > 0 {
 		w("")
 		w("unmapped (could not resolve to changed paths; NOT a no-change result):")
 		for _, r := range unmapped {
-			w("  %s  %s", taint(r.Unit), taint(r.Detail))
+			w("  %s  %s", EscapeText(r.Unit), EscapeText(r.Detail))
 		}
 	}
 	if len(oos) > 0 {
 		w("")
 		w("out of scope (mechanism unsupported):")
 		for _, r := range oos {
-			w("  %s  %s", taint(r.Unit), taint(r.Detail))
+			w("  %s  %s", EscapeText(r.Unit), EscapeText(r.Detail))
 		}
 	}
 
@@ -109,7 +109,7 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	if len(unindexable) > 0 {
 		w("unindexable changes not covered by symbol matching (review directly):")
 		for _, p := range unindexable {
-			w("  %s", taint(p))
+			w("  %s", EscapeText(p))
 		}
 	}
 
@@ -126,11 +126,12 @@ func Surface(s *stats.Stats, results []surface.UnitResult, idx *surface.Index, w
 	}
 	if outside > 0 {
 		w("  - %d of %d changed files fall outside your units; a small match is", outside, len(idx.Files))
-		w("    not low impact. review the full diff: depsound %s:%s %s %s",
-			s.Package.Ecosystem, taint(s.Package.Name), s.Package.From, s.Package.To)
+		if cmd := reviewCommand(s, cacheRoot, ""); cmd != "" {
+			w("    not low impact. review the full diff: %s", EscapeControls(cmd))
+		}
 	}
 	w("")
-	w("workspace: %s", ws)
+	w("workspace: %s", EscapeText(ws))
 	return b.String()
 }
 
@@ -241,7 +242,7 @@ func descendantDirs(files []surface.FileSurface) string {
 	}
 	sort.Strings(dirs)
 	for i, d := range dirs {
-		dirs[i] = taint(d)
+		dirs[i] = EscapeText(d)
 	}
 	return strings.Join(dirs, ", ")
 }
@@ -255,7 +256,7 @@ func symbolHint(f surface.FileSurface) string {
 	for _, h := range f.Hunks {
 		if h.Symbol != "" && !seen[h.Symbol] {
 			seen[h.Symbol] = true
-			syms = append(syms, taint(cleanSymbol(h.Symbol)))
+			syms = append(syms, EscapeText(cleanSymbol(h.Symbol)))
 		}
 		if len(syms) == 3 {
 			break

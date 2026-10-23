@@ -16,7 +16,7 @@ import (
 // the budget; explanation of heuristics/threat-model belongs in the guide.
 func TestReportBoilerplateBudget(t *testing.T) {
 	s := &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm", Name: "x", From: "1", To: "2"}}
-	s.Coverage, s.NextActions = Guide(s)
+	s.Coverage, s.NextActions = Guide(s, "")
 	out := Text(s)
 
 	loud := 0

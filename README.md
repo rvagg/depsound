@@ -23,7 +23,7 @@ The flow it's tuned for: the agent clears the easy **YES** upgrades, lays out th
 
 ## Unavailable releases
 
-If a release is unavailable, depsound still reports available security advisories and publishing history, while making clear what it could not inspect.
+If a release is unavailable, depsound can still report available security advisories and publishing history, while making clear what it could not inspect.
 
 If you have a copy of a missing Rust release, supply its `.crate` archive:
 
@@ -31,7 +31,7 @@ If you have a copy of a missing Rust release, supply its `.crate` archive:
 depsound crates:arrayref 0.3.9 0.3.10 --to-artifact=/path/to/arrayref-0.3.10.crate
 ```
 
-Archives are inspected as data, never executed.
+Follow the report's drill-down commands to keep reviewing the same local archives. Archives are inspected as data, never executed.
 
 ## Install
 
