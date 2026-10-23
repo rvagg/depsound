@@ -12,6 +12,7 @@ import (
 
 	"github.com/rvagg/depsound/internal/classify"
 	"github.com/rvagg/depsound/internal/cratepkg"
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/ghapkg"
 	"github.com/rvagg/depsound/internal/gitdiff"
 	"github.com/rvagg/depsound/internal/gopkg"
@@ -21,10 +22,8 @@ import (
 	"github.com/rvagg/depsound/internal/provenance"
 )
 
-// SchemaVersion 2: the npm-specific compat.engines field became the
-// ecosystem-neutral compat.constraints (a breaking rename, hence the
-// bump, per the evolution rule).
-const SchemaVersion = 2
+// SchemaVersion gates report compatibility and workspace reuse.
+const SchemaVersion = 3
 
 // Resolution records how a semver-range or "latest" version ARG became the
 // concrete version reviewed, and, for the to side, the satisfying versions
@@ -40,12 +39,16 @@ type Resolution struct {
 // rest of the report. Metadata and advisory collection can still complete;
 // package contents cannot.
 type Unavailable struct {
-	Side    string `json:"side,omitempty"` // from | to; empty for a census
-	Version string `json:"version"`
-	Kind    string `json:"kind"` // absent | denied | transient
-	Status  int    `json:"status,omitempty"`
-	URL     string `json:"url"`
-	Hint    string `json:"hint,omitempty"`
+	Side         string `json:"side,omitempty"` // from | to; empty for a census
+	Version      string `json:"version"`
+	Kind         string `json:"kind"` // absent | denied | transient
+	Stage        string `json:"stage,omitempty"`
+	Status       int    `json:"status,omitempty"`
+	URL          string `json:"url"`                   // the URL actually requested
+	ArtifactURL  string `json:"artifactUrl,omitempty"` // intended archive, not necessarily requested
+	Reason       string `json:"reason,omitempty"`
+	PolicyReason string `json:"policyReason,omitempty"`
+	Hint         string `json:"hint,omitempty"`
 }
 
 type Stats struct {
@@ -116,9 +119,9 @@ type Artifact struct {
 	// byte names, skipped at extraction; their presence is a loud signal.
 	HostileEntries []string `json:"hostileEntries,omitempty"`
 	// Source provenance makes a report reproducible from the JSON alone.
-	SourceFrom  *Source      `json:"sourceFrom,omitempty"`
-	SourceTo    *Source      `json:"sourceTo,omitempty"`
-	Unavailable *Unavailable `json:"unavailable,omitempty"`
+	SourceFrom  *Source        `json:"sourceFrom,omitempty"`
+	SourceTo    *Source        `json:"sourceTo,omitempty"`
+	Unavailable []*Unavailable `json:"unavailable,omitempty"` // from/to acquisition failures, in endpoint order
 }
 
 type Source struct {
@@ -129,6 +132,9 @@ type Source struct {
 	Verification string `json:"verification,omitempty"`
 	// RefKind is the GitHub Actions pin tier (sha|tag|branch).
 	RefKind string `json:"refKind,omitempty"`
+	// RegistryChecksum is the current import's lookup observation, not cached
+	// content evidence. It is attached after deterministic workspace reuse.
+	RegistryChecksum *fetch.RegistryChecksum `json:"registryChecksum,omitempty"`
 }
 
 // MovedRef records a mutable GitHub Actions ref observed resolving to a

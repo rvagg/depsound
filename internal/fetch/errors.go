@@ -1,8 +1,10 @@
 package fetch
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 )
 
 // Acquisition-failure kinds. The distinction matters: an ABSENT artifact
@@ -16,20 +18,37 @@ const (
 	Transient = "transient" // 5xx, rate limits, and anything else retryable
 )
 
+// AcquisitionFailure is the observed outcome of a request that could not
+// yield an artifact. URL is always the URL requested; ArtifactURL names an
+// intended download separately when metadata established one.
+type AcquisitionFailure struct {
+	Kind         string `json:"kind"`
+	Stage        string `json:"stage,omitempty"`
+	URL          string `json:"url"`
+	ArtifactURL  string `json:"artifactUrl,omitempty"`
+	Status       int    `json:"status,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	PolicyReason string `json:"policyReason,omitempty"`
+	Hint         string `json:"hint,omitempty"`
+}
+
 // UnavailableError is any acquisition failure that can survive as structured
 // report data while independent metadata and advisory lookups continue.
 type UnavailableError interface {
 	error
-	Unavailable() (kind string, status int, url, hint string)
+	Unavailable() AcquisitionFailure
 }
 
 // HTTPError is a classified acquisition failure carrying the exact requested
-// URL and status, so a downstream fact/degradation can distinguish absent from
-// denied from transient rather than seeing one stringified error.
+// URL and status.
 type HTTPError struct {
-	URL    string
-	Status int
-	Hint   string // optional extra context, e.g. "set GITHUB_TOKEN"
+	URL          string
+	Stage        string
+	ArtifactURL  string
+	Status       int
+	Reason       string
+	PolicyReason string
+	Hint         string // optional extra context, e.g. "set GITHUB_TOKEN"
 }
 
 func (e *HTTPError) Error() string {
@@ -42,37 +61,92 @@ func (e *HTTPError) Error() string {
 
 // Kind classifies the failure for the signal ledger.
 func (e *HTTPError) Kind() string {
+	if e.Reason == "policy-blocked" {
+		return Denied
+	}
 	switch e.Status {
 	case http.StatusNotFound, http.StatusGone:
 		return Absent
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized:
+		return Denied
+	case http.StatusForbidden:
+		if e.Reason == "rate-limited" {
+			return Transient
+		}
 		return Denied
 	default:
 		return Transient
 	}
 }
 
-func (e *HTTPError) Unavailable() (string, int, string, string) {
-	return e.Kind(), e.Status, e.URL, e.Hint
+func (e *HTTPError) Unavailable() AcquisitionFailure {
+	return AcquisitionFailure{
+		Kind: e.Kind(), Stage: e.Stage, URL: e.URL, ArtifactURL: e.ArtifactURL,
+		Status: e.Status, Reason: e.Reason, PolicyReason: e.PolicyReason, Hint: e.Hint,
+	}
 }
 
-// RegistryMissing records a version absent from registry metadata even when
-// no HTTP request for the artifact itself returned 404/410. It must not invent
-// an HTTP status or claim the download URL was probed.
+// acquisitionError records a transport or parse failure where no HTTP error
+// classification exists.
+type acquisitionError struct {
+	AcquisitionFailure
+	err error
+}
+
+func (e *acquisitionError) Error() string { return e.err.Error() }
+func (e *acquisitionError) Unwrap() error { return e.err }
+func (e *acquisitionError) Unavailable() AcquisitionFailure {
+	return e.AcquisitionFailure
+}
+
+func failedAcquisition(stage, u string, status int, err error) error {
+	return &acquisitionError{
+		AcquisitionFailure: AcquisitionFailure{Kind: Transient, Stage: stage, URL: u, Status: status, Hint: err.Error()},
+		err:                err,
+	}
+}
+
+func failedArtifactAcquisition(u string, status int, err error) error {
+	var local *os.PathError
+	if errors.Is(err, errArtifactCeiling) || errors.As(err, &local) {
+		return err
+	}
+	return failedAcquisition("artifact", u, status, err)
+}
+
+func withArtifactURL(err error, artifactURL string) error {
+	if artifactURL == "" {
+		return err
+	}
+	var unavailable UnavailableError
+	if !errors.As(err, &unavailable) {
+		return err
+	}
+	failure := unavailable.Unavailable()
+	failure.ArtifactURL = artifactURL
+	return &acquisitionError{AcquisitionFailure: failure, err: err}
+}
+
+// RegistryMissing records a version absent from an observed registry index.
+// ArtifactURL is the intended archive, which was not requested.
 type RegistryMissing struct {
-	URL  string
-	Hint string
+	URL         string
+	ArtifactURL string
+	Status      int
+	Hint        string
 }
 
 func (e *RegistryMissing) Error() string {
 	return e.Hint
 }
 
-func (e *RegistryMissing) Unavailable() (string, int, string, string) {
-	return Absent, 0, e.URL, e.Hint
+func (e *RegistryMissing) Unavailable() AcquisitionFailure {
+	return AcquisitionFailure{
+		Kind: Absent, Stage: "registry-index", URL: e.URL, ArtifactURL: e.ArtifactURL,
+		Status: e.Status, Reason: "version-absent", Hint: e.Hint,
+	}
 }
 
-// statusErr builds an *HTTPError for a non-success response.
-func statusErr(u string, status int, hint string) *HTTPError {
-	return &HTTPError{URL: u, Status: status, Hint: hint}
+func statusErrAt(stage, u string, status int, hint string) *HTTPError {
+	return &HTTPError{URL: u, Stage: stage, Status: status, Hint: hint}
 }

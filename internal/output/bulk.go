@@ -99,6 +99,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeRangeResolved}, "endpoints resolved from a range at review time (one satisfying version reviewed)"},
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
+	{[]Code{CodeRegistryChecksum}, "registry checksum index observations"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
 	{[]Code{CodeExecPresent}, "build/install execution surface present, its build code may have changed"},
 	{[]Code{CodeNonRegistryDep}, "declares dependencies served from outside the registry (a trusted name pulling code from elsewhere)"},
@@ -182,6 +183,12 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 			} else {
 				artifactCount++
 			}
+			for _, sig := range DeriveCensus(r.Ref, r.Census).Signals {
+				switch sig.Code {
+				case CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch, CodeRegistryChecksum:
+					buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
+				}
+			}
 		case r.Note != "":
 			for _, sig := range DeriveBenign(r.Ref, r.Note).Signals {
 				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
@@ -189,8 +196,8 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		case r.Stats == nil:
 			failed = append(failed, r)
 		default:
-			if r.Stats.Artifact.Unavailable != nil {
-				unavailableCount++
+			if len(r.Stats.Artifact.Unavailable) > 0 {
+				unavailableCount += len(r.Stats.Artifact.Unavailable)
 			} else {
 				artifactCount++
 			}
@@ -226,11 +233,11 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool) 
 		w("")
 		w("%s:", sec.title)
 		for _, e := range ents {
-			line := e.sig.Title
-			if e.sig.Detail != "" {
-				line += ": " + e.sig.Detail
+			line := taint(e.sig.Title)
+			if detail := signalDetail(e.sig, taint); detail != "" {
+				line += ": " + detail
 			}
-			w("  %s  %s", taint(e.ref), taint(line))
+			w("  %s  %s", taint(e.ref), line)
 		}
 	}
 	if len(newDeps) > 0 {

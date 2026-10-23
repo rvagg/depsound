@@ -255,13 +255,14 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 	for _, r := range results {
 		switch {
 		case r.Stats != nil:
-			if r.Stats.Artifact.Unavailable != nil {
+			if r.Stats.Package.Ecosystem == "gha" {
+				gha = true
+			}
+			if len(r.Stats.Artifact.Unavailable) > 0 {
 				unavailable = true
 			} else {
 				artifact = true
-				if r.Stats.Package.Ecosystem == "gha" {
-					gha = true
-				} else {
+				if r.Stats.Package.Ecosystem != "gha" {
 					pkg = true
 				}
 			}
@@ -382,13 +383,11 @@ func mdSignal(sig Signal, s *stats.Stats, c *Census) string {
 		return "runs code on install/build: " + mdTaint(sig.Detail)
 	case CodeCensusBig:
 		return "largest unreviewed file " + mdTaint(sig.Detail)
-	case CodeArtifactDenied:
-		return "artifact access denied (auth/policy): " + mdTaint(sig.Detail)
-	case CodeArtifactFetch:
-		return "artifact fetch failed (transient): " + mdTaint(sig.Detail)
+	case CodeArtifactDenied, CodeArtifactFetch, CodeArtifactAbsent:
+		return mdTaint(sig.Title) + ": " + signalDetail(sig, mdTaint)
 	default:
-		if sig.Detail != "" {
-			return mdTaint(sig.Title) + ": " + mdTaint(sig.Detail)
+		if sig.Detail != "" || len(sig.Evidence) > 0 {
+			return mdTaint(sig.Title) + ": " + signalDetail(sig, mdTaint)
 		}
 		return mdTaint(sig.Title)
 	}

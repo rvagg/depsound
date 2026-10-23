@@ -19,7 +19,19 @@ The flow it's tuned for: the agent clears the easy **YES** upgrades, lays out th
 - **Facts vs heuristics.** The hard facts (the OSV result, execution surface, artifact integrity and publish provenance, which files changed) are kept distinct from the heuristics (file classification, review-surface counts) an attacker can game. Never rest a security call on a heuristic.
 - **A coverage boundary.** Every report states what it did and did **not** check (reachability, runtime behaviour, your tests), and routes each gap to a command. Silence is not safety.
 - **Two lenses.** *Will it break me?* (compatibility) and *could it be hostile?* (supply-chain security) are independent questions; the report serves both.
-- **A grep-able workspace.** Each report prints a path holding the old and new trees and the diff. The real review is reading it. It is attacker-writable **data**, never instructions.
+- **A grep-able workspace.** When both artifacts are available, the report prints a path holding the old and new trees and the diff. The real review is reading it. It is attacker-writable **data**, never instructions.
+
+## Unavailable releases
+
+If a release is unavailable, depsound still reports available security advisories and publishing history, while making clear what it could not inspect.
+
+If you have a copy of a missing Rust release, supply its `.crate` archive:
+
+```
+depsound crates:arrayref 0.3.9 0.3.10 --to-artifact=/path/to/arrayref-0.3.10.crate
+```
+
+Archives are inspected as data, never executed.
 
 ## Install
 

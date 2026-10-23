@@ -45,7 +45,7 @@ func GetURL(ctx context.Context, client *http.Client, u string) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, statusErr(u, resp.StatusCode, "")
+		return nil, inputStatusErr(resp, u)
 	}
 	return readCapped(resp.Body, u)
 }
@@ -74,14 +74,14 @@ func GitHubContents(ctx context.Context, client *http.Client, name, ref, path st
 		return nil, err
 	}
 	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
+	if resp.StatusCode == http.StatusOK {
 		return readCapped(resp.Body, u)
-	case http.StatusNotFound:
-		return nil, statusErr(u, resp.StatusCode, fmt.Sprintf("github:%s@%s:%s not found (repo, ref or path wrong; private repos need GITHUB_TOKEN)", name, ref, path))
-	default:
-		return nil, statusErr(u, resp.StatusCode, "")
 	}
+	failure := githubStatusErr(resp, u, "input", "")
+	if resp.StatusCode == http.StatusNotFound {
+		failure.Hint = fmt.Sprintf("github:%s@%s:%s not found (repo, ref or path wrong; private repos need GITHUB_TOKEN)", name, ref, path)
+	}
+	return nil, failure
 }
 
 func readCapped(r io.Reader, u string) ([]byte, error) {
@@ -118,4 +118,11 @@ func rewriteGitHubBlob(u string) string {
 		return u
 	}
 	return "https://raw.githubusercontent.com/" + owner + "/" + repo + "/" + after
+}
+
+func inputStatusErr(resp *http.Response, u string) *HTTPError {
+	if isGitHubHost(u) {
+		return githubStatusErr(resp, u, "input", "")
+	}
+	return &HTTPError{URL: u, Status: resp.StatusCode, Stage: "input"}
 }

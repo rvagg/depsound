@@ -287,6 +287,9 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 		return nil, err
 	}
 	cen := &output.Census{Ecosystem: string(sp.Eco), Name: sp.Name, Version: v}
+	if sp.Sub != "" {
+		cen.Name += "/" + sp.Sub
+	}
 	if res.Range != "" {
 		cen.Resolved = fmt.Sprintf("range %q -> %s", res.Range, v)
 		if !res.Published.IsZero() {
@@ -313,6 +316,10 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 	if sp.Eco == spec.GHA {
 		pin.sha, pin.kind, err = fetch.ResolveGHAPin(ctx, client, sp.Name, v)
 		if err != nil {
+			if unavailable := reportUnavailable(err, v, ""); unavailable != nil {
+				cen.Unavailable = unavailable
+				return cen, nil
+			}
 			return nil, err
 		}
 		artKey = pin.sha
@@ -407,7 +414,6 @@ func buildCensusWithArtifact(cacheDir, specStr, versionReq string, cooldown time
 		if !exists(scoped) {
 			return nil, fmt.Errorf("gha sub-path %q not present at %s@%s; check the path", sp.Sub, sp.Name, v)
 		}
-		cen.Name = sp.Name + "/" + sp.Sub
 	}
 	cen.Tree = scoped
 	cen.ByClass, cen.Bytes, cen.UnreviewableBytes, cen.Files, cen.BigExcluded, cen.BigExcludedBytes = classifyTree(scoped)

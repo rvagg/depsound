@@ -19,10 +19,14 @@ func Text(s *stats.Stats) string {
 	w("depsound %s:%s %s -> %s", s.Package.Ecosystem, taint(s.Package.Name), taint(s.Package.From), taint(s.Package.To))
 	writeResolution(w, s)
 	w("")
-	if s.Artifact.Unavailable != nil {
-		sig := DeriveUnavailable("", s.Artifact.Unavailable).Signals[0]
-		w("%s", sig.Title)
-		w("  %s", taint(sig.Detail))
+	if len(s.Artifact.Unavailable) > 0 {
+		for _, u := range s.Artifact.Unavailable {
+			sig := DeriveUnavailable("", u).Signals[0]
+			w("%s", sig.Title)
+			w("  %s", signalDetail(sig, taint))
+		}
+		writeRegistryChecksum(w, "from", s.Artifact.SourceFrom)
+		writeRegistryChecksum(w, "to", s.Artifact.SourceTo)
 		w("")
 		writeSecurity(w, s.Security)
 		writeProvenance(w, s.Provenance, s.Package.Ecosystem)
@@ -66,6 +70,8 @@ func Text(s *stats.Stats) string {
 	if s.Artifact.SourceTo != nil {
 		writeIntegrity(w, s.Artifact.SourceTo.Verification, s.Package.Ecosystem)
 	}
+	writeRegistryChecksum(w, "from", s.Artifact.SourceFrom)
+	writeRegistryChecksum(w, "to", s.Artifact.SourceTo)
 	for _, e := range s.Embedded {
 		// a lead, not a verdict: the upstream identity this vendored blob
 		// embeds moved, pointing at the real change to read. The value is
@@ -223,11 +229,11 @@ func writeGuidance(w func(string, ...any), s *stats.Stats) {
 	w("=== coverage: a heuristic triage, NOT a verdict ===")
 	w("checked:")
 	for _, c := range cov.Checked {
-		w("  + %s", c)
+		w("  + %s", taint(c))
 	}
 	w("NOT checked ('no flags' is a starting point, not a clean bill):")
 	for _, c := range cov.NotChecked {
-		w("  - %s", c)
+		w("  - %s", taint(c))
 	}
 	if len(next) > 0 {
 		w("next steps:")

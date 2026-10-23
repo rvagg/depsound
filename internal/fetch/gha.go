@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,7 +41,11 @@ func ResolveGHARef(ctx context.Context, client *http.Client, name, ref string) (
 	if isHexSHA(ref) {
 		return sha, "sha", nil
 	}
-	if githubRefExists(ctx, client, name, "tags", ref) {
+	tag, err := githubRefExists(ctx, client, name, "tags", ref)
+	if err != nil {
+		return "", "", fmt.Errorf("gha:%s classify ref %q: %w", name, ref, err)
+	}
+	if tag {
 		return sha, "tag", nil
 	}
 	return sha, "branch", nil
@@ -58,13 +63,13 @@ func ResolveGHAPin(ctx context.Context, client *http.Client, name, ref string) (
 	return ResolveGHARef(ctx, client, name, ref)
 }
 
-func githubRefExists(ctx context.Context, client *http.Client, name, kind, ref string) bool {
+func githubRefExists(ctx context.Context, client *http.Client, name, kind, ref string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, metaTimeout)
 	defer cancel()
 	u := fmt.Sprintf("https://api.github.com/repos/%s/git/ref/%s/%s", name, kind, ref)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return false
+		return false, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -73,10 +78,17 @@ func githubRefExists(ctx context.Context, client *http.Client, name, kind, ref s
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return false, failedAcquisition("ref-resolution", u, 0, err)
 	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, githubStatusErr(resp, u, "ref-resolution", "")
+	}
 }
 
 func isHexSHA(s string) bool {
@@ -130,19 +142,20 @@ func getGitHubJSON(ctx context.Context, client *http.Client, u string, v any) er
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return failedAcquisition("ref-resolution", u, 0, err)
 	}
 	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return json.NewDecoder(resp.Body).Decode(v)
-	case http.StatusNotFound:
-		return statusErr(u, resp.StatusCode, "repo or ref not found; check owner/repo and the tag")
-	case http.StatusForbidden:
-		return statusErr(u, resp.StatusCode, "rate-limited or forbidden; set GITHUB_TOKEN to raise the limit")
-	default:
-		return statusErr(u, resp.StatusCode, "")
+	if resp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+			return failedAcquisition("ref-resolution", u, resp.StatusCode, err)
+		}
+		return nil
 	}
+	failure := githubStatusErr(resp, u, "ref-resolution", "")
+	if resp.StatusCode == http.StatusNotFound {
+		failure.Hint = "repo or ref not found; check owner/repo and the tag"
+	}
+	return failure
 }
 
 // downloadPlain fetches url to dest with NO integrity check, for artifacts
@@ -161,11 +174,11 @@ func downloadPlain(ctx context.Context, client *http.Client, u, dest string) err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return failedAcquisition("artifact", u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return statusErr(u, resp.StatusCode, "")
+		return githubStatusErr(resp, u, "artifact", u)
 	}
 	watchdog := time.AfterFunc(stallTimeout, cancel)
 	defer watchdog.Stop()
@@ -184,12 +197,73 @@ func downloadPlain(ctx context.Context, client *http.Client, u, dest string) err
 	}()
 	if _, err := io.Copy(tmp, capped(body)); err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err)
+			return failedArtifactAcquisition(u, resp.StatusCode, fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err))
 		}
-		return err
+		return failedArtifactAcquisition(u, resp.StatusCode, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), dest)
+}
+
+const maxGitHubErrorBytes = 64 << 10
+
+func githubStatusErr(resp *http.Response, u, stage, artifactURL string) *HTTPError {
+	err := &HTTPError{
+		URL:         u,
+		Status:      resp.StatusCode,
+		Stage:       stage,
+		ArtifactURL: artifactURL,
+	}
+	body, read := githubErrorBody(resp.Body)
+	if read {
+		var evidence struct {
+			Message string          `json:"message"`
+			Block   json.RawMessage `json:"block"`
+		}
+		if json.Unmarshal(body, &evidence) == nil {
+			var block struct {
+				Reason string `json:"reason"`
+			}
+			blockOK := json.Unmarshal(evidence.Block, &block) == nil
+			if strings.EqualFold(strings.TrimSpace(evidence.Message), "Repository access blocked") || (blockOK && block.Reason != "") {
+				err.Reason = "policy-blocked"
+				if blockOK {
+					err.PolicyReason = block.Reason
+				}
+				return err
+			}
+			if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests) && githubRateLimitMessage(evidence.Message) {
+				err.Reason = "rate-limited"
+				return err
+			}
+		}
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode == http.StatusForbidden && githubRateLimitedHeaders(resp.Header)) {
+		err.Reason = "rate-limited"
+	}
+	return err
+}
+
+func githubErrorBody(r io.Reader) ([]byte, bool) {
+	body, err := io.ReadAll(io.LimitReader(r, maxGitHubErrorBytes+1))
+	if err != nil || len(body) > maxGitHubErrorBytes {
+		return nil, false
+	}
+	return body, true
+}
+
+func githubRateLimitMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.HasPrefix(message, "api rate limit exceeded") ||
+		strings.HasPrefix(message, "you have exceeded a secondary rate limit")
+}
+
+func githubRateLimitedHeaders(h http.Header) bool {
+	if h.Get("Retry-After") != "" {
+		return true
+	}
+	remaining, err := strconv.ParseInt(h.Get("X-RateLimit-Remaining"), 10, 64)
+	return err == nil && remaining == 0
 }

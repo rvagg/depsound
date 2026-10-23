@@ -61,10 +61,10 @@ var projectable = map[string]bool{"npm": true, "crates": true}
 // triage tool, and a clean result is a STARTING POINT, not a verdict.
 func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	checked, notChecked := coverageChecked, coverageNotChecked
-	if s.Artifact.Unavailable != nil {
+	if len(s.Artifact.Unavailable) > 0 {
 		checked = []string{"artifact acquisition status"}
 		notChecked = []string{
-			"published artifact contents (the unavailable artifact was not inspected)",
+			"published artifact contents (one or more endpoint artifacts were not inspected)",
 			"file classification and content diff",
 			"manifest compatibility and dependency deltas",
 			"execution surface",
@@ -75,14 +75,14 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 			"how the release was published (provenance, anomaly vs history)",
 		}
 	}
-	if s.Artifact.Unavailable == nil && (localSource(s.Artifact.SourceFrom) || localSource(s.Artifact.SourceTo)) {
+	if len(s.Artifact.Unavailable) == 0 && (localSource(s.Artifact.SourceFrom) || localSource(s.Artifact.SourceTo)) {
 		checked = append([]string(nil), coverageChecked...)
 		checked[0] = "caller-supplied quarantined artifact diff (origin + sha256 recorded; registry checksum cross-checked when obtained)"
 	}
 	// an action is reviewed on its own terms: it runs on a runner rather than
 	// inside your code, so what it can reach is decided by the calling
 	// workflow, and import reachability says nothing about it
-	if s.Artifact.Unavailable == nil && s.Action != nil {
+	if len(s.Artifact.Unavailable) == 0 && s.Package.Ecosystem == "gha" {
 		checked = []string{
 			"the repo tree at the pinned commit (what the runner checks out)",
 			"file classification (source vs generated/test/docs, heuristic)",
@@ -130,19 +130,29 @@ func Guide(s *stats.Stats) (*stats.Coverage, []stats.NextAction) {
 	} else {
 		notChecked = append(append([]string(nil), notChecked...), line)
 	}
+	for _, source := range []*stats.Source{s.Artifact.SourceFrom, s.Artifact.SourceTo} {
+		if source != nil && source.RegistryChecksum != nil && source.RegistryChecksum.State == "lookup-failed" {
+			notChecked = append(append([]string(nil), notChecked...), "registry checksum index lookup (failed: "+source.RegistryChecksum.URL+")")
+		}
+	}
 	cov := &stats.Coverage{Checked: checked, NotChecked: notChecked}
 
 	ref := fmt.Sprintf("%s:%s %s %s", s.Package.Ecosystem, s.Package.Name, s.Package.From, s.Package.To)
 	var na []stats.NextAction
 	add := func(reason, cmd string) { na = append(na, stats.NextAction{Reason: reason, Command: cmd}) }
-	if u := s.Artifact.Unavailable; u != nil {
+	for _, u := range s.Artifact.Unavailable {
 		cmd := ""
-		if s.Package.Ecosystem == "crates" && (u.Side == "from" || u.Side == "to") {
+		reason := "obtain the exact labelled artifact from a trusted quarantine or registry operator, then inspect it as inert data"
+		if u.Reason == "policy-blocked" {
+			reason = "ask the platform operator for the policy basis or a permitted evidence path; do not bypass the policy"
+		} else if s.Package.Ecosystem == "crates" && (u.Side == "from" || u.Side == "to") {
 			cmd = "depsound " + ref + " --" + u.Side + "-artifact=<quarantined-" + u.Version + ".crate>"
 		}
-		add("obtain the exact labelled artifact from a trusted quarantine or registry operator, then inspect it as inert data", cmd)
+		add(reason, cmd)
+	}
+	if len(s.Artifact.Unavailable) > 0 {
 		if n := len(s.Security.Introduced); n > 0 {
-			add(fmt.Sprintf("%d advisory record(s) match only the unavailable target version; respond from the advisory facts, not missing bytes", n), "")
+			add(fmt.Sprintf("%d advisory record(s) match only the target version; respond from the advisory facts, not endpoint bytes", n), "")
 		}
 		if n := len(s.Security.StillPresent); n > 0 {
 			add(fmt.Sprintf("%d advisory record(s) match both endpoints; check exposure", n), "")

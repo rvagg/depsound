@@ -275,7 +275,7 @@ func runBulk(cacheDir string, items []bulkItem, noOSV, noProv bool, cooldown tim
 			}
 			// provenance deltas vs the prior version (the account-takeover shape);
 			// Assess is a no-op for ecosystems deps.dev does not cover
-			if !noProv || r.st.Artifact.Unavailable != nil {
+			if !noProv || len(r.st.Artifact.Unavailable) > 0 {
 				r.st.Provenance = provenance.Assess(context.Background(),
 					r.st.Package.Ecosystem, r.st.Package.Name, r.st.Package.To, r.st.Package.From)
 			}

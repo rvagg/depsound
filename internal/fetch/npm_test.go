@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -173,5 +174,50 @@ func TestVerifyArtifact(t *testing.T) {
 	}
 	if verifyArtifact(p, d512) {
 		t.Error("tampered artifact passed sha512 verification")
+	}
+}
+
+func TestNPMReportsObservedMetadataAndArtifactFailures(t *testing.T) {
+	content := []byte("tarball")
+	sum := sha512.Sum512(content)
+	integrity := "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/missing/1.0.0":
+			w.WriteHeader(http.StatusNotFound)
+		case "/broken/1.0.0":
+			fmt.Fprintf(w, `{"dist":{"tarball":%q,"integrity":%q}}`, srvURL+"/artifact", integrity)
+		case "/artifact":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	old := npmRegistry
+	npmRegistry = srv.URL
+	t.Cleanup(func() { npmRegistry = old })
+
+	for _, test := range []struct {
+		name, wantStage, wantURL string
+		status                   int
+	}{
+		{name: "metadata", wantStage: "metadata", wantURL: srv.URL + "/missing/1.0.0", status: http.StatusNotFound},
+		{name: "artifact", wantStage: "artifact", wantURL: srv.URL + "/artifact", status: http.StatusServiceUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			name := map[string]string{"metadata": "missing", "artifact": "broken"}[test.name]
+			err := NPM(t.Context(), srv.Client(), name, "1.0.0", filepath.Join(t.TempDir(), "pkg.tgz"))
+			var unavailable UnavailableError
+			if !errors.As(err, &unavailable) {
+				t.Fatalf("error = %T %v", err, err)
+			}
+			failure := unavailable.Unavailable()
+			if failure.Stage != test.wantStage || failure.URL != test.wantURL || failure.Status != test.status {
+				t.Fatalf("failure = %+v", failure)
+			}
+		})
 	}
 }

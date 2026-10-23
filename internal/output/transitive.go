@@ -198,10 +198,15 @@ func moduleAnalysis(m ModuleRef) string {
 	case m.Analysis == nil:
 		return "census not available"
 	case m.Analysis.Census != nil:
-		return censusFootprint(m.Analysis.Census)
+		c := m.Analysis.Census
+		if c.Unavailable != nil {
+			sig := DeriveUnavailable("", c.Unavailable).Signals[0]
+			return taint(sig.Title) + "; " + signalDetail(sig, taint)
+		}
+		return censusFootprint(c)
 	case m.Analysis.Unavailable != nil:
-		u := m.Analysis.Unavailable
-		return fmt.Sprintf("census unavailable (%s, HTTP %d; %s)", taint(u.Kind), u.Status, taint(u.URL))
+		sig := DeriveUnavailable("", m.Analysis.Unavailable).Signals[0]
+		return taint(sig.Title) + "; " + signalDetail(sig, taint)
 	case m.Analysis.Err != "":
 		return "census failed: " + taint(m.Analysis.Err)
 	default:

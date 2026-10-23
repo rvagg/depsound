@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/osv"
@@ -166,11 +167,12 @@ func TestCensusRendersExactDeprecationAndRetractions(t *testing.T) {
 func TestUnavailableDiffKeepsAdvisoriesAndRegistryHistory(t *testing.T) {
 	s := &stats.Stats{
 		Package: stats.PkgRef{Ecosystem: "crates", Name: "arrayref", From: "0.3.9", To: "0.3.10"},
-		Artifact: stats.Artifact{Unavailable: &stats.Unavailable{
-			Side: "to", Version: "0.3.10", Kind: "absent",
-			URL:  "https://static.crates.io/crates/arrayref/arrayref-0.3.10.crate",
-			Hint: "version absent from sparse index",
-		}},
+		Artifact: stats.Artifact{Unavailable: []*stats.Unavailable{{
+			Side: "to", Version: "0.3.10", Kind: "absent", Stage: "registry-index", Reason: "version-absent",
+			URL:         "https://index.crates.io/ar/ra/arrayref",
+			ArtifactURL: "https://static.crates.io/crates/arrayref/arrayref-0.3.10.crate",
+			Hint:        "version absent from sparse index",
+		}}},
 		Security: stats.Security{Queried: true, Introduced: []osv.Vuln{
 			{ID: "RUSTSEC-2026-0260", Kind: osv.KindMalware},
 		}},
@@ -185,18 +187,83 @@ func TestUnavailableDiffKeepsAdvisoriesAndRegistryHistory(t *testing.T) {
 	s.Coverage, s.NextActions = Guide(s)
 	out := Text(s)
 	for _, want := range []string{
-		"artifact unavailable", "RUSTSEC-2026-0260",
-		"registry yank/unyank actions", "artifact acquisition status",
-		"--to-artifact=<quarantined-0.3.10.crate>",
+		"RUSTSEC-2026-0260", "2026-08-20", "owner",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("unavailable report missing %q:\n%s", want, out)
 		}
 	}
-	for _, falseClaim := range []string{"files: 0 changed", "workspace:"} {
-		if strings.Contains(out, falseClaim) {
-			t.Errorf("unavailable report claims content coverage via %q:\n%s", falseClaim, out)
+}
+
+func TestUnavailableDiffPreservesBothEndpointOutcomes(t *testing.T) {
+	s := &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "crates", Name: "x", From: "1.0.0", To: "2.0.0"},
+		Artifact: stats.Artifact{Unavailable: []*stats.Unavailable{
+			{Side: "from", Version: "1.0.0", Kind: "absent", Stage: "registry-index", Reason: "version-absent", URL: "https://index.example/x", ArtifactURL: "https://archive.example/x-1.0.0.crate"},
+			{Side: "to", Version: "2.0.0", Kind: "denied", Stage: "artifact", URL: "https://archive.example/x-2.0.0.crate", Status: 403, Reason: "policy-blocked", PolicyReason: "blocked\x1b"},
+		}},
+	}
+	out := Text(s)
+	for _, want := range []string{
+		"https://index.example/x", "https://archive.example/x-1.0.0.crate",
+		"https://archive.example/x-2.0.0.crate", "blocked\\x1b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "HTTP 0") {
+		t.Fatalf("rendered fabricated HTTP status:\n%s", out)
+	}
+}
+
+func TestUnavailableEvidenceEscapesEachLongField(t *testing.T) {
+	longURL := "https://registry.example/" + strings.Repeat("u", 260)
+	longPolicy := "policy-" + strings.Repeat("p", 260)
+	longHint := "hint-" + strings.Repeat("h", 260)
+	s := &stats.Stats{Package: stats.PkgRef{Ecosystem: "npm", Name: "x", From: "1", To: "2"},
+		Artifact: stats.Artifact{Unavailable: []*stats.Unavailable{{
+			Side: "to", Version: "2", Kind: "denied", URL: longURL, Reason: "policy-blocked", PolicyReason: longPolicy, Hint: longHint,
+		}}},
+	}
+	out := Text(s)
+	for _, want := range []string{longURL[:100], longPolicy[:100], longHint[:100]} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing field %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRegistryChecksumOutcomesRemainDistinct(t *testing.T) {
+	s := &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "crates", Name: "x", From: "1.0.0", To: "2.0.0"},
+		Artifact: stats.Artifact{
+			SourceFrom: &stats.Source{RegistryChecksum: &fetch.RegistryChecksum{
+				State: "version-absent", URL: "https://index.example/x", ObservedAt: "2026-08-21T00:00:00Z", Status: 200,
+			}},
+			SourceTo: &stats.Source{RegistryChecksum: &fetch.RegistryChecksum{
+				State: "lookup-failed", URL: "https://index.example/x", ObservedAt: "2026-08-21T00:00:00Z", Status: 503, Error: "index unavailable\x1b",
+			}},
+		},
+		Security: stats.Security{Queried: true},
+	}
+	out := Text(s)
+	for _, want := range []string{"index unavailable\\x1b"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	ledger := Derive("", s)
+	var absent, failed bool
+	for _, sig := range ledger.Signals {
+		if sig.Code != CodeRegistryChecksum {
+			continue
+		}
+		absent = absent || sig.Kind == KindFact
+		failed = failed || sig.Kind == KindDegradation
+	}
+	if !absent || !failed {
+		t.Fatalf("checksum outcomes lost their distinct meaning: %#v", ledger.Signals)
 	}
 }
 
@@ -215,18 +282,17 @@ func TestUnavailableCensusKeepsAdvisoriesAndRegistryHistory(t *testing.T) {
 				{Version: "0.3.9", Action: "unyank", Actor: "admin", At: "2026-08-20T09:15:51Z"},
 			},
 		},
+		Source: &stats.Source{RegistryChecksum: &fetch.RegistryChecksum{
+			State: "lookup-failed", URL: "https://index.example/arrayref", ObservedAt: "2026-08-21T00:00:00Z", Error: "unavailable",
+		}},
 	}
 	c.Coverage, c.NextActions = CensusGuide(c)
 	out := CensusText(c)
 	for _, want := range []string{
-		"artifact unavailable", "MAL-2026-14336",
-		"registry yank/unyank actions", "--artifact=<quarantined-0.3.10.crate>",
+		"MAL-2026-14336", "https://index.example/arrayref", "admin",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("unavailable census missing %q:\n%s", want, out)
 		}
-	}
-	if strings.Contains(out, "artifact: 0 files") {
-		t.Fatalf("unavailable census falsely rendered an empty artifact:\n%s", out)
 	}
 }

@@ -88,18 +88,18 @@ func checkSumDB(ctx context.Context, client *http.Client, mod, version, h1 strin
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", failedAcquisition("metadata", u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		return VerifyTLSOnly, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("sumdb lookup %s: %s", u, resp.Status)
+		return "", statusErrAt("metadata", u, resp.StatusCode, "")
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", failedAcquisition("metadata", u, resp.StatusCode, err)
 	}
 	want := fmt.Sprintf("%s %s %s", mod, version, h1)
 	for line := range strings.Lines(string(body)) {
@@ -130,14 +130,14 @@ func fetchToTemp(ctx context.Context, client *http.Client, u, dir string) (strin
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", failedAcquisition("artifact", u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return "", statusErr(u, resp.StatusCode, "module path or version not found on the proxy; check spelling")
+		return "", statusErrAt("artifact", u, resp.StatusCode, "module path or version not found on the proxy; check spelling")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", statusErr(u, resp.StatusCode, "")
+		return "", statusErrAt("artifact", u, resp.StatusCode, "")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -155,9 +155,9 @@ func fetchToTemp(ctx context.Context, client *http.Client, u, dir string) (strin
 	if err != nil {
 		os.Remove(tmp.Name())
 		if ctx.Err() != nil {
-			return "", fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err)
+			return "", failedArtifactAcquisition(u, resp.StatusCode, fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err))
 		}
-		return "", err
+		return "", failedArtifactAcquisition(u, resp.StatusCode, err)
 	}
 	return tmp.Name(), nil
 }

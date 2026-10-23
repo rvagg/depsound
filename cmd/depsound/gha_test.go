@@ -22,7 +22,7 @@ func TestGHAMovedRefs(t *testing.T) {
 	}
 
 	t.Run("tag moved on the to side", func(t *testing.T) {
-		pins := map[string]ghaPin{"v1": {shaA, "tag"}, "v2": {shaB, "tag"}}
+		pins := map[string]ghaPin{"v1": {sha: shaA, kind: "tag"}, "v2": {sha: shaB, kind: "tag"}}
 		moved := ghaMovedRefs(st("tag", shaA, "tag", shaA), "v1", "v2", pins)
 		if len(moved) != 1 {
 			t.Fatalf("want 1 moved ref, got %d", len(moved))
@@ -34,7 +34,7 @@ func TestGHAMovedRefs(t *testing.T) {
 	})
 
 	t.Run("unmoved tags are quiet", func(t *testing.T) {
-		pins := map[string]ghaPin{"v1": {shaA, "tag"}, "v2": {shaB, "tag"}}
+		pins := map[string]ghaPin{"v1": {sha: shaA, kind: "tag"}, "v2": {sha: shaB, kind: "tag"}}
 		if moved := ghaMovedRefs(st("tag", shaA, "tag", shaB), "v1", "v2", pins); len(moved) != 0 {
 			t.Errorf("want no moved refs, got %+v", moved)
 		}
@@ -43,14 +43,14 @@ func TestGHAMovedRefs(t *testing.T) {
 	t.Run("sha pins never report movement", func(t *testing.T) {
 		// a sha pin is immutable by definition; a digest mismatch there would
 		// be a cache defect, not a re-point, and must not claim one
-		pins := map[string]ghaPin{shaA: {shaB, "sha"}}
+		pins := map[string]ghaPin{shaA: {sha: shaB, kind: "sha"}}
 		if moved := ghaMovedRefs(st("sha", shaA, "sha", shaA), shaA, shaA, pins); len(moved) != 0 {
 			t.Errorf("want no moved refs for sha pins, got %+v", moved)
 		}
 	})
 
 	t.Run("legacy sidecar without sources is quiet", func(t *testing.T) {
-		pins := map[string]ghaPin{"v1": {shaA, "tag"}, "v2": {shaB, "tag"}}
+		pins := map[string]ghaPin{"v1": {sha: shaA, kind: "tag"}, "v2": {sha: shaB, kind: "tag"}}
 		if moved := ghaMovedRefs(&stats.Stats{}, "v1", "v2", pins); len(moved) != 0 {
 			t.Errorf("want no moved refs without recorded sources, got %+v", moved)
 		}
@@ -97,7 +97,7 @@ func TestStampGHAPins(t *testing.T) {
 			{Side: "to", Ref: "v2", SHA: sha, Kind: "tag"},
 		}},
 	}
-	pins := map[string]ghaPin{sha: {sha, "sha"}, "v2": {sha, "tag"}}
+	pins := map[string]ghaPin{sha: {sha: sha, kind: "sha"}, "v2": {sha: sha, kind: "tag"}}
 	stampGHAPins(st, sha, "v2", pins)
 
 	if st.Artifact.SourceFrom.RefKind != "sha" || st.Artifact.SourceTo.RefKind != "tag" {
@@ -108,7 +108,7 @@ func TestStampGHAPins(t *testing.T) {
 		t.Errorf("pins = %+v", got)
 	}
 	// a tag misreported as sha would also skip the moved-tag check entirely
-	if ghaMovedRefs(st, sha, "v2", map[string]ghaPin{sha: {sha, "sha"}, "v2": {"dddddddddddddddddddddddddddddddddddddddd", "tag"}}) == nil {
+	if ghaMovedRefs(st, sha, "v2", map[string]ghaPin{sha: {sha: sha, kind: "sha"}, "v2": {sha: "dddddddddddddddddddddddddddddddddddddddd", kind: "tag"}}) == nil {
 		t.Error("a moved tag must still be detected after stamping")
 	}
 }

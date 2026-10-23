@@ -316,6 +316,33 @@ func writeIntegrity(w func(string, ...any), verification, eco string) {
 		w("integrity: %s", text)
 	}
 }
+func writeRegistryChecksum(w func(string, ...any), side string, source *stats.Source) {
+	if source == nil || source.RegistryChecksum == nil {
+		return
+	}
+	checksum := source.RegistryChecksum
+	prefix := "registry checksum"
+	if side != "" {
+		prefix += " (" + side + ")"
+	}
+	switch checksum.State {
+	case "matched":
+		w("%s: matched (%s)", prefix, taint(checksum.URL))
+	case "version-absent":
+		w("%s: version absent from observed index (%s)", prefix, taint(checksum.URL))
+	case "lookup-failed":
+		w("%s: lookup failed (%s)", prefix, taint(checksum.URL))
+	}
+	if checksum.Status > 0 {
+		w("  observed HTTP status: %d", checksum.Status)
+	}
+	if checksum.ObservedAt != "" {
+		w("  observed at: %s", taint(checksum.ObservedAt))
+	}
+	if checksum.Error != "" {
+		w("  error: %s", taint(checksum.Error))
+	}
+}
 
 // writeProvenance renders the publish panel for the account-takeover lens.
 // WARNING is reserved for true republish DELTAS (publisher changed, provenance
@@ -638,7 +665,8 @@ func CensusText(c *Census) string {
 	if c.Unavailable != nil {
 		sig := DeriveUnavailable("", c.Unavailable).Signals[0]
 		w("%s", sig.Title)
-		w("  %s", taint(sig.Detail))
+		w("  %s", signalDetail(sig, taint))
+		writeRegistryChecksum(w, "", c.Source)
 		writeRootOSV(w, c)
 		writeProvenance(w, c.Provenance, c.Ecosystem)
 		writeCensusFinish(w, c)
@@ -649,6 +677,7 @@ func CensusText(c *Census) string {
 		w("  %-10s %d %s", cl.Class, cl.Files, plu(cl.Files))
 	}
 	writeEntrypoints(w, c.Entrypoints)
+	writeRegistryChecksum(w, "", c.Source)
 	writeIntegrity(w, c.Integrity, c.Ecosystem)
 	// same wording as the diff surface: this is the extractor's refusal
 	// evidence, and an adoption is the read that must not lose it
@@ -828,6 +857,9 @@ func CensusGuide(c *Census) (*stats.Coverage, []stats.NextAction) {
 		cov.Checked = append(cov.Checked, line)
 	} else {
 		cov.NotChecked = append(cov.NotChecked, line)
+	}
+	if c.Source != nil && c.Source.RegistryChecksum != nil && c.Source.RegistryChecksum.State == "lookup-failed" {
+		cov.NotChecked = append(cov.NotChecked, "registry checksum index lookup (failed: "+c.Source.RegistryChecksum.URL+")")
 	}
 	// --transitive resolved the whole subtree, so it is no longer a blind
 	// spot; note it is a deps.dev estimate, not the verified install. gha has

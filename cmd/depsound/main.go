@@ -163,7 +163,10 @@ func localCrateKey(version_ string, meta fetch.Meta) string {
 }
 
 func artifactSource(meta fetch.Meta) *stats.Source {
-	return &stats.Source{URL: meta.URL, Digest: meta.Digest, Verification: meta.Verification}
+	return &stats.Source{
+		URL: meta.URL, Digest: meta.Digest, Verification: meta.Verification,
+		RegistryChecksum: meta.RegistryChecksum,
+	}
 }
 
 // commonArgs parses the shared "<spec> <from> <to>" tail plus --cache-dir,
@@ -325,7 +328,16 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 	if err == nil && sp.Eco == spec.GHA {
 		// a cached workspace built from commits a mutable ref no longer
 		// points at is stale bytes wearing a current label: rebuild
-		if moved = ghaMovedRefs(st, from, to, ghaPins); len(moved) > 0 {
+		for _, pin := range ghaPins {
+			if pin.unavailable != nil {
+				err = fmt.Errorf("gha ref resolution unavailable; workspace cannot be reused")
+				break
+			}
+		}
+		if err == nil {
+			moved = ghaMovedRefs(st, from, to, ghaPins)
+		}
+		if len(moved) > 0 {
 			err = fmt.Errorf("gha ref moved; workspace stale")
 		}
 	}
@@ -340,7 +352,7 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 	if local := localArtifacts[to]; local != nil {
 		st.Artifact.SourceTo = artifactSource(local.Meta)
 	}
-	if st.Artifact.Unavailable != nil {
+	if len(st.Artifact.Unavailable) > 0 {
 		st.Resolution = buildResolution(fromArg, fromRes, toArg, toRes)
 		return &resolved{cacheRoot: c.Root, sp: sp, st: st}, nil
 	}
@@ -416,9 +428,9 @@ func diffCmd(args []string) error {
 	if format == "stats" || format == "json" {
 		r.st.Coverage, r.st.NextActions = output.Guide(r.st)
 	}
-	if r.st.Artifact.Unavailable != nil && format != "stats" && format != "json" {
-		return fmt.Errorf("artifact %s is unavailable; %s output needs both artifact trees",
-			r.st.Artifact.Unavailable.Side, format)
+	if len(r.st.Artifact.Unavailable) > 0 && format != "stats" && format != "json" {
+		return fmt.Errorf("artifact contents unavailable (%s); %s output needs both artifact trees",
+			unavailableSides(r.st.Artifact.Unavailable), format)
 	}
 
 	switch format {
@@ -505,24 +517,31 @@ func (e *sameResolvedError) Error() string {
 // ghaPin is a gha ref's resolved identity for one run: the commit that keys
 // the artifact cache and the pin kind that grades it.
 type ghaPin struct {
-	sha, kind string
+	sha, kind   string
+	unavailable *stats.Unavailable
 }
 
 // resolveGHAPins resolves both sides of a gha diff, keyed by ref.
 func resolveGHAPins(name string, refs ...string) (map[string]ghaPin, error) {
 	ctx, client := context.Background(), &http.Client{}
 	pins := make(map[string]ghaPin, len(refs))
+	var failure error
 	for _, ref := range refs {
 		if _, ok := pins[ref]; ok {
 			continue
 		}
 		sha, kind, err := fetch.ResolveGHAPin(ctx, client, name, ref)
 		if err != nil {
-			return nil, err
+			if unavailable := reportUnavailable(err, ref, ""); unavailable != nil {
+				pins[ref] = ghaPin{unavailable: unavailable}
+			} else {
+				failure = errors.Join(failure, err)
+			}
+			continue
 		}
-		pins[ref] = ghaPin{sha, kind}
+		pins[ref] = ghaPin{sha: sha, kind: kind}
 	}
-	return pins, nil
+	return pins, failure
 }
 
 // ghaMovedRefs compares a cached workspace's recorded source commits against
@@ -534,11 +553,12 @@ func ghaMovedRefs(st *stats.Stats, from, to string, pins map[string]ghaPin) []st
 		// mutability is a property of the ref this run holds, so it comes from
 		// the fresh resolution; a cached workspace's recorded tier would let
 		// cache history decide whether this check runs at all
-		if src == nil || pins[ref].kind == "sha" {
+		pin, ok := pins[ref]
+		if src == nil || !ok || pin.kind == "sha" || pin.unavailable != nil {
 			return
 		}
 		prev := strings.TrimPrefix(src.Digest, "git-")
-		if pin, ok := pins[ref]; ok && prev != "" && prev != pin.sha {
+		if prev != "" && prev != pin.sha {
 			moved = append(moved, stats.MovedRef{Side: side, Ref: ref, Prev: prev, SHA: pin.sha})
 		}
 	}
@@ -577,10 +597,23 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 	ext := map[spec.Ecosystem]string{spec.NPM: ".tgz", spec.Go: ".zip", spec.Crates: ".crate", spec.GHA: ".tar.gz"}[sp.Eco]
 	arts := map[string]string{}
 	srcs := map[string]*stats.Source{}
+	var unavailable []*stats.Unavailable
+	var failure error
 	for _, v := range []string{from, to} {
 		if local := localArtifacts[v]; local != nil {
 			arts[v] = local.Path
 			srcs[v] = artifactSource(local.Meta)
+			srcs[v].Verification = fetch.VerifyLocalSHA256
+			srcs[v].RegistryChecksum = nil
+			continue
+		}
+		side := "to"
+		if v == from {
+			side = "from"
+		}
+		if missing := ghaPins[v].unavailable; missing != nil {
+			missing.Side = side
+			unavailable = append(unavailable, missing)
 			continue
 		}
 		// gha artifacts are keyed by resolved commit, not the (possibly
@@ -607,14 +640,12 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 			err = fetch.GHA(ctx, client, sp.Name, v, ghaPins[v].sha, dest)
 		}
 		if err != nil {
-			side := "to"
-			if v == from {
-				side = "from"
+			if missing := reportUnavailable(err, v, side); missing != nil {
+				unavailable = append(unavailable, missing)
+			} else {
+				failure = errors.Join(failure, err)
 			}
-			if unavailable := reportUnavailable(err, v, side); unavailable != nil {
-				return partialStats(sp, from, to, srcs, unavailable), nil
-			}
-			return nil, err
+			continue
 		}
 		arts[v] = dest
 		if m := fetch.ReadMeta(dest); m != nil {
@@ -622,6 +653,12 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 			src.RefKind = ghaPins[v].kind // empty for non-gha; the pin tier of this ref, freshly resolved
 			srcs[v] = src
 		}
+	}
+	if failure != nil {
+		return nil, failure
+	}
+	if len(unavailable) > 0 {
+		return partialStats(sp, from, to, srcs, unavailable), nil
 	}
 
 	// build in a unique temp sibling so concurrent builders never share
@@ -805,13 +842,25 @@ func reportUnavailable(err error, version_, side string) *stats.Unavailable {
 	if !errors.As(err, &unavailable) {
 		return nil
 	}
-	kind, status, sourceURL, hint := unavailable.Unavailable()
+	failure := unavailable.Unavailable()
 	return &stats.Unavailable{
-		Side: side, Version: version_, Kind: kind, Status: status,
-
-		URL: sourceURL, Hint: hint,
+		Side: side, Version: version_, Kind: failure.Kind, Stage: failure.Stage,
+		Status: failure.Status, URL: failure.URL, ArtifactURL: failure.ArtifactURL,
+		Reason: failure.Reason, PolicyReason: failure.PolicyReason, Hint: failure.Hint,
 	}
 }
+
+func unavailableSides(failures []*stats.Unavailable) string {
+	var b strings.Builder
+	for i, failure := range failures {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(failure.Side)
+	}
+	return b.String()
+}
+
 func validateLocalCrateLabel(artifact string, crate *cratepkg.Crate, name, version_ string) error {
 	if crate.Name != name || crate.Version != version_ {
 		return fmt.Errorf("local crate %q manifest identifies %s@%s, want %s@%s",
@@ -819,7 +868,7 @@ func validateLocalCrateLabel(artifact string, crate *cratepkg.Crate, name, versi
 	}
 	return nil
 }
-func partialStats(sp spec.Spec, from, to string, srcs map[string]*stats.Source, unavailable *stats.Unavailable) *stats.Stats {
+func partialStats(sp spec.Spec, from, to string, srcs map[string]*stats.Source, unavailable []*stats.Unavailable) *stats.Stats {
 
 	name := sp.Name
 	if sp.Sub != "" {

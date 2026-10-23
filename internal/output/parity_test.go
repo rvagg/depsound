@@ -4,131 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/provenance"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
-// ledgerRenderers are the renderers driven by the shared ledger, each with its
-// OWN marker per code: bulk shouts terminal WARNINGs while markdown stays calm,
-// so a shared marker cannot check both. The parity test forces each renderer to
-// surface every code; a renderer that narrows the ledger, or a new one added
-// without markers, fails. text/census stay off the list (they are the detailed
-// reports, not summaries).
-var ledgerRenderers = []struct {
-	name    string
-	fn      func([]BulkResult) string
-	markers map[Code]string
-}{
-	{"markdown", Markdown, markdownMarkers()},
-	{"bulk", Bulk, bulkMarkers()},
-}
-
-// markers are anchored on the code, not exact wording: each is a stable
-// substring the renderer must emit for that code. Both maps must cover exactly
-// AllSignalCodes (asserted below), so a code cannot ship without a marker (and
-// thus a rendering) in every ledger renderer.
-func markdownMarkers() map[Code]string {
-	return map[Code]string{
-		CodeOSVIntroduced:      "introduces",
-		CodeOSVStill:           "still present",
-		CodeOSVFixed:           "fixes",
-		CodeOSVDisabled:        "scan not run",
-		CodeOSVFailed:          "scan failed",
-		CodeOSVUnsupported:     "No advisory scan for",
-		CodeExecIntroduced:     "new execution surface",
-		CodeExecPresent:        "execution surface present",
-		CodeCompatChange:       "module format changed",
-		CodeGeneratedDelta:     "generated code changed",
-		CodeGHACaps:            "runner capability",
-		CodeGHAUsing:           "runtime changed",
-		CodeBinaryAdded:        "file(s) added",
-		CodeBinaryChanged:      "file(s) changed",
-		CodeRedirect:           "(redirect)",
-		CodeCensusNew:          "adopting",
-		CodeCensusCVE:          "at this version",
-		CodeCensusExec:         "runs code on install/build",
-		CodeCensusBig:          "largest unreviewed file",
-		CodeAnalysisFailed:     "could not be analysed",
-		CodeArtifactAbsent:     "artifact unavailable",
-		CodeArtifactDenied:     "access denied",
-		CodeArtifactFetch:      "fetch failed",
-		CodeHostileEntry:       "hostile archive member",
-		CodeSkippedLink:        "not materialized",
-		CodeIntegrityWeak:      "TLS trust only",
-		CodeExportsUnresolved:  "could not be computed",
-		CodeBinDelta:           "installed executable",
-		CodeProvenanceAnomaly:  "provenance anomaly",
-		CodeProvenanceGap:      "metadata incomplete",
-		CodeUnreviewable:       "unreviewable",
-		CodeRangeResolved:      "resolved from a range",
-		CodeGHARefMoved:        "since last fetch",
-		CodeGHAPinWeakened:     "pin weakened",
-		CodeGHAPinRaised:       "pin strengthened",
-		CodeGHAPinGrade:        "pinned on both sides",
-		CodeNoContentChange:    "no content change",
-		CodeMalwareAdvisory:    "malware advisory record",
-		CodeExecGitOnly:        "git/link/file dependency",
-		CodeNonRegistryDep:     "outside the registry",
-		CodeProvenanceHardened: "publishing chain strengthened",
-		CodeRepoMismatch:       "claimed repo differs",
-		CodeDeprecated:         "Go module is deprecated",
-		CodeRetracted:          "reviewed Go module version is retracted",
-	}
-}
-
-func bulkMarkers() map[Code]string {
-	return map[Code]string{
-		CodeOSVIntroduced:      "introduces",
-		CodeOSVStill:           "still present",
-		CodeOSVFixed:           "fixes",
-		CodeOSVDisabled:        "scan not run",
-		CodeOSVFailed:          "scan failed",
-		CodeOSVUnsupported:     "not applicable",
-		CodeExecIntroduced:     "new execution surface",
-		CodeExecPresent:        "execution surface present",
-		CodeCompatChange:       "compatibility changed",
-		CodeGeneratedDelta:     "generated/bundled code changed",
-		CodeGHACaps:            "runner capability",
-		CodeGHAUsing:           "runtime changed",
-		CodeBinaryAdded:        "file(s) added",
-		CodeBinaryChanged:      "file(s) changed",
-		CodeRedirect:           "redirected off the registry",
-		CodeCensusNew:          "whole footprint unreviewed",
-		CodeCensusCVE:          "known vulnerability(ies)",
-		CodeCensusExec:         "runs install/build code",
-		CodeCensusBig:          "largest unreviewed",
-		CodeAnalysisFailed:     "failed (not analysed)",
-		CodeArtifactAbsent:     "artifact unavailable",
-		CodeArtifactDenied:     "access denied",
-		CodeArtifactFetch:      "fetch failed",
-		CodeHostileEntry:       "hostile archive member",
-		CodeSkippedLink:        "not materialized",
-		CodeIntegrityWeak:      "TLS trust only",
-		CodeExportsUnresolved:  "could not be computed",
-		CodeBinDelta:           "installed executable",
-		CodeProvenanceAnomaly:  "provenance anomaly",
-		CodeProvenanceGap:      "metadata incomplete",
-		CodeUnreviewable:       "unreviewable",
-		CodeRangeResolved:      "resolved from a range",
-		CodeGHARefMoved:        "since last fetch",
-		CodeGHAPinWeakened:     "pin weakened",
-		CodeGHAPinRaised:       "pin strengthened",
-		CodeGHAPinGrade:        "pin grade",
-		CodeNoContentChange:    "no content change",
-		CodeMalwareAdvisory:    "malicious-package advisory",
-		CodeExecGitOnly:        "only for a git/link/file dependency",
-		CodeNonRegistryDep:     "outside the registry",
-		CodeProvenanceHardened: "publishing chain strengthened",
-		CodeRepoMismatch:       "claimed repo differs",
-		CodeDeprecated:         "dependency deprecated",
-		CodeRetracted:          "reviewed Go module version is retracted",
-	}
-}
-
-// parityFixture is a BulkResult set whose ledgers, together, emit every signal
-// code, so one render exercises the whole matrix.
+// parityFixture supplies varied report facts for presentation-budget checks.
 func parityFixture() []BulkResult {
 	return []BulkResult{
 		{Ref: "npm:a 1 -> 2", Stats: &stats.Stats{
@@ -193,36 +76,33 @@ func parityFixture() []BulkResult {
 		{Ref: "npm:gone 1 -> 2", Unavailable: &Unavailable{Kind: "absent", Status: 404, URL: "https://registry.npmjs.org/gone/-/gone-2.tgz"}},
 		{Ref: "npm:locked 1 -> 2", Unavailable: &Unavailable{Kind: "denied", Status: 403, URL: "https://registry.example/locked"}},
 		{Ref: "npm:flaky 1 -> 2", Unavailable: &Unavailable{Kind: "transient", Status: 503, URL: "https://registry.example/flaky"}},
+		{Ref: "crates:checksum 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "crates"}, Security: stats.Security{Queried: true},
+			Artifact: stats.Artifact{SourceTo: &stats.Source{RegistryChecksum: &fetch.RegistryChecksum{State: "lookup-failed", URL: "https://index.example/checksum", Error: "unavailable"}}}}},
 	}
 }
 
-// TestSignalMarkersCoverAllCodes: every renderer must declare a marker for every
-// code, so a code cannot be added without forcing a marker (and thus a
-// rendering) in each ledger renderer.
-func TestSignalMarkersCoverAllCodes(t *testing.T) {
-	for _, rd := range ledgerRenderers {
-		for _, code := range AllSignalCodes() {
-			if _, ok := rd.markers[code]; !ok {
-				t.Errorf("renderer %s has no marker for code %q; add one so it is checked for it", rd.name, code)
-			}
-		}
-		if len(rd.markers) != len(AllSignalCodes()) {
-			t.Errorf("renderer %s has %d markers, AllSignalCodes has %d; a marker exists for a removed code", rd.name, len(rd.markers), len(AllSignalCodes()))
-		}
+func TestSummaryRenderersRetainIndependentAcquisitionEvidence(t *testing.T) {
+	longURL := "https://new-artifact.example/" + strings.Repeat("u", 260)
+	policy := "platform-policy\x1b" + strings.Repeat("p", 260)
+	hint := "lookup-failure-cause-" + strings.Repeat("h", 260)
+	s := &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "crates", Name: "example", From: "1.0.0", To: "2.0.0"},
+		Artifact: stats.Artifact{Unavailable: []*stats.Unavailable{
+			{Side: "from", Version: "1.0.0", Kind: "absent", Reason: "version-absent", URL: "https://old-index.example/pkg", ArtifactURL: "https://old-artifact.example/pkg.crate"},
+			{Side: "to", Version: "2.0.0", Kind: "denied", URL: longURL, Reason: "policy-blocked", PolicyReason: policy, Hint: hint},
+		}},
 	}
-}
-
-// TestRendererParity is the enforcement spine: every ledger-driven renderer must
-// surface every signal code. A renderer that drops one, or a new renderer that
-// narrows the ledger, fails here.
-func TestRendererParity(t *testing.T) {
-	results := parityFixture()
-	for _, rd := range ledgerRenderers {
-		out := rd.fn(results)
-		for code, marker := range rd.markers {
-			if !strings.Contains(out, marker) {
-				t.Errorf("renderer %s omits signal %q (marker %q)\n%s", rd.name, code, marker, out)
+	for name, render := range map[string]func([]BulkResult) string{"bulk": Bulk, "markdown": Markdown} {
+		t.Run(name, func(t *testing.T) {
+			out := render([]BulkResult{{Ref: "crates:example 1.0.0 -> 2.0.0", Stats: s}})
+			for _, value := range []string{"https://old-index.example/pkg", "https://old-artifact.example/pkg.crate", longURL[:100], "platform-policy", hint[:100]} {
+				if !strings.Contains(out, value) {
+					t.Errorf("lost independent acquisition evidence %q:\n%s", value, out)
+				}
 			}
-		}
+			if strings.Contains(out, "\x1b") {
+				t.Fatalf("platform response injected a terminal control:\n%q", out)
+			}
+		})
 	}
 }

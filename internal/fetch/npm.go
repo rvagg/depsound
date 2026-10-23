@@ -90,6 +90,16 @@ const (
 	VerifyLocalRegistry256 = "local-registry-sha256"
 )
 
+// RegistryChecksum records a report-time registry lookup for a local import.
+type RegistryChecksum struct {
+	State      string `json:"state"`
+	URL        string `json:"url"`
+	ObservedAt string `json:"observedAt"`
+	Expected   string `json:"expected,omitempty"`
+	Status     int    `json:"status,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
 // Meta records an artifact's source and integrity. Registry fetches persist
 // it in sidecars; local imports return it with their immutable byte path.
 // A GitHub Actions pin tier (sha|tag|branch) deliberately does not live here:
@@ -98,9 +108,10 @@ const (
 // storing the tier would let cache history decide a security grade. It is
 // re-resolved on every invocation instead.
 type Meta struct {
-	URL          string `json:"url"`
-	Digest       string `json:"digest"`
-	Verification string `json:"verification,omitempty"`
+	URL              string            `json:"url"`
+	Digest           string            `json:"digest"`
+	Verification     string            `json:"verification,omitempty"`
+	RegistryChecksum *RegistryChecksum `json:"registryChecksum,omitempty"`
 }
 
 func MetaPath(artifactPath string) string { return artifactPath + ".meta.json" }
@@ -147,6 +158,8 @@ func (s *stallReader) Read(p []byte) (int, error) {
 // can exhaust the runner's disk before extraction limits ever apply.
 const maxArtifactBytes = 2 << 30 // 2 GiB
 
+var errArtifactCeiling = fmt.Errorf("download exceeds the %d byte artifact ceiling; aborted (resource guard, not a judgement)", int64(maxArtifactBytes))
+
 // capped wraps a download body so an oversized stream aborts loudly with the
 // ceiling named, never fills the disk.
 func capped(r io.Reader) io.Reader { return &cappedReader{r: r, remaining: maxArtifactBytes} }
@@ -158,7 +171,7 @@ type cappedReader struct {
 
 func (c *cappedReader) Read(p []byte) (int, error) {
 	if c.remaining <= 0 {
-		return 0, fmt.Errorf("download exceeds the %d byte artifact ceiling; aborted (resource guard, not a judgement)", int64(maxArtifactBytes))
+		return 0, errArtifactCeiling
 	}
 	if int64(len(p)) > c.remaining {
 		p = p[:c.remaining]
@@ -212,13 +225,16 @@ func getJSON(ctx context.Context, client *http.Client, u string, v any) error {
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return failedAcquisition("metadata", u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return statusErr(u, resp.StatusCode, "")
+		return statusErrAt("metadata", u, resp.StatusCode, "")
 	}
-	return json.NewDecoder(resp.Body).Decode(v)
+	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+		return failedAcquisition("metadata", u, resp.StatusCode, err)
+	}
+	return nil
 }
 
 func download(ctx context.Context, client *http.Client, u, dest, integrity, shasum string) error {
@@ -231,14 +247,12 @@ func download(ctx context.Context, client *http.Client, u, dest, integrity, shas
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return failedAcquisition("artifact", u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return statusErr(u, resp.StatusCode, "")
+		return statusErrAt("artifact", u, resp.StatusCode, "")
 	}
-	// stall watchdog: cancels the request when no bytes arrive for
-	// stallTimeout; progress resets it, so slow links are never killed
 	watchdog := time.AfterFunc(stallTimeout, cancel)
 	defer watchdog.Stop()
 	body := &stallReader{r: resp.Body, watchdog: watchdog}
@@ -259,9 +273,9 @@ func download(ctx context.Context, client *http.Client, u, dest, integrity, shas
 	h1 := sha1.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, h512, h1), capped(body)); err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err)
+			return failedArtifactAcquisition(u, resp.StatusCode, fmt.Errorf("download stalled (no data for %s): %w", stallTimeout, err))
 		}
-		return err
+		return failedArtifactAcquisition(u, resp.StatusCode, err)
 	}
 	if err := verify(integrity, shasum, h512, h1); err != nil {
 		return err

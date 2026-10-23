@@ -102,7 +102,7 @@ func resolveGo(ctx context.Context, client *http.Client, mod string, cooldown ti
 		return Resolved{Version: info.Version, Published: info.Time}, nil
 	}
 	// cooldown: list versions, then time each (newest-first, stop early)
-	list, err := getBytes(ctx, client, fmt.Sprintf("%s/%s/@v/list", goProxy, esc))
+	list, _, err := getBytes(ctx, client, fmt.Sprintf("%s/%s/@v/list", goProxy, esc), "metadata")
 	if err != nil {
 		return Resolved{}, fmt.Errorf("go:%s list: %w", mod, err)
 	}

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/provenance"
@@ -76,62 +77,75 @@ const (
 	CodeCensusExec         Code = "census.exec"
 	CodeCensusBig          Code = "census.bigExcluded"
 	CodeAnalysisFailed     Code = "analysis.failed"
-	CodeArtifactAbsent     Code = "artifact.absent"          // registry metadata absent, or artifact URL returned 404/410
-	CodeArtifactDenied     Code = "artifact.denied"          // access denied (401/403)
-	CodeArtifactFetch      Code = "artifact.fetchFail"       // transient acquisition failure
-	CodeHostileEntry       Code = "artifact.hostile"         // hostile archive member skipped at extraction
-	CodeSkippedLink        Code = "artifact.skippedLink"     // symlink/hardlink not materialized (uninspected)
-	CodeIntegrityWeak      Code = "integrity.tlsOnly"        // TLS-trust-only, no registry integrity/checksum-DB
-	CodeExportsUnresolved  Code = "compat.exportsUnresolved" // exports/resolution delta could not be computed
-	CodeBinDelta           Code = "bin.delta"                // installed executable (bin) entries changed
-	CodeProvenanceAnomaly  Code = "provenance.anomaly"       // publisher shift / attestation / yank: the account-takeover shape
-	CodeProvenanceGap      Code = "coverage.provenance"      // a provenance source failed; that coverage was lost, not clean
-	CodeUnreviewable       Code = "surface.unreviewableMass" // generated/binary bytes dominate the artifact at rest
-	CodeRangeResolved      Code = "resolution.range"         // an endpoint was a range/latest, resolved at review time
-	CodeNoContentChange    Code = "files.none"               // the versions differ but the reviewed content does not
-	CodeMalwareAdvisory    Code = "security.malwareAdvisory" // a malicious-package record matches the reviewed version
-	CodeExecGitOnly        Code = "exec.gitOnly"             // hooks that fire only for a git/link/file dependency
-	CodeNonRegistryDep     Code = "deps.nonRegistry"         // this package pulls a dependency from git/url/filesystem
-	CodeProvenanceHardened Code = "provenance.hardened"      // publishing moved onto a trusted publisher (OIDC)
-	CodeRepoMismatch       Code = "provenance.repoMismatch"  // claimed repo != the registry's source repo
-	CodeDeprecated         Code = "maintenance.deprecated"   // current ecosystem metadata marks the version/module deprecated
-	CodeRetracted          Code = "maintenance.retracted"    // current latest go.mod retracts the reviewed version
+	CodeArtifactAbsent     Code = "artifact.absent"           // registry metadata absent, or artifact URL returned 404/410
+	CodeArtifactDenied     Code = "artifact.denied"           // access denied (401/403)
+	CodeArtifactFetch      Code = "artifact.fetchFail"        // transient acquisition failure
+	CodeRegistryChecksum   Code = "artifact.registryChecksum" // crate registry checksum index observation
+	CodeHostileEntry       Code = "artifact.hostile"          // hostile archive member skipped at extraction
+	CodeSkippedLink        Code = "artifact.skippedLink"      // symlink/hardlink not materialized (uninspected)
+	CodeIntegrityWeak      Code = "integrity.tlsOnly"         // TLS-trust-only, no registry integrity/checksum-DB
+	CodeExportsUnresolved  Code = "compat.exportsUnresolved"  // exports/resolution delta could not be computed
+	CodeBinDelta           Code = "bin.delta"                 // installed executable (bin) entries changed
+	CodeProvenanceAnomaly  Code = "provenance.anomaly"        // publisher shift / attestation / yank: the account-takeover shape
+	CodeProvenanceGap      Code = "coverage.provenance"       // a provenance source failed; that coverage was lost, not clean
+	CodeUnreviewable       Code = "surface.unreviewableMass"  // generated/binary bytes dominate the artifact at rest
+	CodeRangeResolved      Code = "resolution.range"          // an endpoint was a range/latest, resolved at review time
+	CodeNoContentChange    Code = "files.none"                // the versions differ but the reviewed content does not
+	CodeMalwareAdvisory    Code = "security.malwareAdvisory"  // a malicious-package record matches the reviewed version
+	CodeExecGitOnly        Code = "exec.gitOnly"              // hooks that fire only for a git/link/file dependency
+	CodeNonRegistryDep     Code = "deps.nonRegistry"          // this package pulls a dependency from git/url/filesystem
+	CodeProvenanceHardened Code = "provenance.hardened"       // publishing moved onto a trusted publisher (OIDC)
+	CodeRepoMismatch       Code = "provenance.repoMismatch"   // claimed repo != the registry's source repo
+	CodeDeprecated         Code = "maintenance.deprecated"    // current ecosystem metadata marks the version/module deprecated
+	CodeRetracted          Code = "maintenance.retracted"     // current latest go.mod retracts the reviewed version
 )
 
-// allCodes is the single source of the code set. AllSignalCodes returns it, and
-// the parity/reachability tests require a fixture and a marker for each, so a
-// code cannot be added to the model without proving it reaches every output.
-var allCodes = []Code{
-	CodeOSVIntroduced, CodeOSVStill, CodeOSVFixed,
-	CodeOSVDisabled, CodeOSVUnsupported, CodeOSVFailed,
-	CodeExecIntroduced, CodeExecPresent,
-	CodeCompatChange, CodeGeneratedDelta,
-	CodeGHACaps, CodeGHAUsing, CodeGHARefMoved,
-	CodeGHAPinWeakened, CodeGHAPinRaised, CodeGHAPinGrade,
-	CodeBinaryAdded, CodeBinaryChanged,
-	CodeRedirect,
-	CodeCensusNew, CodeCensusCVE, CodeCensusExec, CodeCensusBig,
-	CodeAnalysisFailed,
-	CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch,
-	CodeHostileEntry, CodeSkippedLink, CodeIntegrityWeak, CodeExportsUnresolved,
-	CodeBinDelta, CodeProvenanceAnomaly, CodeProvenanceGap,
-	CodeUnreviewable, CodeRangeResolved, CodeNoContentChange, CodeMalwareAdvisory, CodeExecGitOnly,
-	CodeNonRegistryDep, CodeProvenanceHardened, CodeRepoMismatch,
-	CodeDeprecated, CodeRetracted,
-}
-
-func AllSignalCodes() []Code { return allCodes }
-
-// Signal is one derived finding. Code is the stable identifier the parity tests
-// anchor on: wording (Title/Detail) may change freely, the Code may not.
+// Signal is one derived finding. Code is stable; wording may change freely.
 // Title/Detail are RAW; each renderer escapes them for its own medium.
 type Signal struct {
-	Code   Code
-	Kind   SignalKind
-	Lens   Lens
-	Weight int
-	Title  string
-	Detail string
+	Code     Code
+	Kind     SignalKind
+	Lens     Lens
+	Weight   int
+	Title    string
+	Detail   string
+	Evidence []EvidenceField
+}
+
+// EvidenceField keeps acquisition values separate until their final renderer
+// escapes and caps each attacker-controlled value.
+type EvidenceField struct {
+	Label string
+	Value string
+}
+
+func signalDetail(sig Signal, escape func(string) string) string {
+	if len(sig.Evidence) == 0 {
+		return escape(sig.Detail)
+	}
+	parts := make([]string, 0, len(sig.Evidence))
+	for _, field := range sig.Evidence {
+		parts = append(parts, field.Label+": "+escape(field.Value))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func checksumEvidence(checksum *fetch.RegistryChecksum, side string) []EvidenceField {
+	evidence := make([]EvidenceField, 0, 5)
+	if side != "" {
+		evidence = append(evidence, EvidenceField{Label: "endpoint", Value: side})
+	}
+	evidence = append(evidence, EvidenceField{Label: "observed index URL", Value: checksum.URL})
+	if checksum.Status > 0 {
+		evidence = append(evidence, EvidenceField{Label: "observed HTTP status", Value: fmt.Sprintf("%d", checksum.Status)})
+	}
+	if checksum.ObservedAt != "" {
+		evidence = append(evidence, EvidenceField{Label: "observed at", Value: checksum.ObservedAt})
+	}
+	if checksum.Error != "" {
+		evidence = append(evidence, EvidenceField{Label: "error", Value: checksum.Error})
+	}
+	return evidence
 }
 
 // Ledger is the single derived signal set for one dependency change. Inclusion
@@ -166,11 +180,32 @@ func osvSupported(eco string) bool { _, ok := osv.Ecosystem(eco); return ok }
 // that decides what counts; every renderer consumes the result.
 func Derive(ref string, s *stats.Stats) Ledger {
 	l := Ledger{Ref: ref}
-	if s.Artifact.Unavailable != nil {
-		l.Signals = append(l.Signals, DeriveUnavailable(ref, s.Artifact.Unavailable).Signals...)
+	for _, u := range s.Artifact.Unavailable {
+		l.Signals = append(l.Signals, DeriveUnavailable(ref, u).Signals...)
 	}
 	add := func(code Code, k SignalKind, lens Lens, w int, title, detail string) {
 		l.Signals = append(l.Signals, Signal{Code: code, Kind: k, Lens: lens, Weight: w, Title: title, Detail: detail})
+	}
+	for _, source := range []struct {
+		side string
+		src  *stats.Source
+	}{{"from", s.Artifact.SourceFrom}, {"to", s.Artifact.SourceTo}} {
+		if source.src == nil || source.src.RegistryChecksum == nil {
+			continue
+		}
+		checksum := source.src.RegistryChecksum
+		switch checksum.State {
+		case "lookup-failed":
+			l.Signals = append(l.Signals, Signal{
+				Code: CodeRegistryChecksum, Kind: KindDegradation, Lens: LensCoverage, Weight: weightWeigh,
+				Title: "registry checksum lookup failed", Evidence: checksumEvidence(checksum, source.side),
+			})
+		case "version-absent":
+			l.Signals = append(l.Signals, Signal{
+				Code: CodeRegistryChecksum, Kind: KindFact, Lens: LensCoverage, Weight: weightPositive,
+				Title: "version absent from the observed registry checksum index", Evidence: checksumEvidence(checksum, source.side),
+			})
+		}
 	}
 
 	// OSV status is derived from what actually ran, never assumed. A scan that
@@ -623,6 +658,21 @@ func DeriveCensus(ref string, c *Census) Ledger {
 		add(CodeCensusNew, KindFact, LensCompat, weightWeigh,
 			fmt.Sprintf("new dependency, %s file(s) unreviewed", commas(c.Files)), "")
 	}
+	if c.Source != nil && c.Source.RegistryChecksum != nil {
+		checksum := c.Source.RegistryChecksum
+		switch checksum.State {
+		case "lookup-failed":
+			l.Signals = append(l.Signals, Signal{
+				Code: CodeRegistryChecksum, Kind: KindDegradation, Lens: LensCoverage, Weight: weightWeigh,
+				Title: "registry checksum lookup failed", Evidence: checksumEvidence(checksum, ""),
+			})
+		case "version-absent":
+			l.Signals = append(l.Signals, Signal{
+				Code: CodeRegistryChecksum, Kind: KindFact, Lens: LensCoverage, Weight: weightPositive,
+				Title: "version absent from the observed registry checksum index", Evidence: checksumEvidence(checksum, ""),
+			})
+		}
+	}
 	// OSV status honestly: a scan that ran reports its records (or nothing); a
 	// scan that did NOT run is a coverage gap, never a silent clean-on-security.
 	// A malware record on a package you are about to adopt is the loudest thing
@@ -741,36 +791,53 @@ func DeriveFailure(ref, errMsg string) Ledger {
 // Unavailable is the acquisition failure carried by report models.
 type Unavailable = stats.Unavailable
 
-// DeriveUnavailable turns an acquisition failure into a signal. Absent is a
-// FACT (registry metadata is absent, or the URL returned 404/410; contents were
-// not inspected). It never infers a takedown or prior publication. Denied and
-// transient are degradations.
+// DeriveUnavailable turns an acquisition failure into a signal. A metadata
+// absence is a scoped fact; denied and transient acquisition are degradations.
 func DeriveUnavailable(ref string, u *Unavailable) Ledger {
-	detail := u.URL
+	evidence := make([]EvidenceField, 0, 8)
 	if u.Side != "" || u.Version != "" {
-		subject := strings.TrimSpace(u.Side + " " + u.Version)
-		if subject != "" {
-			detail = subject + ": " + detail
-		}
+		evidence = append(evidence, EvidenceField{Label: "endpoint", Value: strings.TrimSpace(u.Side + " " + u.Version)})
+	}
+	evidence = append(evidence, EvidenceField{Label: "observed URL", Value: u.URL})
+	if u.ArtifactURL != "" {
+		evidence = append(evidence, EvidenceField{Label: "intended artifact", Value: u.ArtifactURL})
+	}
+	if u.Stage != "" {
+		evidence = append(evidence, EvidenceField{Label: "stage", Value: u.Stage})
+	}
+	if u.Status > 0 {
+		evidence = append(evidence, EvidenceField{Label: "observed HTTP status", Value: fmt.Sprintf("%d", u.Status)})
+	}
+	if u.Reason != "" {
+		evidence = append(evidence, EvidenceField{Label: "reason", Value: u.Reason})
+	}
+	if u.PolicyReason != "" {
+		evidence = append(evidence, EvidenceField{Label: "policy", Value: u.PolicyReason})
 	}
 	if u.Hint != "" {
-		detail += " (" + u.Hint + ")"
+		evidence = append(evidence, EvidenceField{Label: "hint", Value: u.Hint})
 	}
-	sig := Signal{Lens: LensCoverage, Detail: detail}
+	sig := Signal{Lens: LensCoverage, Evidence: evidence}
 	switch u.Kind {
 	case "absent":
 		sig.Code, sig.Kind, sig.Lens, sig.Weight = CodeArtifactAbsent, KindFact, LensSecurity, weightLook
-		if u.Status == 0 {
-			sig.Title = "artifact unavailable: version absent from registry metadata and its contents were not inspected"
+		if u.Reason == "version-absent" {
+			sig.Title = "version absent from observed registry metadata; intended artifact contents were not inspected"
+		} else if u.Status > 0 {
+			sig.Title = "artifact or metadata request unavailable; contents were not inspected"
 		} else {
-			sig.Title = fmt.Sprintf("artifact unavailable (HTTP %d): the URL is not retrievable now and its contents were not inspected; whether it was ever published is not established", u.Status)
+			sig.Title = "artifact unavailable: its contents were not inspected"
 		}
 	case "denied":
 		sig.Code, sig.Kind, sig.Weight = CodeArtifactDenied, KindDegradation, weightWeigh
-		sig.Title = fmt.Sprintf("artifact access denied (HTTP %d): authentication or policy", u.Status)
+		if u.Reason == "policy-blocked" {
+			sig.Title = "artifact access blocked by platform policy; contents were not inspected"
+		} else {
+			sig.Title = "artifact access denied; contents were not inspected"
+		}
 	default:
 		sig.Code, sig.Kind, sig.Weight = CodeArtifactFetch, KindDegradation, weightLook
-		sig.Title = fmt.Sprintf("artifact fetch failed (HTTP %d, transient)", u.Status)
+		sig.Title = "artifact fetch failed (transient); contents were not inspected"
 	}
 	return Ledger{Ref: ref, Signals: []Signal{sig}}
 }

@@ -3,15 +3,23 @@ package fetch
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+type unavailableTransport struct{}
+
+func (unavailableTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("offline")
+}
 
 func TestIndexPath(t *testing.T) {
 	cases := map[string]string{
@@ -250,12 +258,97 @@ func TestCrateClassifiesVersionMissingFromIndex(t *testing.T) {
 	client := useCratesIndex(t, "{\"vers\":\"9.9.9\",\"cksum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n")
 
 	err := Crate(t.Context(), client, "example", "1.2.3", filepath.Join(t.TempDir(), "example.crate"))
-	unavailable, ok := err.(UnavailableError)
-	if !ok {
+	var unavailable UnavailableError
+	if !errors.As(err, &unavailable) {
 		t.Fatalf("missing version error = %T %v", err, err)
 	}
-	kind, status, _, _ := unavailable.Unavailable()
-	if kind != Absent || status != 0 {
-		t.Fatalf("classification = %q HTTP %d", kind, status)
+	failure := unavailable.Unavailable()
+	if failure.Kind != Absent || failure.Stage != "registry-index" || failure.Status != http.StatusOK {
+		t.Fatalf("classification = %+v", failure)
+	}
+	if failure.URL == failure.ArtifactURL || failure.ArtifactURL == "" {
+		t.Fatalf("observed and intended URLs = %+v", failure)
+	}
+}
+
+func TestLocalCrateKeepsLookupFailureSeparateFromAbsence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	old := cratesIndex
+	cratesIndex = srv.URL
+	t.Cleanup(func() { cratesIndex = old })
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "input.crate")
+	if err := os.WriteFile(src, []byte("quarantined bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evidence := importLocalCrate(t, srv.Client(), src, filepath.Join(dir, "cache"))
+	checksum := evidence.Meta.RegistryChecksum
+	if checksum == nil || checksum.State != "lookup-failed" || checksum.Status != http.StatusServiceUnavailable || checksum.URL != srv.URL+"/ex/am/example" {
+		t.Fatalf("checksum observation = %+v", checksum)
+	}
+	if evidence.Meta.Verification != VerifyLocalSHA256 {
+		t.Fatalf("verification = %q", evidence.Meta.Verification)
+	}
+}
+
+func TestLocalCrateDoesNotTreatMalformedIndexAsAbsent(t *testing.T) {
+	client := useCratesIndex(t, "{\"vers\":\"9.9.9\",\"cksum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n{")
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "input.crate")
+	if err := os.WriteFile(src, []byte("quarantined bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evidence := importLocalCrate(t, client, src, filepath.Join(dir, "cache"))
+	checksum := evidence.Meta.RegistryChecksum
+	if checksum == nil || checksum.State != "lookup-failed" || checksum.Error == "" {
+		t.Fatalf("checksum observation = %+v", checksum)
+	}
+}
+
+func TestLocalCrateRecordsTransportLookupGap(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "input.crate")
+	if err := os.WriteFile(src, []byte("quarantined bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evidence := importLocalCrate(t, &http.Client{Transport: unavailableTransport{}}, src, filepath.Join(dir, "cache"))
+	checksum := evidence.Meta.RegistryChecksum
+	if checksum == nil || checksum.State != "lookup-failed" || checksum.Status != 0 || checksum.Error == "" {
+		t.Fatalf("checksum observation = %+v", checksum)
+	}
+}
+
+func TestLocalCrateDoesNotTreatIncompleteIndexAsAbsent(t *testing.T) {
+	row := "{\"vers\":\"9.9.9\",\"cksum\":\"" + strings.Repeat("a", 64) + "\"}\n"
+	for _, truncated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("truncated=%t", truncated), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if truncated {
+					w.Header().Set("Content-Length", fmt.Sprint(len(row)+100))
+					fmt.Fprint(w, row)
+					return
+				}
+				fmt.Fprint(w, strings.Repeat(row, (16<<20)/len(row)+1))
+			}))
+			t.Cleanup(srv.Close)
+			old := cratesIndex
+			cratesIndex = srv.URL
+			t.Cleanup(func() { cratesIndex = old })
+			dir := t.TempDir()
+			src := filepath.Join(dir, "input.crate")
+			if err := os.WriteFile(src, []byte("quarantined bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			evidence := importLocalCrate(t, srv.Client(), src, filepath.Join(dir, "cache"))
+			checksum := evidence.Meta.RegistryChecksum
+			if checksum == nil || checksum.State != "lookup-failed" || checksum.Status != http.StatusOK {
+				t.Fatalf("incomplete index outcome = %+v", checksum)
+			}
+		})
 	}
 }

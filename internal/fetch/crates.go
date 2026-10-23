@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rvagg/depsound/internal/version"
 )
@@ -26,9 +27,6 @@ var (
 // supplies the sha256 checksum, verified before the artifact enters the
 // cache. Cache hits are rehashed against the sidecar like every artifact.
 func Crate(ctx context.Context, client *http.Client, name, version_, dest string) error {
-	// crate names are a strict charset; validating up front closes URL
-	// injection before name interpolation (detect will feed
-	// manifest-derived names here).
 	if !validCrateName(name) {
 		return fmt.Errorf("crates:%s: invalid crate name (allowed: letters, digits, - _)", name)
 	}
@@ -39,14 +37,14 @@ func Crate(ctx context.Context, client *http.Client, name, version_, dest string
 	}
 
 	u := fmt.Sprintf("%s/%s/%s-%s.crate", cratesDL, name, name, version_)
-	cksum, err := indexChecksum(ctx, client, name, version_)
+	checksum, err := indexChecksum(ctx, client, name, version_, u)
 	if err != nil {
 		return fmt.Errorf("crates:%s@%s: %w", name, version_, err)
 	}
-	if cksum == "" {
+	if checksum.State == "version-absent" {
 		return &RegistryMissing{
-			URL:  u,
-			Hint: fmt.Sprintf("version %s is absent from the crates.io sparse index, so no registry checksum remains; artifact contents were not inspected", version_),
+			URL: checksum.URL, ArtifactURL: u, Status: checksum.Status,
+			Hint: fmt.Sprintf("version %s is absent from the crates.io sparse index; artifact contents were not inspected", version_),
 		}
 	}
 	tmp, err := fetchToTemp(ctx, client, u, filepath.Dir(dest))
@@ -55,7 +53,7 @@ func Crate(ctx context.Context, client *http.Client, name, version_, dest string
 	}
 	defer os.Remove(tmp)
 
-	if !verifyCrate(tmp, "sha256-"+cksum) {
+	if !verifyCrate(tmp, checksum.Expected) {
 		return fmt.Errorf("crates:%s@%s: sha256 mismatch against index checksum", name, version_)
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -64,7 +62,7 @@ func Crate(ctx context.Context, client *http.Client, name, version_, dest string
 	if err := os.Rename(tmp, dest); err != nil {
 		return err
 	}
-	return writeMeta(dest, Meta{URL: u, Digest: "sha256-" + cksum, Verification: VerifyRegistry256})
+	return writeMeta(dest, Meta{URL: u, Digest: checksum.Expected, Verification: VerifyRegistry256})
 }
 
 // LocalCrateEvidence records a local archive import. Its metadata belongs to
@@ -125,8 +123,9 @@ func LocalCrate(ctx context.Context, client *http.Client, name, version_, src, d
 	}
 	digest := "sha256-" + hex.EncodeToString(hash.Sum(nil))
 	verification := VerifyLocalSHA256
-	if expected, err := indexChecksum(ctx, client, name, version_); err == nil && expected != "" {
-		if digest != "sha256-"+expected {
+	checksum, _ := indexChecksum(ctx, client, name, version_, "")
+	if checksum.State == "matched" {
+		if digest != checksum.Expected {
 			return nil, fmt.Errorf("local crate %q: sha256 mismatch against crates.io index checksum for %s@%s", src, name, version_)
 		}
 		verification = VerifyLocalRegistry256
@@ -138,7 +137,10 @@ func LocalCrate(ctx context.Context, client *http.Client, name, version_, src, d
 	origin := (&url.URL{Scheme: "file", Path: filepath.ToSlash(resolved)}).String()
 	return &LocalCrateEvidence{
 		Path: path,
-		Meta: Meta{URL: origin, Digest: digest, Verification: verification},
+		Meta: Meta{
+			URL: origin, Digest: digest, Verification: verification,
+			RegistryChecksum: checksum,
+		},
 	}, nil
 }
 
@@ -154,38 +156,51 @@ func publishLocalCrate(tmp, path, digest string) error {
 	return nil
 }
 
-// indexChecksum reads the sparse-index file for a crate and returns the
-// cksum for the requested version. The index path is a prefix scheme:
-// 1-char names under 1/, 2-char under 2/, 3-char under 3/<first>/, and
-// 4+ under <first-two>/<next-two>/.
-func indexChecksum(ctx context.Context, client *http.Client, name, version_ string) (string, error) {
+// indexChecksum reads the sparse-index file for a crate. A missing version is
+// established only after every non-empty index line has parsed successfully.
+func indexChecksum(ctx context.Context, client *http.Client, name, version_, artifactURL string) (*RegistryChecksum, error) {
 	lower := strings.ToLower(name)
 	u := cratesIndex + "/" + indexPath(lower)
-	body, err := getBytes(ctx, client, u)
-	if err != nil {
-		return "", err
+	body, status, err := getBytes(ctx, client, u, "registry-index")
+	observed := &RegistryChecksum{
+		URL: u, ObservedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	// each line is a JSON object for one version
+	if err != nil {
+		observed.State = "lookup-failed"
+		observed.Status = status
+		observed.Error = err.Error()
+		return observed, withArtifactURL(err, artifactURL)
+	}
+	observed.Status = status
 	for line := range strings.Lines(string(body)) {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		var e struct {
+		var entry struct {
 			Vers  string `json:"vers"`
 			Cksum string `json:"cksum"`
 		}
-		if json.Unmarshal([]byte(line), &e) != nil {
-			continue
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			err = failedAcquisition("registry-index", u, status, fmt.Errorf("parse sparse index: %w", err))
+			observed.State = "lookup-failed"
+			observed.Error = err.Error()
+			return observed, withArtifactURL(err, artifactURL)
 		}
-		if e.Vers == version_ {
-			if e.Cksum == "" {
-				return "", fmt.Errorf("index entry for %s has no cksum", version_)
-			}
-			return e.Cksum, nil
+		if entry.Vers == "" || entry.Cksum == "" {
+			err := failedAcquisition("registry-index", u, status, fmt.Errorf("parse sparse index: invalid entry"))
+			observed.State = "lookup-failed"
+			observed.Error = err.Error()
+			return observed, withArtifactURL(err, artifactURL)
+		}
+		if entry.Vers == version_ {
+			observed.State = "matched"
+			observed.Expected = "sha256-" + entry.Cksum
+			return observed, nil
 		}
 	}
-	return "", nil
+	observed.State = "version-absent"
+	return observed, nil
 }
 
 func indexPath(name string) string {
@@ -230,21 +245,29 @@ func verifyCrate(path, digest string) bool {
 	return hex.EncodeToString(h.Sum(nil)) == hexsum
 }
 
-func getBytes(ctx context.Context, client *http.Client, u string) ([]byte, error) {
+func getBytes(ctx context.Context, client *http.Client, u, stage string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, metaTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("User-Agent", version.UserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, failedAcquisition(stage, u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, statusErr(u, resp.StatusCode, "")
+		return nil, resp.StatusCode, statusErrAt(stage, u, resp.StatusCode, "")
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	const maxMetadataBytes = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBytes+1))
+	if err != nil {
+		return nil, resp.StatusCode, failedAcquisition(stage, u, resp.StatusCode, err)
+	}
+	if len(body) > maxMetadataBytes {
+		return nil, resp.StatusCode, failedAcquisition(stage, u, resp.StatusCode, fmt.Errorf("metadata exceeds %d byte ceiling", maxMetadataBytes))
+	}
+	return body, resp.StatusCode, nil
 }
