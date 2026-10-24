@@ -22,6 +22,7 @@ Start with the plain footprint, then add the flags that answer the adoption ques
 - **The MARGINAL cost**, when adding to an existing project: add `--against=<your lockfile>` (a `package-lock.json` or `Cargo.lock`; a path, URL, or `github:owner/repo@ref`). It subtracts what you already have, so you see what is genuinely NEW versus already-present, much of a big subtree may already be in your tree.
 - **Withhold fresh releases**: add `--cooldown=<days>` to evaluate the newest release at least N days old, a freshly-published version is the account-takeover window. It applies to the root only; `--transitive` still resolves the subtree latest-matching (the report says so, and `depsound guide` has the whole-tree cooldown recipe).
 - **Unavailable release**: the report can retain root advisories, an independently resolved subtree and `--against` classifications without inspecting the missing artifact. Supply an exact-version `.crate` with `--artifact=<path>` if you have a copy; do not mistake metadata coverage for code review.
+- **Keep adoption evidence**: add `--evidence-dir=<new-dir>` to retain this census's JSON, archive and bounded inert files before a registry takedown. Use a new directory outside the cache; `manifest.json` maps files and states omissions. Retained `.crate` archives can be supplied with `--artifact`; protect private package contents and never execute the stored data.
 
 Comparing candidates: census each and set the footprints, subtree sizes, execution surface, provenance, and maintenance signals side by side.
 

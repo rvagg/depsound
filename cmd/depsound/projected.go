@@ -19,7 +19,7 @@ import (
 // same diff, churn tree, and bulk router render the delta. deps.dev resolves
 // the package in isolation and live, so this is a projection of the dep's own
 // tree, never the tree you install; the renderer says so.
-func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration, noOSV bool, format string) error {
+func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time.Duration, noOSV bool, format, evidenceDir string) error {
 	sp, err := spec.Parse(specStr)
 	if err != nil {
 		return err
@@ -55,6 +55,11 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 				spec: string(sp.Eco) + ":" + sp.Name, from: from, to: to,
 			}}, noOSV, provenanceUnavailableFallback, cooldown),
 		}
+		if evidenceDir != "" {
+			if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr); err != nil {
+				return err
+			}
+		}
 		if format == "json" {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -88,6 +93,11 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 	analyseAdded(cacheDir, string(sp.Eco), tr.Added, noOSV)
 	tr.Tree, tr.TreeNote = buildChurnTree([]string{newG.Root}, newG.Edges, res.changed, res.added)
 
+	if evidenceDir != "" {
+		if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr); err != nil {
+			return err
+		}
+	}
 	if format == "json" {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

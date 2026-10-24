@@ -31,7 +31,7 @@ import (
 // censusCmd vets a SINGLE version in absolute terms: "what am I signing up
 // for if I adopt this". No diff; from=none. The vet-a-virgin-dep mode.
 func censusCmd(args []string) error {
-	cacheDir, format, against, artifactPath := "", "stats", "", ""
+	cacheDir, format, against, artifactPath, evidenceDir := "", "stats", "", "", ""
 	noOSV, transitive, prov := false, false, true // provenance on by default
 	var cooldown time.Duration
 	var pos []string
@@ -54,6 +54,11 @@ func censusCmd(args []string) error {
 				return err
 			}
 			cooldown = d
+		case strings.HasPrefix(a, "--evidence-dir="):
+			evidenceDir = strings.TrimPrefix(a, "--evidence-dir=")
+			if evidenceDir == "" {
+				return fmt.Errorf("--evidence-dir needs a directory")
+			}
 		case a == "--no-osv":
 			noOSV = true
 		case a == "--transitive":
@@ -108,6 +113,11 @@ func censusCmd(args []string) error {
 		c.Provenance = provenance.Assess(context.Background(), c.Ecosystem, c.Name, c.Version, "")
 	}
 	c.Coverage, c.NextActions = output.CensusGuide(c)
+	if evidenceDir != "" {
+		if err := exportEvidence(cacheDir, evidenceDir, "census", c); err != nil {
+			return err
+		}
+	}
 
 	if format == "json" {
 		enc := json.NewEncoder(os.Stdout)

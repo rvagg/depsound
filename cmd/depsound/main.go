@@ -395,12 +395,17 @@ func buildResolution(fromArg string, fromRes fetch.Resolved, toArg string, toRes
 }
 
 func diffCmd(args []string) error {
-	format := "stats"
+	format, evidenceDir := "stats", ""
 	noOSV, noProv := false, false
 	r, _, err := resolveWorkspace(args, func(a string) (bool, error) {
 		switch {
 		case strings.HasPrefix(a, "--format="):
 			format = strings.TrimPrefix(a, "--format=")
+		case strings.HasPrefix(a, "--evidence-dir="):
+			evidenceDir = strings.TrimPrefix(a, "--evidence-dir=")
+			if evidenceDir == "" {
+				return false, fmt.Errorf("--evidence-dir needs a directory")
+			}
 		case a == "--no-osv":
 			noOSV = true
 		case a == "--no-provenance":
@@ -436,6 +441,11 @@ func diffCmd(args []string) error {
 	if len(r.st.Artifact.Unavailable) > 0 && format != "stats" && format != "json" {
 		return fmt.Errorf("artifact contents unavailable (%s); %s output needs both artifact trees",
 			unavailableSides(r.st.Artifact.Unavailable), format)
+	}
+	if evidenceDir != "" {
+		if err := exportEvidence(r.cacheRoot, evidenceDir, "diff", r.st); err != nil {
+			return err
+		}
 	}
 
 	switch format {

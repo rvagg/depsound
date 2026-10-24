@@ -26,6 +26,7 @@ Resolve whatever arrives into one or more `(<ecosystem>:<name>, from, to)` tripl
 - **One manifest, no "before"** (auditing what a project declares) → generate a lockfile from it with a resolution-only command (`depsound guide` has the recipe; no package code runs), then census the notable deps.
 - **A GitHub PR** (a URL or `owner/repo#N`) → see below.
 - **Several deps at once** → one `<eco>:<name> <from> <to>` per line piped into `depsound bulk`, which prioritizes which deps tripped which signals.
+- **Retain reviewed bytes** → add `--evidence-dir=<new-dir>` to diff, census, bulk or transitive. The export keeps this run's JSON, archives and bounded inert files, so a registry takedown need not erase the review. Read `manifest.json` for mappings, hashes, limits and omissions. Keep private-package access controls; never execute retained bytes. The destination must be new and outside the cache.
 
 Outside npm/Go/crates/GHA (e.g. PyPI, RubyGems) depsound does not apply; say so and review by hand.
 

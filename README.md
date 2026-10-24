@@ -33,6 +33,8 @@ depsound crates:arrayref 0.3.9 0.3.10 --to-artifact=/path/to/arrayref-0.3.10.cra
 
 Follow the report's drill-down commands to keep reviewing the same local archives. Archives are inspected as data, never executed.
 
+To keep evidence before a release disappears, add `--evidence-dir=./review-evidence` to a diff, census, bulk or transitive command. Use a new directory outside the cache. The export keeps the report and bounded package bytes; `manifest.json` maps retained files and records omissions. Retained `.crate` archives work with the local-artifact flags above. Contents remain untrusted data and may include private package code.
+
 ## Install
 
 Grab a prebuilt binary for your platform from the [releases page](https://github.com/rvagg/depsound/releases), or build from source with Go:

@@ -41,7 +41,7 @@ var transitiveEcos = map[string]transitiveEco{
 // diff handles multiple versions of one name (npm/Cargo dedup) by pairing a
 // lone removed+added as a bump.
 func transitiveCmd(args []string) error {
-	cacheDir, format := "", "stats"
+	cacheDir, format, evidenceDir := "", "stats", ""
 	noOSV := false
 	var cooldown time.Duration
 	var oldSrc, newSrc string
@@ -62,6 +62,11 @@ func transitiveCmd(args []string) error {
 				return err
 			}
 			cooldown = d
+		case strings.HasPrefix(a, "--evidence-dir="):
+			evidenceDir = strings.TrimPrefix(a, "--evidence-dir=")
+			if evidenceDir == "" {
+				return fmt.Errorf("--evidence-dir needs a directory")
+			}
 		case a == "--no-osv":
 			noOSV = true
 		case strings.HasPrefix(a, "-"):
@@ -76,7 +81,7 @@ func transitiveCmd(args []string) error {
 		if len(pos) != 3 {
 			return fmt.Errorf("transitive: want `depsound transitive <eco>:<name> <from> <to>` (projected, no lockfile) or `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile>`")
 		}
-		return transitiveProjected(cacheDir, pos[0], pos[1], pos[2], cooldown, noOSV, format)
+		return transitiveProjected(cacheDir, pos[0], pos[1], pos[2], cooldown, noOSV, format, evidenceDir)
 	}
 	if len(pos) != 1 {
 		return fmt.Errorf("transitive: want `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile>`, or `depsound transitive <eco>:<name> <from> <to>` when there is no lockfile")
@@ -133,6 +138,11 @@ func transitiveCmd(args []string) error {
 			if roots, edges, err := lockGraph(kind, b); err == nil {
 				attributeCause("", roots, edges, tr.Removed)
 			}
+		}
+	}
+	if evidenceDir != "" {
+		if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr); err != nil {
+			return err
 		}
 	}
 

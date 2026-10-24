@@ -52,6 +52,7 @@ var usage = identity + `
 
 ecosystems: npm, go, crates, gha    <lang> for transitive: go, crates, npm, pnpm
 global flags: --format=json  --no-osv  --cache-dir=DIR
+report retention (diff/census/bulk/transitive): --evidence-dir=DIR
 transitive --old/--new (and census --against) take a path, https URL, or
   github:owner/repo@ref; downloads are usually unnecessary.
 per-command detail: ` + "`depsound help <command>`" + `
@@ -60,10 +61,18 @@ per-command detail: ` + "`depsound help <command>`" + `
 Run ` + "`depsound guide`" + ` once per session: threat model, how to read the
 output, and the two lenses (security vs compatibility).`
 
+const evidenceHelp = `
+  --evidence-dir=DIR
+                  retain this run's JSON and bounded archives, metadata,
+                  diffs and inert files. Use a new directory outside the cache,
+                  with an existing parent. manifest.json maps files, SHA-256
+                  hashes, limits and omissions. Contents are untrusted data
+                  and may include private package code.`
+
 // cmdHelp holds per-command detail, reached via help <command>, so the top-
 // level help stays a routing table rather than a wall.
 var cmdHelp = map[string]string{
-	"diff": `depsound <ecosystem>:<name> <from> <to> [--cooldown=<days>] [--format=stats|json|patch|files] [--from-artifact=<file.crate>] [--to-artifact=<file.crate>] [--no-osv] [--no-provenance]
+	"diff": `depsound <ecosystem>:<name> <from> <to> [--cooldown=<days>] [--format=stats|json|patch|files] [--from-artifact=<file.crate>] [--to-artifact=<file.crate>] [--evidence-dir=<dir>] [--no-osv] [--no-provenance]
 
 Diffs two PUBLISHED versions (what installs, not the repo) and reports the
 file diff, execution surface, manifest compatibility, and OSV. Versions come
@@ -86,9 +95,9 @@ When an artifact URL is unavailable, stats/json can still report OSV, provenance
 and registry history, subject to --no-osv/--no-provenance; patch/files need both
 trees.
   --no-osv         skip the known-CVE scan
-  --no-provenance  skip publish metadata collection, including missing artifacts`,
+  --no-provenance  skip publish metadata collection, including missing artifacts` + evidenceHelp,
 
-	"census": `depsound <ecosystem>:<name> [version] [--transitive] [--cooldown=<days>] [--artifact=<file.crate>] [--format=stats|json] [--no-osv]
+	"census": `depsound <ecosystem>:<name> [version] [--transitive] [--cooldown=<days>] [--artifact=<file.crate>] [--evidence-dir=<dir>] [--format=stats|json] [--no-osv]
 
 Vets a SINGLE version in absolute terms: what you sign up for by adopting it
 (no diff). Version may be exact, a semver RANGE ('^10.2.0', npm/crates), or
@@ -108,9 +117,9 @@ guess stale versions from weights). Publish/anomaly provenance runs by default
                   withheld)
   --artifact=<file.crate>
                   inspect a caller-supplied, exact-version .crate archive
-                  as inert evidence, recording origin and sha256`,
+                  as inert evidence, recording origin and sha256` + evidenceHelp,
 
-	"bulk": `depsound bulk [--file=<list>] [--cooldown=<days>] [--format=stats|json] [--no-osv] [--no-provenance]
+	"bulk": `depsound bulk [--file=<list>] [--cooldown=<days>] [--evidence-dir=<dir>] [--format=stats|json|markdown] [--no-osv] [--no-provenance]
 
 Runs the per-pair analysis over a LIST of bumps (one "<eco>:<name> <from> <to>"
 per line, or a JSON array) from stdin or --file, and renders a prioritized
@@ -118,10 +127,10 @@ ROUTER: which deps tripped which signals, most-severe first, each a POINTER to
 inspect (drill with the single-pair command, instant once cached). The list is
 yours to supply, from a PR diff, a go.mod diff, etc. A from/to may be a semver
 range; --cooldown applies to the whole list (see help diff).
---no-provenance skips publishing metadata, including for missing artifacts.`,
+--no-provenance skips publishing metadata, including for missing artifacts.` + evidenceHelp,
 
-	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--format=stats|json] [--no-osv]
-depsound transitive <ecosystem>:<name> <from> <to>   (projected, no lockfile)
+	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--evidence-dir=<dir>] [--format=stats|json] [--no-osv]
+depsound transitive <ecosystem>:<name> <from> <to> [--evidence-dir=<dir>]   (projected, no lockfile)
 
 --old/--new take a local PATH, an https URL, OR github:owner/repo@ref, so you
 usually need NOT download the files yourself. Review a PR in one command:
@@ -146,7 +155,7 @@ No lockfile committed? Two routes, both real:
              you, and not reproducible the way a diff is.
   exact      generate a lockfile per endpoint with a resolution-only command
              (runs no package code), e.g. npm install --package-lock-only
-             --ignore-scripts, then diff the pair. See depsound guide.`,
+             --ignore-scripts, then diff the pair. See depsound guide.` + evidenceHelp,
 
 	"surface": `depsound surface <ecosystem>:<name> <from> <to> --uses=<unit,unit,...>
 
@@ -187,7 +196,7 @@ Threat model: an action runs on a CI RUNNER, not your machine, so running code
 is its whole job (pre/post/main/using are context, not alarms). The risk is
 what the runner grants: secrets, GITHUB_TOKEN, OIDC, push/publish powers, and
 network pivot on self-hosted. So the pin, the dist bundle change, nested actions,
-and what the code reaches are the signals, not "it runs code".`,
+and what the code reaches are the signals, not "it runs code".` + evidenceHelp,
 }
 
 // helpCmd prints the routing help, or per-command detail for help <command>.

@@ -26,7 +26,7 @@ const bulkConcurrency = 4
 // aggregates. The list is the agent's to supply (it already has it from
 // the PR/diff); depsound does the analysis, not the extraction.
 func bulkCmd(args []string) error {
-	cacheDir, format, inputFile := "", "stats", ""
+	cacheDir, format, inputFile, evidenceDir := "", "stats", "", ""
 	noOSV, noProv := false, false
 	var cooldown time.Duration
 	var pos []string
@@ -44,6 +44,11 @@ func bulkCmd(args []string) error {
 				return err
 			}
 			cooldown = d
+		case strings.HasPrefix(a, "--evidence-dir="):
+			evidenceDir = strings.TrimPrefix(a, "--evidence-dir=")
+			if evidenceDir == "" {
+				return fmt.Errorf("--evidence-dir needs a directory")
+			}
 		case a == "--no-osv":
 			noOSV = true
 		case a == "--no-provenance":
@@ -68,6 +73,11 @@ func bulkCmd(args []string) error {
 		policy = provenanceDisabled
 	}
 	results := runBulk(cacheDir, items, noOSV, policy, cooldown)
+	if evidenceDir != "" {
+		if err := exportEvidence(cacheDir, evidenceDir, "bulk", results); err != nil {
+			return err
+		}
+	}
 
 	if format == "json" {
 		enc := json.NewEncoder(os.Stdout)
