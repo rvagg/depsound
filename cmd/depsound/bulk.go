@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
 	"github.com/rvagg/depsound/internal/provenance"
@@ -94,6 +95,7 @@ func bulkCmd(args []string) error {
 
 type bulkItem struct {
 	spec, from, to string
+	lockChange     *manifest.LockChange
 	redirect       string // non-empty: spec is redirected to this target (a flag, no fetch)
 	// failure is non-empty when detect could not resolve a manifest (spec is the
 	// manifest path, not an eco:name): it rides the stream as a failed-analysis
@@ -102,8 +104,8 @@ type bulkItem struct {
 }
 
 // readBulkList reads from --file, else a positional file arg, else stdin.
-// Accepts a JSON array of {ecosystem,name,from,to} or, per line,
-// `<eco>:<name> <from> <to>` (# comments and blanks skipped).
+// Accepts a JSON array of {ecosystem,name,from,to} or lockChange entries, or
+// per line `<eco>:<name> <from> <to>` (# comments and blanks skipped).
 func readBulkList(inputFile string, pos []string) ([]bulkItem, error) {
 	var raw []byte
 	var err error
@@ -130,17 +132,28 @@ func readBulkList(inputFile string, pos []string) ([]bulkItem, error) {
 
 func parseBulkJSON(raw []byte) ([]bulkItem, error) {
 	var arr []struct {
-		Ecosystem string `json:"ecosystem"`
-		Name      string `json:"name"`
-		From      string `json:"from"`
-		To        string `json:"to"`
-		Redirect  string `json:"redirect"`
+		Ecosystem  string               `json:"ecosystem"`
+		Name       string               `json:"name"`
+		From       string               `json:"from"`
+		To         string               `json:"to"`
+		Redirect   string               `json:"redirect"`
+		LockChange *manifest.LockChange `json:"lockChange"`
 	}
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return nil, fmt.Errorf("bulk JSON: %w", err)
 	}
 	var items []bulkItem
 	for _, e := range arr {
+		if e.LockChange != nil {
+			if err := validateLockChange(e.LockChange); err != nil {
+				return nil, fmt.Errorf("bulk JSON lockChange: %w", err)
+			}
+			items = append(items, bulkItem{
+				spec:       e.LockChange.Ecosystem + ":" + e.LockChange.Name,
+				lockChange: e.LockChange,
+			})
+			continue
+		}
 		if e.Ecosystem == "" || e.Name == "" {
 			return nil, fmt.Errorf("bulk JSON entry needs ecosystem and name: %+v", e)
 		}
@@ -159,9 +172,25 @@ func parseBulkJSON(raw []byte) ([]bulkItem, error) {
 	return items, nil
 }
 
-// parseBulkLines reads either a bump (`<eco>:<name> <from> <to>`) or a new
-// dependency (`<eco>:<name> <version>`, no from) per line. A new dep is
-// census-shaped: there is no prior version to diff, so it carries an empty
+func validateLockChange(change *manifest.LockChange) error {
+	if change == nil {
+		return fmt.Errorf("missing lock change")
+	}
+	if change.Ecosystem == "" || change.Name == "" || change.Version == "" {
+		return fmt.Errorf("needs ecosystem, name and version")
+	}
+	if _, err := spec.Parse(change.Ecosystem + ":" + change.Name); err != nil {
+		return err
+	}
+	if len(change.From) == 0 || len(change.To) == 0 {
+		return fmt.Errorf("needs declared from and to source sets")
+	}
+	return nil
+}
+
+// parseBulkLines reads a bump (`<eco>:<name> <from> <to>`), a new dependency
+// (`<eco>:<name> <version>`), or `lock-change <JSON LockChange>`. A new dep
+// is census-shaped: there is no prior version to diff, so it carries an empty
 // from and runBulk censuses it.
 func parseBulkLines(s string) ([]bulkItem, error) {
 	var items []bulkItem
@@ -175,6 +204,19 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 		if rest, ok := strings.CutPrefix(line, "unresolved\t"); ok {
 			path, reason, _ := strings.Cut(rest, "\t")
 			items = append(items, bulkItem{spec: path, failure: reason})
+			continue
+		}
+		if raw, ok := strings.CutPrefix(line, "lock-change "); ok {
+			var change manifest.LockChange
+			if err := json.Unmarshal([]byte(raw), &change); err != nil {
+				return nil, fmt.Errorf("bulk lock-change: %w", err)
+			}
+			if err := validateLockChange(&change); err != nil {
+				return nil, fmt.Errorf("bulk lock-change: %w", err)
+			}
+			items = append(items, bulkItem{
+				spec: change.Ecosystem + ":" + change.Name, lockChange: &change,
+			})
 			continue
 		}
 		f := strings.Fields(line)
@@ -273,6 +315,12 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool, policy provenancePol
 			// the signal is that a trusted name points off the registry
 			if it.redirect != "" {
 				results[i] = output.BulkResult{Ref: it.spec, Redirect: it.redirect}
+				return
+			}
+			if it.lockChange != nil {
+				results[i] = output.BulkResult{
+					Ref: it.spec + " " + it.lockChange.Version, LockChange: it.lockChange,
+				}
 				return
 			}
 			// no from = a newly-added dependency: census its whole footprint,

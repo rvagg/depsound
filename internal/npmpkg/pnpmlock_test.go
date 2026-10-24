@@ -18,26 +18,46 @@ packages:
     resolution: {integrity: sha512-def}
   react@18.0.0(peer@1.0.0):
     resolution: {integrity: sha512-ghi}
+  real-alias@npm:realpkg@2.0.0:
+    resolution: {integrity: sha512-alias}
   gitdep@1.0.0:
     resolution: {type: git, repo: x}
+  mirror@1.0.0:
+    resolution: {tarball: https://packages.example.test/mirror-1.0.0.tgz, integrity: sha512-mirror}
+  unknown@1.0.0: {}
 `
 	deps, nonReg, err := ParsePnpmLock([]byte(lock))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]string{}
+	byLocation := map[string]LockedDep{}
 	for _, d := range deps {
-		got[d.Name] = d.Version
+		byLocation[d.Source.Location] = d
 	}
-	// scoped name preserved, peer suffix stripped, git dep excluded
-	if got["lodash"] != "4.17.21" || got["@scope/pkg"] != "1.2.3" || got["react"] != "18.0.0" {
-		t.Errorf("deps = %v", got)
+	for location, want := range map[string]struct {
+		name, version, resolved, integrity, host string
+		nonRegistry                              bool
+	}{
+		"lodash@4.17.21":               {"lodash", "4.17.21", "", "sha512-abc", "", false},
+		"@scope/pkg@1.2.3":             {"@scope/pkg", "1.2.3", "", "sha512-def", "", false},
+		"react@18.0.0(peer@1.0.0)":     {"react", "18.0.0", "", "sha512-ghi", "", false},
+		"real-alias@npm:realpkg@2.0.0": {"realpkg", "2.0.0", "", "sha512-alias", "", false},
+		"gitdep@1.0.0":                 {"gitdep", "1.0.0", "", "", "", true},
+		"mirror@1.0.0":                 {"mirror", "1.0.0", "https://packages.example.test/mirror-1.0.0.tgz", "sha512-mirror", "packages.example.test", true},
+		"unknown@1.0.0":                {"unknown", "1.0.0", "", "", "", false},
+	} {
+		got, ok := byLocation[location]
+		if !ok || got.Name != want.name || got.Version != want.version ||
+			got.Source.Resolved != want.resolved || got.Source.Integrity != want.integrity ||
+			got.Source.Host != want.host || got.NonRegistry != want.nonRegistry {
+			t.Errorf("%s = %+v, want %+v", location, got, want)
+		}
 	}
-	if _, ok := got["gitdep"]; ok {
-		t.Error("git dep should be excluded")
+	if len(deps) != 7 {
+		t.Errorf("deps = %+v, want 7", deps)
 	}
-	if nonReg != 1 {
-		t.Errorf("nonRegistry = %d, want 1", nonReg)
+	if nonReg != 2 {
+		t.Errorf("nonRegistry = %d, want 2", nonReg)
 	}
 }
 

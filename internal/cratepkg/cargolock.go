@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 // LockedCrate is one resolved [[package]] entry from a Cargo.lock: the exact
@@ -12,12 +13,10 @@ import (
 // that lives in Cargo.toml), so transitive analysis over a Cargo.lock pair
 // is the whole resolved set changing.
 type LockedCrate struct {
-	Name    string
-	Version string
-	// Registry is true for crates.io-sourced entries. Workspace members
-	// (no source) and git/path deps are not fetchable from the registry, so
-	// they are excluded from the analysable set and counted separately.
+	Name     string
+	Version  string
 	Registry bool
+	Source   manifest.LockSource
 }
 
 type rawLock struct {
@@ -25,6 +24,7 @@ type rawLock struct {
 		Name         string   `toml:"name"`
 		Version      string   `toml:"version"`
 		Source       string   `toml:"source"`
+		Checksum     string   `toml:"checksum"`
 		Dependencies []string `toml:"dependencies"`
 	} `toml:"package"`
 }
@@ -67,21 +67,39 @@ func CargoLockGraph(b []byte) (roots []string, edges map[string][]string, err er
 	return roots, edges, nil
 }
 
-// ParseCargoLock parses Cargo.lock content into its resolved crates. A
-// crate can legitimately appear at more than one version (Cargo permits
-// multiple semver-major versions in one tree), so entries are NOT collapsed
-// by name; the caller diffs the full set.
-func ParseCargoLock(b []byte) (registry []LockedCrate, nonRegistry int, err error) {
+// ParseCargoLock parses Cargo.lock content into its resolved crates. A crate
+// can legitimately appear at more than one version (Cargo permits multiple
+// semver-major versions in one tree), so entries are NOT collapsed by name.
+// Workspace members without a source remain excluded; git and other
+// non-registry sources remain available as declared metadata.
+func ParseCargoLock(b []byte) (crates []LockedCrate, nonRegistry int, err error) {
 	var raw rawLock
 	if _, err := toml.Decode(string(b), &raw); err != nil {
 		return nil, 0, err
 	}
 	for _, p := range raw.Package {
-		if strings.HasPrefix(p.Source, "registry+") {
-			registry = append(registry, LockedCrate{Name: p.Name, Version: p.Version, Registry: true})
-		} else {
-			nonRegistry++ // workspace member, git or path dep: not on the registry
+		if p.Source == "" {
+			nonRegistry++ // workspace member or path dependency: no source witness
+			continue
 		}
+		registry := p.Source == "registry+https://github.com/rust-lang/crates.io-index" ||
+			p.Source == "sparse+https://index.crates.io/"
+		if !registry {
+			nonRegistry++
+		}
+		crates = append(crates, LockedCrate{
+			Name:     p.Name,
+			Version:  p.Version,
+			Registry: registry,
+			Source:   manifest.NewLockSource("", p.Source, p.Checksum),
+		})
 	}
-	return registry, nonRegistry, nil
+	sort.Slice(crates, func(i, j int) bool {
+		a, b := crates[i], crates[j]
+		return a.Name < b.Name ||
+			a.Name == b.Name && (a.Version < b.Version ||
+				a.Version == b.Version && (a.Source.Resolved < b.Source.Resolved ||
+					a.Source.Resolved == b.Source.Resolved && a.Source.Integrity < b.Source.Integrity))
+	})
+	return crates, nonRegistry, nil
 }

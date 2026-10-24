@@ -21,14 +21,25 @@ name = "localdep"
 version = "0.1.0"
 source = "git+https://github.com/x/y"
 `
-	reg, nonReg, err := ParseCargoLock([]byte(lock))
+	crates, nonReg, err := ParseCargoLock([]byte(lock))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// only aho-corasick is registry-sourced; ripgrep (workspace, no source)
-	// and localdep (git) are non-registry and not analysable
-	if len(reg) != 1 || reg[0].Name != "aho-corasick" || reg[0].Version != "1.1.3" {
-		t.Errorf("registry crates = %+v", reg)
+	byName := map[string]LockedCrate{}
+	for _, c := range crates {
+		byName[c.Name] = c
+	}
+	if got := byName["aho-corasick"]; got.Version != "1.1.3" || !got.Registry ||
+		got.Source.Resolved != "registry+https://github.com/rust-lang/crates.io-index" ||
+		got.Source.Integrity != "abc" || got.Source.Host != "github.com" {
+		t.Errorf("registry crate = %+v", got)
+	}
+	if got := byName["localdep"]; got.Version != "0.1.0" || got.Registry ||
+		got.Source.Resolved != "git+https://github.com/x/y" || got.Source.Host != "github.com" {
+		t.Errorf("git crate = %+v", got)
+	}
+	if len(crates) != 2 {
+		t.Errorf("crates = %+v, want 2", crates)
 	}
 	if nonReg != 2 {
 		t.Errorf("non-registry count = %d, want 2", nonReg)
@@ -79,5 +90,26 @@ source = "registry+x"
 	}
 	if got := edges["regex@1.12.4"]; len(got) != 1 || got[0] != "aho-corasick@1.1.3" {
 		t.Errorf("regex edges = %v", got)
+	}
+}
+
+func TestCargoLockRegistryEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		source   string
+		registry bool
+	}{
+		{"registry+https://github.com/rust-lang/crates.io-index", true},
+		{"sparse+https://index.crates.io/", true},
+		{"registry+https://mirror.example/index", false},
+		{"git+https://github.com/rust-lang/crates.io-index", false},
+	} {
+		b := []byte("[[package]]\nname='x'\nversion='1.0.0'\nsource='" + tc.source + "'\n")
+		deps, _, err := ParseCargoLock(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(deps) != 1 || deps[0].Registry != tc.registry || deps[0].Source.Resolved != tc.source {
+			t.Fatalf("wrong registry eligibility for %q: %+v", tc.source, deps)
+		}
 	}
 }

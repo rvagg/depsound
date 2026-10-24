@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 // ModuleRef is a module that entered or left the resolved graph (no diff to
@@ -27,11 +29,12 @@ type ModuleRef struct {
 type TransitiveResult struct {
 	// Ecosystem is where packages are analysed (npm/go/crates); Kind is the
 	// lockfile the user gave (pnpm resolves npm packages, so they differ).
-	Ecosystem string       `json:"ecosystem"`
-	Kind      string       `json:"kind,omitempty"`
-	Changed   []BulkResult `json:"changed"`
-	Added     []ModuleRef  `json:"added"`
-	Removed   []ModuleRef  `json:"removed"`
+	Ecosystem   string                `json:"ecosystem"`
+	Kind        string                `json:"kind,omitempty"`
+	Changed     []BulkResult          `json:"changed"`
+	LockChanges []manifest.LockChange `json:"lockChanges,omitempty"`
+	Added       []ModuleRef           `json:"added"`
+	Removed     []ModuleRef           `json:"removed"`
 	// Projected names the package whose subtree was resolved (deps.dev) rather
 	// than diffed from a lockfile pair: set only in the no-lockfile mode, and
 	// the renderer scopes trust on it.
@@ -76,25 +79,27 @@ func Transitive(t TransitiveResult) string {
 	switch {
 	case t.ProjectionGap != "":
 		w("depsound transitive %s: subtree projection unavailable.", t.label())
+		w("  %d version-change(s), %d source/integrity change(s), %d added, %d removed retained from available evidence.",
+			len(t.Changed), len(t.LockChanges), len(t.Added), len(t.Removed))
 		w("  deps.dev did not supply both endpoint graphs: %s", EscapeText(t.ProjectionGap))
 		w("  the root bump is still analysed below; no transitive additions/removals are claimed.")
-		w("  For the exact subtree, diff a lockfile pair -> depsound guide, \"No lockfile?\".")
 	case t.Projected != "":
-		w("depsound transitive %s: %d version-change(s), %d added, %d removed.",
-			t.label(), len(t.Changed), len(t.Added), len(t.Removed))
+		w("depsound transitive %s: %d version-change(s), %d source/integrity change(s), %d added, %d removed.",
+			t.label(), len(t.Changed), len(t.LockChanges), len(t.Added), len(t.Removed))
 		w("  %s's own tree at each endpoint, resolved live by deps.dev in isolation:", EscapeText(t.Projected))
 		w("  an upper bound on what it adds to you (your tree may already carry some, and")
 		w("  optional/platform-conditional deps are counted whole), and not reproducible")
 		w("  the way a diff is. For your actual tree, generate a lockfile per endpoint")
 		w("  (resolution only, no package code runs) -> depsound guide, \"No lockfile?\".")
 	case t.Flat:
-		w("depsound transitive %s: %d version-change(s), %d added, %d removed.",
-			t.label(), len(t.Changed), len(t.Added), len(t.Removed))
+		w("depsound transitive %s: %d version-change(s), %d source/integrity change(s), %d added, %d removed.",
+			t.label(), len(t.Changed), len(t.LockChanges), len(t.Added), len(t.Removed))
 		w("  This is the whole resolved set the bump moves (from the lockfile).")
 	default:
 		w("depsound transitive %s: %d module version-change(s) (%d direct, %d indirect),",
 			t.label(), len(t.Changed), t.DirectChanged, t.IndirectChanged)
-		w("  %d added, %d removed. This is the whole subtree the bump moves, direct and", len(t.Added), len(t.Removed))
+		w("  %d source/integrity change(s), %d added, %d removed. This is the whole subtree the bump moves, direct and",
+			len(t.LockChanges), len(t.Added), len(t.Removed))
 		w("  indirect (from go.mod incl. // indirect; go.sum is fuller with test-only).")
 	}
 
@@ -124,12 +129,21 @@ func Transitive(t TransitiveResult) string {
 		t.writeGrouped(w, t.Removed, false)
 	}
 
-	if len(t.Changed) == 0 {
+	if len(t.Changed) == 0 && len(t.LockChanges) == 0 {
 		w("")
-		w("no version-changes to analyse (only additions/removals above).")
+		w("no version or source/integrity changes to analyse (only additions/removals above).")
+	}
+	results := make([]BulkResult, 0, len(t.Changed)+len(t.LockChanges))
+	results = append(results, t.Changed...)
+	for i := range t.LockChanges {
+		change := &t.LockChanges[i]
+		results = append(results, BulkResult{
+			Ref:        change.Ecosystem + ":" + change.Name + " " + change.Version,
+			LockChange: change,
+		})
 	}
 	w("")
-	writeRouter(w, t.Changed, true, t.Added)
+	writeRouter(w, results, true, t.Added)
 	return b.String()
 }
 

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -76,5 +77,25 @@ func TestTransitiveAdditionOnlyRetainsAdvisoryAndCoverage(t *testing.T) {
 		if !strings.Contains(out, fact) {
 			t.Errorf("addition-only report lost census evidence or coverage %q:\n%s", fact, out)
 		}
+	}
+}
+
+func TestTransitiveRendersLockChangesOutsideVersionChanges(t *testing.T) {
+	result := TransitiveResult{
+		Ecosystem: "npm", Flat: true,
+		LockChanges: []manifest.LockChange{{
+			Ecosystem: "npm", Name: "mirror", Version: "1.2.3",
+			From: []manifest.LockSource{{Location: "old", Resolved: "https://old.example/pkg.tgz", Host: "old.example", Integrity: "sha512-old"}},
+			To:   []manifest.LockSource{{Location: "new", Resolved: "https://new.example/pkg.tgz", Host: "new.example", Integrity: "sha512-new"}},
+		}},
+	}
+	out := Transitive(result)
+	for _, value := range []string{"0 version-change(s), 1 source/integrity change(s)", "https://old.example/pkg.tgz", "https://new.example/pkg.tgz"} {
+		if !strings.Contains(out, value) {
+			t.Errorf("transitive lock change lost %q:\n%s", value, out)
+		}
+	}
+	if strings.Contains(out, "only additions/removals") {
+		t.Errorf("lock source changes must not be framed as additions/removals only:\n%s", out)
 	}
 }

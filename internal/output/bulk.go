@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/stats"
 )
@@ -15,9 +16,10 @@ import (
 // whole footprint, since there is no prior version to diff): a new dep is
 // unreviewed surface, not a delta, and must never be silently absent.
 type BulkResult struct {
-	Ref    string       `json:"ref"`
-	Stats  *stats.Stats `json:"stats,omitempty"`
-	Census *Census      `json:"census,omitempty"`
+	Ref        string               `json:"ref"`
+	Stats      *stats.Stats         `json:"stats,omitempty"`
+	Census     *Census              `json:"census,omitempty"`
+	LockChange *manifest.LockChange `json:"lockChange,omitempty"`
 	// Redirect names the non-registry source a dependency (Ref) is pointed at
 	// by a replace/patch/override: a fork, git URL, or local path. FACT-grade
 	// and needs no fetch, so it carries no Stats/Census; the trust-laundering
@@ -71,9 +73,9 @@ func Bulk(results []BulkResult) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
-	w("depsound bulk: %d dependencies analysed (cached).", len(results))
+	w("depsound bulk: %d dependency changes considered.", len(results))
 	w("this is a router: a fired signal is a pointer to inspect, not a summary.")
-	w("drill any dep with: depsound <eco>:<name> <from> <to>  (now instant, cached)")
+	w("for version changes: depsound <eco>:<name> <from> <to>  (now instant, cached)")
 	writeRouter(w, results, false, nil)
 	return b.String()
 }
@@ -101,6 +103,7 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeRegistryChecksum}, "registry checksum index observations"},
 	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
+	{[]Code{CodeLockSource}, "lockfile source or integrity changed for an unchanged version"},
 	{[]Code{CodeExecPresent}, "build/install execution surface present, its build code may have changed"},
 	{[]Code{CodeNonRegistryDep}, "declares dependencies served from outside the registry (a trusted name pulling code from elsewhere)"},
 	{[]Code{CodeExecGitOnly}, "hooks that run only for a git/link/file dependency (a registry install does not run them)"},
@@ -163,9 +166,9 @@ func provenanceGapCounts(total, complete int) string {
 }
 
 type routerCoverage struct {
-	reports, artifacts, unavailable int
-	osvRan, osvMissing, osvNA       int
-	provenanceComplete              int
+	reports, artifacts, unavailable, lockChanges int
+	osvRan, osvMissing, osvNA                    int
+	provenanceComplete                           int
 }
 
 func (c *routerCoverage) include(r *BulkResult) {
@@ -181,6 +184,8 @@ func (c *routerCoverage) include(r *BulkResult) {
 			failures = 1
 		}
 		c.report(s.Ecosystem, s.OSVQueried, failures, s.Provenance != nil && s.Provenance.Complete())
+	case r.LockChange != nil:
+		c.lockChanges++
 	case r.Unavailable != nil:
 		c.unavailable++
 	}
@@ -234,6 +239,10 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 			}
 		case r.Redirect != "":
 			redirects = append(redirects, r)
+		case r.LockChange != nil:
+			for _, sig := range DeriveLockChange(r.Ref, r.LockChange).Signals {
+				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
+			}
 		case r.Census != nil:
 			newDeps = append(newDeps, r)
 			for _, sig := range DeriveCensus(r.Ref, r.Census).Signals {
@@ -317,7 +326,9 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 	w("=== coverage: heuristic triage, NOT a verdict ===")
 	switch {
 	case coverage.reports == 0 && coverage.unavailable == 0:
-		if transitive {
+		if coverage.lockChanges > 0 {
+			w("checked: %d lockfile source/integrity declaration(s); no artifacts inspected or advisory scans run.", coverage.lockChanges)
+		} else if transitive {
 			w("checked: dependency graph and name/version changes; no artifacts inspected.")
 		} else {
 			w("checked: routing outcomes only; no artifacts inspected.")
@@ -328,6 +339,9 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 		w("checked: artifact diff/footprint, file classes, manifest compat, execution surface.")
 	default:
 		w("checked: artifact acquisition status only; contents were not inspected.")
+	}
+	if coverage.lockChanges > 0 && coverage.reports > 0 {
+		w("  lockfile source/integrity declarations: %d metadata-only; their package contents were not fetched or advisory-scanned.", coverage.lockChanges)
 	}
 	// OSV status is derived from what actually ran, not asserted flat: a
 	// disabled/failed scan is a gap, an unsupported ecosystem is not.
@@ -369,6 +383,8 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 	} else if coverage.unavailable > 0 {
 		w("next: obtain the exact artifact from a source you trust, such as a registry operator;")
 		w(" for crates, re-run with --from-artifact/--to-artifact or --artifact.")
+	} else if coverage.lockChanges > 0 {
+		w("next: inspect both declared lockfile entries and confirm the intended registry, mirror or local link.")
 	} else {
 		w("next: inspect the dependency declarations and graph changes -> depsound guide")
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/rvagg/depsound/internal/fetch"
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 func TestParseBulkLines(t *testing.T) {
@@ -88,6 +89,41 @@ func TestParseBulkJSON(t *testing.T) {
 	}
 	if _, err := parseBulkJSON([]byte(`[{"ecosystem":"npm","name":"x"}]`)); err == nil {
 		t.Error("incomplete JSON entry should error")
+	}
+}
+
+func TestParseBulkLockChange(t *testing.T) {
+	raw := `{"ecosystem":"npm","name":"mirror","version":"1.2.3","from":[{"location":"old lock","resolved":"https://old.example/pkg.tgz","host":"old.example","integrity":"sha512-old"}],"to":[{"location":"new lock","resolved":"https://new.example/pkg.tgz","host":"new.example","integrity":"sha512-new"}]}`
+	line, err := parseBulkLines("lock-change " + raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonItems, err := parseBulkJSON([]byte(`[{"lockChange":` + raw + `}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(line, jsonItems) {
+		t.Errorf("line and JSON lock changes differ:\nline=%+v\njson=%+v", line, jsonItems)
+	}
+	for _, bad := range []string{
+		`{"ecosystem":"npm","name":"mirror","from":[],"to":[]}`,
+		`{"ecosystem":"npm","name":"mirror","version":"1.2.3","from":[],"to":[{}]}`,
+	} {
+		if _, err := parseBulkLines("lock-change " + bad); err == nil {
+			t.Errorf("invalid lock change accepted: %s", bad)
+		}
+	}
+}
+
+func TestRunBulkLockChangeDoesNotAnalyzeArtifact(t *testing.T) {
+	change := &manifest.LockChange{
+		Ecosystem: "npm", Name: "mirror", Version: "1.2.3",
+		From: []manifest.LockSource{{Resolved: "https://old.example/pkg.tgz"}},
+		To:   []manifest.LockSource{{Resolved: "https://new.example/pkg.tgz"}},
+	}
+	results := runBulk("", []bulkItem{{spec: "npm:mirror", lockChange: change}}, false, provenanceFull, 0)
+	if len(results) != 1 || results[0].LockChange != change || results[0].Stats != nil || results[0].Census != nil {
+		t.Errorf("lock change must remain metadata-only: %+v", results)
 	}
 }
 

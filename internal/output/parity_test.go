@@ -78,6 +78,9 @@ func parityFixture() []BulkResult {
 		{Ref: "npm:flaky 1 -> 2", Unavailable: &Unavailable{Kind: "transient", Status: 503, URL: "https://registry.example/flaky"}},
 		{Ref: "crates:checksum 1 -> 2", Stats: &stats.Stats{Package: stats.PkgRef{Ecosystem: "crates"}, Security: stats.Security{Queried: true},
 			Artifact: stats.Artifact{SourceTo: &stats.Source{RegistryChecksum: &fetch.RegistryChecksum{State: "lookup-failed", URL: "https://index.example/checksum", Error: "unavailable"}}}}},
+		{Ref: "npm:source 1.0.0", LockChange: &manifest.LockChange{Ecosystem: "npm", Name: "source", Version: "1.0.0",
+			From: []manifest.LockSource{{Location: "lock/old", Resolved: "https://old.example/source.tgz", Host: "old.example", Integrity: "sha512-old"}},
+			To:   []manifest.LockSource{{Location: "lock/new", Resolved: "https://new.example/source.tgz", Host: "new.example", Integrity: "sha512-new"}}}},
 	}
 }
 
@@ -102,6 +105,25 @@ func TestSummaryRenderersRetainIndependentAcquisitionEvidence(t *testing.T) {
 			}
 			if strings.Contains(out, "\x1b") {
 				t.Fatalf("platform response injected a terminal control:\n%q", out)
+			}
+		})
+	}
+}
+
+func TestSummaryRenderersEscapeLockSourceEvidence(t *testing.T) {
+	change := &manifest.LockChange{Ecosystem: "npm", Name: "source", Version: "1.0.0",
+		From: []manifest.LockSource{{Location: "old\x1b", Resolved: "https://old.example/<source>", Host: "old.example", Integrity: "sha512-old"}},
+		To:   []manifest.LockSource{{Location: "new", Resolved: "https://new.example/<source>", Host: "new.example", Integrity: "sha512-new"}}}
+	for name, render := range map[string]func([]BulkResult) string{"bulk": Bulk, "markdown": Markdown} {
+		t.Run(name, func(t *testing.T) {
+			out := render([]BulkResult{{Ref: "npm:source 1.0.0", LockChange: change}})
+			for _, value := range []string{"old.example", "new.example", "sha512-old", "sha512-new"} {
+				if !strings.Contains(out, value) {
+					t.Errorf("lost lock source evidence %q:\n%s", value, out)
+				}
+			}
+			if strings.Contains(out, "\x1b") {
+				t.Fatalf("lock source metadata injected a control: %q", out)
 			}
 		})
 	}

@@ -99,6 +99,7 @@ const (
 	CodeRepoMismatch       Code = "provenance.repoMismatch"   // claimed repo != the registry's source repo
 	CodeDeprecated         Code = "maintenance.deprecated"    // current ecosystem metadata marks the version/module deprecated
 	CodeRetracted          Code = "maintenance.retracted"     // current latest go.mod retracts the reviewed version
+	CodeLockSource         Code = "lock.sourceChanged"        // same version resolves from changed declared lockfile metadata
 )
 
 // Signal is one derived finding. Code is stable; wording may change freely.
@@ -797,6 +798,57 @@ func DeriveRedirect(ref, target string) Ledger {
 	return Ledger{Ref: ref, Signals: []Signal{{
 		Code: CodeRedirect, Kind: KindFact, Lens: LensSecurity, Weight: weightLook,
 		Title: "redirected off the registry", Detail: target,
+	}}}
+}
+
+// DeriveLockChange records a declared source or integrity change for a package
+// whose version did not move. It neither fetches nor verifies package bytes.
+func DeriveLockChange(ref string, change *manifest.LockChange) Ledger {
+	evidence := make([]EvidenceField, 0, 4*(max(1, len(change.From))+max(1, len(change.To)))+len(change.Files))
+	for _, file := range change.Files {
+		evidence = append(evidence, EvidenceField{Label: "lockfile", Value: file})
+	}
+	add := func(side string, sources []manifest.LockSource) {
+		if len(sources) == 0 {
+			evidence = append(evidence,
+				EvidenceField{Label: side + " location", Value: "unknown"},
+				EvidenceField{Label: side + " resolved URL", Value: "unknown"},
+				EvidenceField{Label: side + " host", Value: "unknown"},
+				EvidenceField{Label: side + " integrity", Value: "unknown"})
+			return
+		}
+		for _, source := range sources {
+			location, resolved, host, integrity := source.Location, source.Resolved, source.Host, source.Integrity
+			locationLabel := side + " location"
+			if source.Link {
+				locationLabel += " (link)"
+			}
+			if location == "" {
+				location = "unknown"
+			}
+			if resolved == "" {
+				resolved = "unknown"
+			}
+			if host == "" {
+				host = "unknown"
+			}
+			if integrity == "" {
+				integrity = "unknown"
+			}
+			evidence = append(evidence,
+				EvidenceField{Label: locationLabel, Value: location},
+				EvidenceField{Label: side + " resolved URL", Value: resolved},
+				EvidenceField{Label: side + " host", Value: host},
+				EvidenceField{Label: side + " integrity", Value: integrity})
+		}
+	}
+	add("from", change.From)
+	add("to", change.To)
+	return Ledger{Ref: ref, Signals: []Signal{{
+		Code: CodeLockSource, Kind: KindFact, Lens: LensSecurity, Weight: weightLook,
+		Title:    "declared lockfile source or integrity changed; package content was not fetched or scanned",
+		Detail:   "inspect both declarations and confirm the intended registry, mirror or local link",
+		Evidence: evidence,
 	}}}
 }
 

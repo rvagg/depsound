@@ -135,7 +135,7 @@ func resolvePair(ctx context.Context, client *http.Client, sp spec.Spec, fromArg
 func nodesToResolved(nodes []depsdev.Node) []resolvedDep {
 	out := make([]resolvedDep, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, resolvedDep{n.Name, n.Version, n.Relation != "DIRECT"})
+		out = append(out, resolvedDep{name: n.Name, version: n.Version, indirect: n.Relation != "DIRECT"})
 	}
 	return out
 }

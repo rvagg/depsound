@@ -7,10 +7,13 @@ func TestParsePackageLock(t *testing.T) {
 	  "lockfileVersion": 3,
 	  "packages": {
 	    "": {"name": "root", "version": "1.0.0"},
-	    "node_modules/lodash": {"version": "4.17.21", "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"},
-	    "node_modules/a/node_modules/lodash": {"version": "4.17.20", "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"},
+	    "node_modules/lodash": {"version": "4.17.21", "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz", "integrity": "sha512-new"},
+	    "node_modules/a/node_modules/lodash": {"version": "4.17.20", "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz", "integrity": "sha512-old"},
+	    "node_modules/b/node_modules/lodash": {"version": "4.17.21", "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz", "integrity": "sha512-copy"},
 	    "node_modules/myalias": {"name": "realpkg", "version": "2.0.0", "resolved": "https://registry.npmjs.org/realpkg/-/realpkg-2.0.0.tgz"},
 	    "node_modules/gitdep": {"version": "1.0.0", "resolved": "git+https://github.com/x/y.git#abc"},
+	    "node_modules/mirror": {"version": "1.0.0", "resolved": "https://packages.example.test/mirror/-/mirror-1.0.0.tgz", "integrity": "sha512-mirror"},
+	    "node_modules/unknown": {"version": "1.0.0"},
 	    "node_modules/local": {"link": true, "resolved": "packages/local"},
 	    "packages/local": {"version": "0.1.0"}
 	  }
@@ -19,22 +22,38 @@ func TestParsePackageLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byNameVer := map[string]bool{}
+	byLocation := map[string]LockedDep{}
 	for _, d := range deps {
-		byNameVer[d.Name+"@"+d.Version] = true
+		byLocation[d.Source.Location] = d
 	}
-	// two versions of lodash kept (dedup), alias resolves to the real name,
-	// git dep + workspace link/member excluded
-	for _, want := range []string{"lodash@4.17.21", "lodash@4.17.20", "realpkg@2.0.0"} {
-		if !byNameVer[want] {
-			t.Errorf("missing %s in %v", want, byNameVer)
+	for location, want := range map[string]struct {
+		name, version, resolved, integrity, host string
+		nonRegistry                              bool
+	}{
+		"node_modules/lodash":                {"lodash", "4.17.21", "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz", "sha512-new", "registry.npmjs.org", false},
+		"node_modules/a/node_modules/lodash": {"lodash", "4.17.20", "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz", "sha512-old", "registry.npmjs.org", false},
+		"node_modules/b/node_modules/lodash": {"lodash", "4.17.21", "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz", "sha512-copy", "registry.npmjs.org", false},
+		"node_modules/myalias":               {"realpkg", "2.0.0", "https://registry.npmjs.org/realpkg/-/realpkg-2.0.0.tgz", "", "registry.npmjs.org", false},
+		"node_modules/gitdep":                {"gitdep", "1.0.0", "git+https://github.com/x/y.git#abc", "", "github.com", true},
+		"node_modules/mirror":                {"mirror", "1.0.0", "https://packages.example.test/mirror/-/mirror-1.0.0.tgz", "sha512-mirror", "packages.example.test", true},
+		"node_modules/unknown":               {"unknown", "1.0.0", "", "", "", false},
+		"node_modules/local":                 {"local", "0.1.0", "packages/local", "", "", true},
+	} {
+		got, ok := byLocation[location]
+		if !ok || got.Name != want.name || got.Version != want.version ||
+			got.Source.Resolved != want.resolved || got.Source.Integrity != want.integrity ||
+			got.Source.Host != want.host || got.NonRegistry != want.nonRegistry {
+			t.Errorf("%s = %+v, want %+v", location, got, want)
 		}
 	}
-	if len(deps) != 3 {
-		t.Errorf("deps = %+v, want 3 (2 lodash + realpkg)", deps)
+	if got := byLocation["node_modules/local"]; !got.Source.Link {
+		t.Fatalf("link activation metadata lost: %+v", got)
 	}
-	if nonReg != 1 { // the git dep
-		t.Errorf("nonRegistry = %d, want 1", nonReg)
+	if len(deps) != 8 {
+		t.Errorf("deps = %+v, want 8", deps)
+	}
+	if nonReg != 3 {
+		t.Errorf("nonRegistry = %d, want 3", nonReg)
 	}
 }
 

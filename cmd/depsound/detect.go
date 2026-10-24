@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/rvagg/depsound/internal/gopkg"
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 // detectManifests maps a manifest's base name to the KIND it parses as: the
@@ -140,6 +141,13 @@ func detectCmd(args []string) error {
 		for _, r := range res.Redirects {
 			fmt.Printf("redirect %s:%s %s\n", r.Eco, r.Name, r.Target)
 		}
+		for _, c := range res.LockChanges {
+			raw, err := json.Marshal(c)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("lock-change %s\n", raw)
+		}
 		// anything detect saw but could not turn into an analysable change (a
 		// manifest that failed to parse, an unsupported uses: kind) rides the
 		// stream as an `unresolved` line (TAB-delimited: reason is free text),
@@ -193,9 +201,10 @@ type detectRedirect struct {
 }
 
 type detectResult struct {
-	Changed   []detectChange   `json:"changed"`   // bumps (from and to)
-	Added     []detectChange   `json:"added"`     // new deps (census-shaped)
-	Redirects []detectRedirect `json:"redirects"` // non-registry source flags
+	Changed     []detectChange        `json:"changed"`   // bumps (from and to)
+	Added       []detectChange        `json:"added"`     // new deps (census-shaped)
+	Redirects   []detectRedirect      `json:"redirects"` // non-registry source flags
+	LockChanges []manifest.LockChange `json:"lockChanges,omitempty"`
 	// Unresolved are manifests detect was asked to parse but could not (a read
 	// or parse failure), kept separate from the benign Notes (an unwatched base
 	// name) so the caller surfaces a real coverage gap instead of silently
@@ -217,6 +226,7 @@ type detectUnresolved struct {
 func detectChanges(pairs []detectPair) detectResult {
 	var res detectResult
 	changedIdx, addedIdx, redirectIdx := map[string]int{}, map[string]int{}, map[string]int{}
+	sourceIdx := map[string]int{}
 	skipped := map[string]bool{}
 	// kinds present per directory, so a declaration pair defers to a changed
 	// lockfile beside it (the lockfile is exact and transitive; the
@@ -257,6 +267,18 @@ func detectChanges(pairs []detectPair) detectResult {
 			continue
 		}
 		d := diffResolved(oldDeps, newDeps)
+		for _, c := range d.lockChanges {
+			c.Ecosystem = te.analysis
+			raw, _ := json.Marshal(c) // string-only fields and slices
+			key := string(raw)
+			if i, ok := sourceIdx[key]; ok {
+				res.LockChanges[i].Files = appendUnique(res.LockChanges[i].Files, p.path)
+			} else {
+				sourceIdx[key] = len(res.LockChanges)
+				c.Files = []string{p.path}
+				res.LockChanges = append(res.LockChanges, c)
+			}
+		}
 		isDecl := strings.HasSuffix(kind, "-decl") || kind == "pnpm-catalog"
 		for _, c := range d.changed {
 			// a changed docker image or reusable workflow cannot be fetched or
@@ -319,6 +341,25 @@ func detectChanges(pairs []detectPair) detectResult {
 	sortDetect(res.Changed)
 	sortDetect(res.Added)
 	sortRedirects(res.Redirects)
+	for i := range res.LockChanges {
+		sort.Strings(res.LockChanges[i].Files)
+	}
+	sort.Slice(res.LockChanges, func(i, j int) bool {
+		a, b := res.LockChanges[i], res.LockChanges[j]
+		if a.Ecosystem != b.Ecosystem {
+			return a.Ecosystem < b.Ecosystem
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		if a.Version != b.Version {
+			return a.Version < b.Version
+		}
+		if c := compareLockSources(a.From, b.From); c != 0 {
+			return c < 0
+		}
+		return compareLockSources(a.To, b.To) < 0
+	})
 	return res
 }
 

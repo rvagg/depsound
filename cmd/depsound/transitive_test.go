@@ -11,14 +11,14 @@ import (
 
 func TestDiffResolved(t *testing.T) {
 	old := []resolvedDep{
-		{"a", "1.0.0", false},
-		{"b", "1.0.0", true},
-		{"gone", "1.0.0", true},
+		{name: "a", version: "1.0.0"},
+		{name: "b", version: "1.0.0", indirect: true},
+		{name: "gone", version: "1.0.0", indirect: true},
 	}
 	niu := []resolvedDep{
-		{"a", "2.0.0", false}, // changed, direct
-		{"b", "3.0.0", true},  // changed, indirect
-		{"c", "1.0.0", true},  // added
+		{name: "a", version: "2.0.0"},
+		{name: "b", version: "3.0.0", indirect: true},
+		{name: "c", version: "1.0.0", indirect: true},
 	}
 	d := diffResolved(old, niu)
 
@@ -40,15 +40,15 @@ func TestDiffResolved(t *testing.T) {
 // clean bump; extra versions are listed, not force-paired.
 func TestDiffResolvedMultiVersion(t *testing.T) {
 	// dedup collapse: two majors of x present, one drops out -> a removal
-	old := []resolvedDep{{"x", "1.0.0", false}, {"x", "2.0.0", false}}
-	niu := []resolvedDep{{"x", "2.0.0", false}}
+	old := []resolvedDep{{name: "x", version: "1.0.0"}, {name: "x", version: "2.0.0"}}
+	niu := []resolvedDep{{name: "x", version: "2.0.0"}}
 	d := diffResolved(old, niu)
 	if len(d.changed) != 0 || len(d.removed) != 1 || d.removed[0].From != "1.0.0" {
 		t.Errorf("dedup collapse: changed=%+v removed=%+v", d.changed, d.removed)
 	}
 
 	// clean single bump still pairs
-	d = diffResolved([]resolvedDep{{"y", "1.0.0", false}}, []resolvedDep{{"y", "1.1.0", false}})
+	d = diffResolved([]resolvedDep{{name: "y", version: "1.0.0"}}, []resolvedDep{{name: "y", version: "1.1.0"}})
 	if len(d.changed) != 1 || d.changed[0].To != "1.1.0" {
 		t.Errorf("single bump not paired: %+v", d.changed)
 	}

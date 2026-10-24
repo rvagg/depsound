@@ -83,6 +83,11 @@ next steps:
 
 Ecosystems: `npm`, `go`, `crates`, `gha`. `--format=json` emits the full machine contract for any command.
 
+Lockfile reviews also catch changed download URLs, checksums and versioned npm
+links when the package version stays fixed (npm, pnpm and Cargo). These are
+declarations, not verified bytes: depsound does not fetch replacement URLs or
+open link targets. A mirror can be intentional; inspect both entries.
+
 ## Using it with an agent
 
 - **Cold, no setup.** Tell an agent: *"Using the depsound CLI, evaluate this dependency change: foojs 1.2.3 to 2.0.0."* It's self-documenting: `depsound help` lists the commands, `depsound guide` gives the threat model and how to read the output, and every report routes to the next command. An agent can drive it with no further instruction; it figures out the ecosystem and syntax itself.

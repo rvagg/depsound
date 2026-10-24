@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 // LockedDep is one resolved entry from a package-lock.json `packages` map:
@@ -12,24 +14,27 @@ import (
 // dedup keeps copies at different node_modules paths), so entries are not
 // collapsed by name; the caller diffs the full set.
 type LockedDep struct {
-	Name    string
-	Version string
-	Dev     bool
+	Name        string
+	Version     string
+	Dev         bool
+	NonRegistry bool
+	Source      manifest.LockSource
 }
 
 // ParsePackageLock parses package-lock.json v2/v3 (npm 7+): the flat
 // `packages` map keyed by node_modules path. v1 (npm 5-6, nested
-// `dependencies` only) is intentionally unsupported, that user is not this
-// tool's audience. Registry deps only; workspace members/links and git/url
-// deps (not fetchable by a registry version) are excluded and counted.
+// `dependencies` only) is intentionally unsupported. Workspace members and
+// entries without a known version remain excluded. Links can obtain their
+// version from the target's entry; off-registry entries remain marked.
 func ParsePackageLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 	var lock struct {
 		Packages map[string]struct {
-			Name     string `json:"name"` // set only for npm aliases
-			Version  string `json:"version"`
-			Resolved string `json:"resolved"`
-			Link     bool   `json:"link"`
-			Dev      bool   `json:"dev"`
+			Name      string `json:"name"` // set only for npm aliases
+			Version   string `json:"version"`
+			Resolved  string `json:"resolved"`
+			Integrity string `json:"integrity"`
+			Link      bool   `json:"link"`
+			Dev       bool   `json:"dev"`
 		} `json:"packages"`
 	}
 	if err := json.Unmarshal(b, &lock); err != nil {
@@ -41,22 +46,43 @@ func ParsePackageLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 	const nm = "node_modules/"
 	for path, e := range lock.Packages {
 		idx := strings.LastIndex(path, nm)
-		if idx < 0 || e.Link || e.Version == "" {
-			continue // root, a workspace member/link, or no pinned version
+		if idx < 0 {
+			continue // root or workspace member
 		}
-		// a resolved URL that is not a registry tarball is a git/url/tarball
-		// dep, not fetchable by a registry version; an empty resolved is a
-		// bundled/edge entry we keep
-		if e.Resolved != "" && !strings.Contains(e.Resolved, "registry") {
-			nonRegistry++
-			continue
+		if e.Link && e.Version == "" {
+			target := lock.Packages[e.Resolved]
+			e.Version = target.Version
+			if e.Name == "" {
+				e.Name = target.Name
+			}
+		}
+		if e.Version == "" {
+			continue // no declared version, including an unresolved link target
 		}
 		name := e.Name // the real package for an aliased install
 		if name == "" {
 			name = path[idx+len(nm):]
 		}
-		deps = append(deps, LockedDep{Name: name, Version: e.Version, Dev: e.Dev})
+		source := manifest.NewLockSource(path, e.Resolved, e.Integrity)
+		source.Link = e.Link
+		nonRegistryEntry := e.Link || e.Resolved != "" && source.Host != "registry.npmjs.org"
+		if nonRegistryEntry {
+			nonRegistry++
+		}
+		deps = append(deps, LockedDep{
+			Name:        name,
+			Version:     e.Version,
+			Dev:         e.Dev,
+			NonRegistry: nonRegistryEntry,
+			Source:      source,
+		})
 	}
+	sort.Slice(deps, func(i, j int) bool {
+		a, b := deps[i], deps[j]
+		return a.Name < b.Name ||
+			a.Name == b.Name && (a.Version < b.Version ||
+				a.Version == b.Version && a.Source.Location < b.Source.Location)
+	})
 	return deps, nonRegistry, nil
 }
 

@@ -17,6 +17,7 @@ const (
 	rowStats rowKind = iota
 	rowCensus
 	rowRedirect
+	rowLockChange
 	rowFailed
 )
 
@@ -72,9 +73,9 @@ func (r ledgerRow) bullet() string {
 		return fmt.Sprintf("- **%s** could not be analysed: %s", refArrow(r.ref), mdTaint(detail))
 	case rowCensus:
 		return fmt.Sprintf("- **new dependency %s**: %s", refArrow(r.ref), r.phrases())
+	case rowLockChange:
+		return fmt.Sprintf("- **%s**: %s", refArrow(r.ref), r.phrases())
 	default:
-		// a row whose signals are all calm context still has room for what the
-		// change is; a row carrying something to weigh gets to keep the floor
 		phrases := r.phrases()
 		if r.tier() == 0 {
 			if d := digestLine(r.s); d != "" {
@@ -171,6 +172,8 @@ func ledgerRows(results []BulkResult) []ledgerRow {
 			rows = append(rows, ledgerRow{l: DeriveUnavailable(r.Ref, r.Unavailable), ref: r.Ref, kind: rowStats})
 		case r.Redirect != "":
 			rows = append(rows, ledgerRow{l: DeriveRedirect(r.Ref, r.Redirect), ref: r.Ref, kind: rowRedirect})
+		case r.LockChange != nil:
+			rows = append(rows, ledgerRow{l: DeriveLockChange(r.Ref, r.LockChange), ref: r.Ref, kind: rowLockChange})
 		case r.Note != "":
 			rows = append(rows, ledgerRow{l: DeriveBenign(r.Ref, r.Note), ref: r.Ref, kind: rowStats})
 		case r.Census != nil:
@@ -251,9 +254,11 @@ const maxDigestRows = 10
 // out of the rows. It is scoped by what is actually in the set, so a GitHub
 // Actions PR is not told about import reachability.
 func coverageLine(results []BulkResult, rows []ledgerRow) string {
-	gha, pkg, artifact, unavailable := false, false, false, false
+	gha, pkg, artifact, unavailable, lockMetadata := false, false, false, false, false
 	for _, r := range results {
 		switch {
+		case r.LockChange != nil:
+			lockMetadata = true
 		case r.Stats != nil:
 			if r.Stats.Package.Ecosystem == "gha" {
 				gha = true
@@ -281,6 +286,10 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 	}
 	var checked []string
 	notChecked := []string{"runtime behaviour", "intent (an obfuscated payload reads as ordinary code)"}
+	if lockMetadata {
+		checked = append(checked, "declared lockfile source/integrity metadata")
+		notChecked = append(notChecked, "package content, artifact integrity verification and advisory scanning for metadata-only rows")
+	}
 	if artifact {
 		checked = append(checked, "the published artifact diff")
 	}
@@ -301,6 +310,9 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 	}
 	var out strings.Builder
 	fmt.Fprintf(&out, "Checked: %s. Not checked: %s.", strings.Join(checked, ", "), strings.Join(notChecked, ", "))
+	if lockMetadata {
+		out.WriteString(" Next: inspect both declared lockfile entries and confirm the intended registry, mirror or local link.")
+	}
 	// the hoisted coverage notes, once each, with the count they apply to
 	byCode := map[Code]int{}
 	var order []Code

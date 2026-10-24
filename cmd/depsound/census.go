@@ -215,6 +215,9 @@ func parseAgainstTree(eco, src string) (map[string]map[string]bool, error) {
 	}
 	set := map[string]map[string]bool{}
 	for _, d := range deps {
+		if d.sourceOnly {
+			continue
+		}
 		if set[d.name] == nil {
 			set[d.name] = map[string]bool{}
 		}

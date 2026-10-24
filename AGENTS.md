@@ -172,6 +172,13 @@ not in the routing table: it is the Action's entry point and takes tab
 separated `<path> <old-source> <new-source>` triples, with `-` for an absent
 side.
 
+npm, pnpm and Cargo.lock pairs retain source and integrity changes even when
+the name and version are unchanged, including duplicate installations and
+versioned npm links (the version may come from the target's lockfile entry). Unknown
+fields stay unknown. These are declared lockfile facts: replacement URLs are
+never fetched, and metadata-only rows do not claim content or advisory scans.
+`detect` carries them losslessly into `bulk` and retained JSON.
+
 ## Invariants the code enforces
 
 - **Registry artifacts are ground truth.** Diff what installs, not the source
@@ -390,10 +397,6 @@ healthy and well tested; value comes from adding hard facts the agent cannot
 cheaply get itself, with scoped honesty, never from adding judgement. Good
 work, roughly in order of value:
 
-- **Same-version lockfile source and integrity changes.** When a lockfile
-  entry keeps its name and version but its `resolved` URL, host or integrity
-  changes, preserve old and new as facts. Off-registry may be an intentional
-  mirror; report the change, not a verdict.
 - **Scoped payload and hook summaries, then editor and agent configuration
   metadata.** Name the unchanged payload scope and the changed hook or
   script files without claiming complete execution closure. Inventory

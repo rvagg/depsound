@@ -147,6 +147,10 @@ Resolves the whole subtree a bump drags in by diffing two resolved lockfiles:
 Changed deps run through the bulk router; added are listed (new code, census
 each); removed are noted. A name carrying multiple versions (Cargo/npm dedup)
 is handled by pairing a lone removed+added as a bump.
+For npm, pnpm and Cargo.lock, source/integrity changes at the same version are
+reported separately. Old/new URLs, hosts, integrity, link markers and entry locations
+remain visible; absent fields stay unknown. These are lockfile declarations, not byte
+verification or advisory scans. Replacement URLs are never fetched.
 
 No lockfile committed? Two routes, both real:
   projected  depsound transitive npm:<name> <from> <to>   (npm/crates)

@@ -47,6 +47,30 @@ func TestLedgerVerdict(t *testing.T) {
 	}
 }
 
+func TestDeriveLockChangeKeepsDeclaredMetadataSeparate(t *testing.T) {
+	change := &manifest.LockChange{
+		Ecosystem: "npm", Name: "mirror", Version: "1.2.3",
+		From: []manifest.LockSource{{Location: "packages/a", Resolved: "https://old.example/mirror.tgz", Host: "old.example", Integrity: "sha512-old"}},
+		To:   []manifest.LockSource{{Location: "packages/b", Resolved: "https://new.example/mirror.tgz", Host: "new.example", Integrity: "sha512-new"}},
+	}
+	l := DeriveLockChange("npm:mirror 1.2.3", change)
+	if len(l.Signals) != 1 || l.Signals[0].Code != CodeLockSource || l.Signals[0].Weight != weightLook {
+		t.Fatalf("unexpected lock source ledger: %+v", l)
+	}
+	if Assess(l).Tier != weightLook {
+		t.Errorf("lock source change must be visible in the headline: %+v", Assess(l))
+	}
+	for _, want := range []string{"old.example", "new.example", "sha512-old", "sha512-new"} {
+		found := false
+		for _, field := range l.Signals[0].Evidence {
+			found = found || field.Value == want
+		}
+		if !found {
+			t.Errorf("declared metadata missing %q: %+v", want, l.Signals[0].Evidence)
+		}
+	}
+}
+
 // TestLedgerDeterministicOrder: signals sort by weight desc then code, so every
 // renderer inherits identical order regardless of derivation sequence.
 func TestLedgerDeterministicOrder(t *testing.T) {

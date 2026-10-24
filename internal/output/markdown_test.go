@@ -104,6 +104,23 @@ func TestMarkdownHeadlineTiers(t *testing.T) {
 	}
 }
 
+func TestMarkdownEscapesLockSourceEvidence(t *testing.T) {
+	change := &manifest.LockChange{
+		Ecosystem: "npm", Name: "mirror", Version: "1.2.3",
+		From: []manifest.LockSource{{Location: "lock/\x1bfrom", Resolved: "https://old.example/<tag>", Host: "old.example", Integrity: "sha512-old"}},
+		To:   []manifest.LockSource{{Location: "lock/to", Resolved: "https://new.example/<tag>", Host: "new.example", Integrity: "sha512-new"}},
+	}
+	out := Markdown([]BulkResult{{Ref: "npm:mirror 1.2.3", LockChange: change}})
+	for _, value := range []string{"old.example", "new.example", "sha512-old", "sha512-new", "declared lockfile source/integrity metadata"} {
+		if !strings.Contains(out, value) {
+			t.Errorf("lock source markdown lost %q:\n%s", value, out)
+		}
+	}
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "<tag>") {
+		t.Errorf("tainted source metadata escaped its Markdown boundary:\n%q", out)
+	}
+}
+
 // A large generated/bundled delta (the npm dist/ case) is review-worthy but
 // must NOT dominate the headline the way an introduced CVE does.
 func TestMarkdownGeneratedDeltaWeighs(t *testing.T) {

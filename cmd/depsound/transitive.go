@@ -15,6 +15,7 @@ import (
 	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/ghapkg"
 	"github.com/rvagg/depsound/internal/gopkg"
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/output"
 )
@@ -105,6 +106,9 @@ func transitiveCmd(args []string) error {
 	}
 
 	res := diffResolved(oldDeps, newDeps)
+	for i := range res.lockChanges {
+		res.lockChanges[i].Ecosystem = te.analysis
+	}
 	var items []bulkItem
 	for _, c := range res.changed {
 		items = append(items, bulkItem{spec: te.analysis + ":" + c.Path, from: c.From, to: c.To})
@@ -120,6 +124,7 @@ func transitiveCmd(args []string) error {
 		Removed:         res.removed,
 		DirectChanged:   res.directChanged,
 		IndirectChanged: res.indirectChanged,
+		LockChanges:     res.lockChanges,
 	}
 	analyseAdded(cacheDir, te.analysis, tr.Added, noOSV)
 	// the changed subtree with its causality, from the lockfiles that carry
@@ -243,6 +248,8 @@ func siblingLockKinds(src, kind string) []string {
 type resolvedDep struct {
 	name, version string
 	indirect      bool
+	source        *manifest.LockSource
+	sourceOnly    bool
 }
 
 // resolveLock reads a lockfile source and parses it into the resolved set,
@@ -260,7 +267,7 @@ func resolveLock(kind, src, lockName string) ([]resolvedDep, error) {
 		}
 		var out []resolvedDep
 		for _, r := range gopkg.RequireSet(m) {
-			out = append(out, resolvedDep{r.Path, r.Version, r.Indirect})
+			out = append(out, resolvedDep{name: r.Path, version: r.Version, indirect: r.Indirect})
 		}
 		return out, nil
 	case "crates":
@@ -321,7 +328,7 @@ func resolveLock(kind, src, lockName string) ([]resolvedDep, error) {
 				if ref == "" {
 					ref = "?" // untagged docker image: implicit latest
 				}
-				out = append(out, resolvedDep{u.Identity, ref, false})
+				out = append(out, resolvedDep{name: u.Identity, version: ref})
 			}
 		}
 		return out, nil
@@ -354,23 +361,25 @@ func declToResolved(tables ...map[string]string) []resolvedDep {
 	}
 	out := make([]resolvedDep, 0, len(merged))
 	for name, rng := range merged {
-		out = append(out, resolvedDep{name, rng, false})
+		out = append(out, resolvedDep{name: name, version: rng})
 	}
 	return out
 }
 
 func lockedToResolved(crates []cratepkg.LockedCrate) []resolvedDep {
 	out := make([]resolvedDep, 0, len(crates))
-	for _, c := range crates {
-		out = append(out, resolvedDep{c.Name, c.Version, false})
+	for i := range crates {
+		c := &crates[i]
+		out = append(out, resolvedDep{name: c.Name, version: c.Version, source: &c.Source, sourceOnly: !c.Registry})
 	}
 	return out
 }
 
 func npmLockedToResolved(deps []npmpkg.LockedDep) []resolvedDep {
 	out := make([]resolvedDep, 0, len(deps))
-	for _, d := range deps {
-		out = append(out, resolvedDep{d.Name, d.Version, false})
+	for i := range deps {
+		d := &deps[i]
+		out = append(out, resolvedDep{name: d.Name, version: d.Version, source: &d.Source, sourceOnly: d.NonRegistry})
 	}
 	return out
 }
@@ -379,6 +388,7 @@ type requireSetDiff struct {
 	changed                        []output.ModuleRef
 	added, removed                 []output.ModuleRef
 	directChanged, indirectChanged int
+	lockChanges                    []manifest.LockChange
 }
 
 // diffResolved computes the module-level change set between two resolved
@@ -387,6 +397,13 @@ type requireSetDiff struct {
 // otherwise the extra versions are listed as added/removed. Deterministic.
 func diffResolved(old, niu []resolvedDep) requireSetDiff {
 	oldV, newV := versionsByName(old), versionsByName(niu)
+	d := requireSetDiff{lockChanges: diffLockSources(old, niu)}
+	// A retained source change is not a package removal or addition merely
+	// because one endpoint no longer points at the canonical registry.
+	for _, c := range d.lockChanges {
+		delete(oldV[c.Name], c.Version)
+		delete(newV[c.Name], c.Version)
+	}
 	names := map[string]bool{}
 	for n := range oldV {
 		names[n] = true
@@ -400,7 +417,6 @@ func diffResolved(old, niu []resolvedDep) requireSetDiff {
 	}
 	sort.Strings(sortedNames)
 
-	var d requireSetDiff
 	for _, name := range sortedNames {
 		added := missing(newV[name], oldV[name]) // versions in new, not old
 		removed := missing(oldV[name], newV[name])
@@ -430,6 +446,9 @@ func diffResolved(old, niu []resolvedDep) requireSetDiff {
 func versionsByName(deps []resolvedDep) map[string]map[string]resolvedDep {
 	out := map[string]map[string]resolvedDep{}
 	for _, d := range deps {
+		if d.sourceOnly {
+			continue
+		}
 		if out[d.name] == nil {
 			out[d.name] = map[string]resolvedDep{}
 		}
