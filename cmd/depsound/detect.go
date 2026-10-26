@@ -269,18 +269,15 @@ func detectChanges(pairs []detectPair) detectResult {
 		d := diffResolved(oldDeps, newDeps)
 		for _, c := range d.lockChanges {
 			c.Ecosystem = te.analysis
-			raw, _ := json.Marshal(c) // string-only fields and slices
-			key := string(raw)
-			if i, ok := sourceIdx[key]; ok {
-				res.LockChanges[i].Files = appendUnique(res.LockChanges[i].Files, p.path)
-			} else {
-				sourceIdx[key] = len(res.LockChanges)
-				c.Files = []string{p.path}
-				res.LockChanges = append(res.LockChanges, c)
-			}
+			mergeLockChange(&res.LockChanges, sourceIdx, c, p.path)
 		}
 		isDecl := strings.HasSuffix(kind, "-decl") || kind == "pnpm-catalog"
 		for _, c := range d.changed {
+			if c.Declared != nil {
+				c.Declared.Ecosystem = te.analysis
+				mergeLockChange(&res.LockChanges, sourceIdx, *c.Declared, p.path)
+				continue
+			}
 			// a changed docker image or reusable workflow cannot be fetched or
 			// analysed; it rides the unresolved stream so the change is a loud
 			// coverage gap in the report, never a silent drop
@@ -292,23 +289,28 @@ func detectChanges(pairs []detectPair) detectResult {
 				}
 			}
 			if isDecl {
-				// a declaration value pointing off the registry (git/url/path/
-				// alias) is the trust-laundering shape, route it as a redirect;
-				// a compound range has no single endpoint to review, so it
-				// rides the unresolved stream rather than vanishing
+				// A declaration value pointing off the registry (git/url/path/
+				// alias) is the trust-laundering shape, so route it as a
+				// redirect. A compound range does not identify one endpoint to
+				// review, so report it as unresolved.
 				if tgt := declNonRegistry(te.analysis, c.To); tgt != "" {
 					mergeRedirect(&res.Redirects, redirectIdx, te.analysis, detectRedirect{Name: c.Path, Target: tgt}, p.path)
 					continue
 				}
 				if hasSpace(c.From) || hasSpace(c.To) {
 					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
-						fmt.Sprintf("declaration range for %s (%q -> %q) has no single resolvable endpoint; review the manifest diff", c.Path, c.From, c.To)})
+						fmt.Sprintf("declaration range for %s (%q -> %q) does not identify one concrete endpoint; review the manifest diff", c.Path, c.From, c.To)})
 					continue
 				}
 			}
 			mergeDetect(&res.Changed, changedIdx, te.analysis, c.Path, c.From, c.To, c.Indirect, p.path)
 		}
 		for _, c := range d.added {
+			if c.Declared != nil {
+				c.Declared.Ecosystem = te.analysis
+				mergeLockChange(&res.LockChanges, sourceIdx, *c.Declared, p.path)
+				continue
+			}
 			if kind == "gha" {
 				if k := ghaUnsupportedKind(c.Path); k != "" {
 					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
@@ -323,7 +325,7 @@ func detectChanges(pairs []detectPair) detectResult {
 				}
 				if hasSpace(c.To) {
 					res.Unresolved = append(res.Unresolved, detectUnresolved{p.path,
-						fmt.Sprintf("declaration range for added dep %s (%q) has no single resolvable endpoint; review the manifest diff", c.Path, c.To)})
+						fmt.Sprintf("declaration range for added dep %s (%q) does not identify one concrete endpoint; review the manifest diff", c.Path, c.To)})
 					continue
 				}
 			}
@@ -355,12 +357,30 @@ func detectChanges(pairs []detectPair) detectResult {
 		if a.Version != b.Version {
 			return a.Version < b.Version
 		}
+		if a.FromVersion != b.FromVersion {
+			return a.FromVersion < b.FromVersion
+		}
+		if a.ToVersion != b.ToVersion {
+			return a.ToVersion < b.ToVersion
+		}
 		if c := compareLockSources(a.From, b.From); c != 0 {
 			return c < 0
 		}
 		return compareLockSources(a.To, b.To) < 0
 	})
 	return res
+}
+
+func mergeLockChange(dst *[]manifest.LockChange, index map[string]int, c manifest.LockChange, file string) {
+	raw, _ := json.Marshal(c)
+	key := string(raw)
+	if i, ok := index[key]; ok {
+		(*dst)[i].Files = appendUnique((*dst)[i].Files, file)
+		return
+	}
+	index[key] = len(*dst)
+	c.Files = []string{file}
+	*dst = append(*dst, c)
 }
 
 // declSuperseded names the lockfile kind that trumps a declaration kind when
@@ -400,8 +420,8 @@ func hasSpace(s string) bool { return strings.ContainsAny(s, " \t") }
 // goRedirectDelta returns the replace directives added or retargeted between
 // two go.mod versions. In the main module (a consumer's own go.mod, what
 // detect inspects) a replace is live, so a new or changed one redirects that
-// module off the registry. Keyed by the replaced module path; a parse failure
-// yields nothing here (the version pass already notes it).
+// module off the registry. Keyed by the replaced module path. goReplaces returns
+// an empty map for a manifest that failed parsing; the version pass reports it.
 func goRedirectDelta(oldSrc, newSrc string) []detectRedirect {
 	oldR, newR := goReplaces(oldSrc), goReplaces(newSrc)
 	keys := make([]string, 0, len(newR))
@@ -445,7 +465,7 @@ func mergeRedirect(dst *[]detectRedirect, idx map[string]int, eco string, rd det
 		return
 	}
 	idx[key] = len(*dst)
-	*dst = append(*dst, detectRedirect{Eco: eco, Name: rd.Name, Target: rd.Target, Files: []string{file}})
+	*dst = append(*dst, detectRedirect{Eco: eco, Name: rd.Name, Target: manifest.PublicLocator(rd.Target), Files: []string{file}})
 }
 
 func sortRedirects(rs []detectRedirect) {
@@ -463,9 +483,9 @@ func sortRedirects(rs []detectRedirect) {
 	})
 }
 
-// resolveManifest reads and parses one side of a pair. An absent side ("-" or
-// empty) is the empty set, so an added manifest yields all-added and a removed
-// one yields all-removed (then dropped) with no special-casing upstream.
+// resolveManifest parses one side of a pair. An absent side ("-" or empty)
+// returns an empty set. Added manifests are compared against that set, and
+// the caller discards dependencies from removed manifests.
 func resolveManifest(kind, src, lockName string) ([]resolvedDep, error) {
 	if src == "" || src == "-" {
 		return nil, nil

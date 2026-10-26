@@ -272,9 +272,8 @@ func specFlag(spec string) string {
 	return ""
 }
 
-// githubShorthand matches npm's bare owner/repo[#committish] form, which is a
-// git dependency with nothing in the string to announce it. Deliberately
-// strict: a semver range carries no slash, so the shape alone is the evidence.
+// githubShorthand recognises npm's owner/repo[#committish] git syntax.
+// Validate both components to avoid matching dependency ranges.
 func githubShorthand(spec string) bool {
 	owner, rest, ok := strings.Cut(spec, "/")
 	if !ok || owner == "" || rest == "" {

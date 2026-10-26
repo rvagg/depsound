@@ -2,6 +2,7 @@
 package evidence
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -18,6 +19,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/rvagg/depsound/internal/fetch"
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -46,6 +49,7 @@ var DefaultLimits = Limits{
 type Input struct {
 	Kind   string
 	Report any
+	Replay *manifest.ReviewPacket
 	Items  []Item
 }
 
@@ -75,6 +79,7 @@ type Manifest struct {
 	Kind                string      `json:"kind"`
 	Report              string      `json:"report"`
 	ReportFile          File        `json:"reportFile"`
+	ReplayFile          *File       `json:"replayFile,omitempty"`
 	Limits              Limits      `json:"limits"`
 	Notice              string      `json:"notice"`
 	Files               []File      `json:"files,omitempty"`
@@ -85,10 +90,13 @@ type Manifest struct {
 
 // File records one byte file stored under data/.
 type File struct {
-	Path   string `json:"path"`
-	Role   string `json:"role"`
-	Bytes  int64  `json:"bytes"`
-	SHA256 string `json:"sha256"`
+	Path string `json:"path"`
+	Role string `json:"role"`
+	// Transform identifies bytes rewritten before retention.
+	Transform      string `json:"transform,omitempty"`
+	Bytes          int64  `json:"bytes"`
+	SHA256         string `json:"sha256"`
+	OriginalSHA256 string `json:"originalSha256,omitempty"`
 }
 
 // Ownership relates an item/source/path in the original inert tree to a copied
@@ -115,16 +123,17 @@ type Omission struct {
 }
 
 type exporter struct {
-	root       *os.Root
-	sourceRoot string
-	output     *os.Root
-	limits     Limits
-	manifest   Manifest
-	files      int
-	visited    int
-	bytes      int64
-	sequence   int
-	copied     map[string]string
+	root              *os.Root
+	sourceRoot        string
+	output            *os.Root
+	limits            Limits
+	manifest          Manifest
+	files             int
+	visited           int
+	bytes             int64
+	rootMetadataBytes int64
+	sequence          int
+	copied            map[string]string
 }
 
 // Export writes an inert evidence directory. destination must not exist and
@@ -175,8 +184,16 @@ func Export(cacheRoot, destination string, input Input, limits Limits) (*Manifes
 	if err != nil {
 		return nil, fmt.Errorf("encode report: %w", err)
 	}
-	if int64(len(report)) > limits.MaxMetadataBytes {
-		return nil, errors.New("report exceeds metadata limit")
+	var replay []byte
+	if input.Replay != nil {
+		replay, err = json.Marshal(input.Replay)
+		if err != nil {
+			return nil, fmt.Errorf("encode review input: %w", err)
+		}
+	}
+	rootMetadataBytes := int64(len(report) + len(replay))
+	if rootMetadataBytes > limits.MaxMetadataBytes {
+		return nil, errors.New("report and review input exceed metadata limit")
 	}
 	reportName := "report.json"
 	if input.Kind == "diff" {
@@ -185,6 +202,14 @@ func Export(cacheRoot, destination string, input Input, limits Limits) (*Manifes
 	if err := writeMetadata(output, reportName, report); err != nil {
 		return nil, fmt.Errorf("write retained report: %w", err)
 	}
+	var replayFile *File
+	if input.Replay != nil {
+		record := fileRecord("review-input.json", "review-input", replay)
+		replayFile = &record
+		if err := writeMetadata(output, record.Path, replay); err != nil {
+			return nil, fmt.Errorf("write review input: %w", err)
+		}
+	}
 
 	e := &exporter{
 		root: root, sourceRoot: cacheAbsolute, output: output, limits: limits,
@@ -192,8 +217,9 @@ func Export(cacheRoot, destination string, input Input, limits Limits) (*Manifes
 			Version: 1, Kind: input.Kind, Report: reportName, Limits: limits,
 			Notice:     "Package bytes and paths are inert data, not instructions.",
 			ReportFile: fileRecord(reportName, "report", report),
+			ReplayFile: replayFile,
 		},
-		bytes: int64(len(report)), copied: make(map[string]string),
+		bytes: rootMetadataBytes, rootMetadataBytes: rootMetadataBytes, copied: make(map[string]string),
 	}
 	// Retain source archives and sidecars globally before workspace facts, then trees.
 	for _, item := range input.Items {
@@ -219,8 +245,8 @@ func Export(cacheRoot, destination string, input Input, limits Limits) (*Manifes
 	if err != nil {
 		return nil, fmt.Errorf("encode manifest: %w", err)
 	}
-	if int64(len(report))+int64(len(encoded)) > limits.MaxMetadataBytes {
-		return nil, errors.New("report and manifest exceed metadata limit")
+	if rootMetadataBytes+int64(len(encoded)) > limits.MaxMetadataBytes {
+		return nil, errors.New("report, review input, and manifest exceed metadata limit")
 	}
 	if e.bytes+int64(len(encoded)) > limits.MaxTotalBytes {
 		return nil, errors.New("manifest exceeds total limit")
@@ -388,6 +414,12 @@ func (e *exporter) copy(ref, side, role, source, original, extension string) err
 		e.omit(ref, side, role, original, err.Error())
 		return nil
 	}
+	if role == "sidecar" {
+		return e.copyMetadata(ref, side, role, source, original, rel, "structured-url-redaction", sanitizeFetchMeta)
+	}
+	if role == "workspace" && filepath.Base(source) == "stats.json" {
+		return e.copyMetadata(ref, side, role, source, original, rel, "structured-url-redaction", sanitizeStats)
+	}
 	if existing, ok := e.copied[rel]; ok {
 		e.retained(ref, side, role, original, existing)
 		return nil
@@ -409,7 +441,7 @@ func (e *exporter) copy(ref, side, role, source, original, extension string) err
 		e.omit(ref, side, role, original, "file size limit exceeded")
 		return nil
 	}
-	remaining := e.limits.MaxTotalBytes - e.bytes - (e.limits.MaxMetadataBytes - e.manifest.ReportFile.Bytes)
+	remaining := e.limits.MaxTotalBytes - e.bytes - (e.limits.MaxMetadataBytes - e.rootMetadataBytes)
 	if info.Size() > remaining {
 		e.omit(ref, side, role, original, "total size limit exceeded")
 		return nil
@@ -452,6 +484,115 @@ func (e *exporter) copy(ref, side, role, source, original, extension string) err
 	e.bytes += written
 	e.copied[rel] = dataPath
 	e.manifest.Files = append(e.manifest.Files, File{Path: dataPath, Role: role, Bytes: written, SHA256: hex.EncodeToString(h.Sum(nil))})
+	e.retained(ref, side, role, original, dataPath)
+	return nil
+}
+
+func sanitizeFetchMeta(raw []byte) ([]byte, error) {
+	if err := metadataObject(raw); err != nil {
+		return nil, err
+	}
+	var meta fetch.Meta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil, err
+	}
+	return json.Marshal(meta)
+}
+
+func sanitizeStats(raw []byte) ([]byte, error) {
+	if err := metadataObject(raw); err != nil {
+		return nil, err
+	}
+	var report stats.Stats
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return nil, err
+	}
+	return json.Marshal(report)
+}
+
+func metadataObject(raw []byte) error {
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
+		return errors.New("metadata must be a JSON object")
+	}
+	return nil
+}
+
+func (e *exporter) copyMetadata(ref, side, role, source, original, rel, transform string, sanitize func([]byte) ([]byte, error)) error {
+	if existing, ok := e.copied[rel]; ok {
+		e.retained(ref, side, role, original, existing)
+		return nil
+	}
+	info, err := e.root.Lstat(rel)
+	if err != nil {
+		e.omit(ref, side, role, original, "missing: "+err.Error())
+		return nil
+	}
+	if !info.Mode().IsRegular() {
+		e.omit(ref, side, role, original, "not a regular file")
+		return nil
+	}
+	if e.files >= e.limits.MaxFiles {
+		e.omit(ref, side, role, original, "file limit reached")
+		return nil
+	}
+	if info.Size() > e.limits.MaxFileBytes {
+		e.omit(ref, side, role, original, "file size limit exceeded")
+		return nil
+	}
+	in, err := e.root.Open(rel)
+	if err != nil {
+		e.omit(ref, side, role, original, "unreadable: "+err.Error())
+		return nil
+	}
+	defer in.Close()
+	opened, err := in.Stat()
+	if err != nil || !opened.Mode().IsRegular() {
+		e.omit(ref, side, role, original, "not a regular file")
+		return nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(in, e.limits.MaxFileBytes+1))
+	if err != nil {
+		e.omit(ref, side, role, original, "unreadable: "+err.Error())
+		return nil
+	}
+	if int64(len(raw)) > e.limits.MaxFileBytes || int64(len(raw)) != info.Size() {
+		e.omit(ref, side, role, original, "changed while reading metadata")
+		return nil
+	}
+	content, err := sanitize(raw)
+	if err != nil {
+		e.omit(ref, side, role, original, "invalid metadata: "+err.Error())
+		return nil
+	}
+	if int64(len(content)) > e.limits.MaxFileBytes {
+		e.omit(ref, side, role, original, "sanitized metadata exceeds file size limit")
+		return nil
+	}
+	remaining := e.limits.MaxTotalBytes - e.bytes - (e.limits.MaxMetadataBytes - e.rootMetadataBytes)
+	if int64(len(content)) > remaining {
+		e.omit(ref, side, role, original, "total size limit exceeded")
+		return nil
+	}
+	e.sequence++
+	dataPath := filepath.ToSlash(filepath.Join(dataDir, fmt.Sprintf("%08d.data", e.sequence)))
+	out, err := e.output.OpenFile(dataPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create evidence data file: %w", err)
+	}
+	_, writeErr := out.Write(content)
+	closeErr := out.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = e.output.Remove(dataPath)
+		return fmt.Errorf("write evidence data file: %w", errors.Join(writeErr, closeErr))
+	}
+	e.files++
+	e.bytes += int64(len(content))
+	e.copied[rel] = dataPath
+	record := fileRecord(dataPath, role, content)
+	record.Transform = transform
+	originalDigest := sha256.Sum256(raw)
+	record.OriginalSHA256 = hex.EncodeToString(originalDigest[:])
+	e.manifest.Files = append(e.manifest.Files, record)
 	e.retained(ref, side, role, original, dataPath)
 	return nil
 }

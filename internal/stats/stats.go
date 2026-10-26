@@ -3,6 +3,7 @@
 package stats
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +50,19 @@ type Unavailable struct {
 	Reason       string `json:"reason,omitempty"`
 	PolicyReason string `json:"policyReason,omitempty"`
 	Hint         string `json:"hint,omitempty"`
+}
+
+// Public returns a copy safe to emit in reports.
+func (u Unavailable) Public() Unavailable {
+	u.Hint = redactRelatedURLs(u.Hint, u.URL, u.ArtifactURL)
+	u.URL = manifest.PublicURL(u.URL)
+	u.ArtifactURL = manifest.PublicURL(u.ArtifactURL)
+	return u
+}
+
+func (u Unavailable) MarshalJSON() ([]byte, error) {
+	type unavailable Unavailable
+	return json.Marshal(unavailable(u.Public()))
 }
 
 type Stats struct {
@@ -135,6 +149,30 @@ type Source struct {
 	// RegistryChecksum is the current import's lookup observation, not cached
 	// content evidence. It is attached after deterministic workspace reuse.
 	RegistryChecksum *fetch.RegistryChecksum `json:"registryChecksum,omitempty"`
+}
+
+// Public returns a copy safe to emit in reports.
+func (s Source) Public() Source {
+	s.URL = manifest.PublicURL(s.URL)
+	if s.RegistryChecksum != nil {
+		checksum := s.RegistryChecksum.Public()
+		s.RegistryChecksum = &checksum
+	}
+	return s
+}
+
+func (s Source) MarshalJSON() ([]byte, error) {
+	type source Source
+	return json.Marshal(source(s.Public()))
+}
+
+func redactRelatedURLs(value string, urls ...string) string {
+	for _, raw := range urls {
+		if raw != "" {
+			value = strings.ReplaceAll(value, raw, manifest.PublicURL(raw))
+		}
+	}
+	return value
 }
 
 // MovedRef records a mutable GitHub Actions ref observed resolving to a

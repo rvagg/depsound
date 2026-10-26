@@ -11,19 +11,19 @@ import (
 )
 
 // BulkResult pairs a dependency-change reference with its analysis, or an
-// error if it failed. Ref is tool-formed (spec + versions), safe to print. A
-// bump carries Stats (a diff); a newly-added dependency carries Census (its
-// whole footprint, since there is no prior version to diff): a new dep is
-// unreviewed surface, not a delta, and must never be silently absent.
+// error if analysis failed. Ref is a display label, not a shell argument. A
+// bump has Stats (a diff). A newly added dependency has a Census of its whole
+// footprint because there is no earlier version to diff; it adds unreviewed
+// surface and must not disappear from the report.
 type BulkResult struct {
 	Ref        string               `json:"ref"`
 	Stats      *stats.Stats         `json:"stats,omitempty"`
 	Census     *Census              `json:"census,omitempty"`
 	LockChange *manifest.LockChange `json:"lockChange,omitempty"`
 	// Redirect names the non-registry source a dependency (Ref) is pointed at
-	// by a replace/patch/override: a fork, git URL, or local path. FACT-grade
-	// and needs no fetch, so it carries no Stats/Census; the trust-laundering
-	// signal is the redirect itself.
+	// by a replace/patch/override: a fork, git URL, or local path. It is a
+	// FACT-grade signal from the declaration itself. No artifact is fetched, so
+	// this result has neither Stats nor Census.
 	Redirect string `json:"redirect,omitempty"`
 	// Unavailable is a classified acquisition failure (the artifact could not be
 	// fetched): absent/denied/transient, preserving URL and status.
@@ -76,7 +76,7 @@ func Bulk(results []BulkResult) string {
 	w("depsound bulk: %d dependency changes considered.", len(results))
 	w("this is a router: a fired signal is a pointer to inspect, not a summary.")
 	w("for version changes: depsound <eco>:<name> <from> <to>  (now instant, cached)")
-	writeRouter(w, results, false, nil)
+	writeRouter(w, results, false, nil, nil)
 	return b.String()
 }
 
@@ -102,8 +102,10 @@ var bulkSections = []bulkSection{
 	{[]Code{CodeArtifactDenied}, "coverage gap: artifact access denied (auth/policy)"},
 	{[]Code{CodeArtifactFetch}, "coverage gap: artifact fetch failed (transient)"},
 	{[]Code{CodeRegistryChecksum}, "registry checksum index observations"},
-	{[]Code{CodeExecIntroduced}, "new build/install execution surface introduced"},
-	{[]Code{CodeLockSource}, "lockfile source or integrity changed for an unchanged version"},
+	{[]Code{CodeExecIntroduced, CodeCensusExec}, "build/install execution surface"},
+	{[]Code{CodeLockSource}, "declared lockfile source, integrity, or version changes"},
+	{[]Code{CodeCensusCVE}, "known vulnerabilities at an exact registry target"},
+	{[]Code{CodeAnalysisFailed}, "analysis failed (coverage gap)"},
 	{[]Code{CodeExecPresent}, "build/install execution surface present, its build code may have changed"},
 	{[]Code{CodeNonRegistryDep}, "declares dependencies served from outside the registry (a trusted name pulling code from elsewhere)"},
 	{[]Code{CodeExecGitOnly}, "hooks that run only for a git/link/file dependency (a registry install does not run them)"},
@@ -166,12 +168,18 @@ func provenanceGapCounts(total, complete int) string {
 }
 
 type routerCoverage struct {
-	reports, artifacts, unavailable, lockChanges int
-	osvRan, osvMissing, osvNA                    int
-	provenanceComplete                           int
+	reports, artifacts, unavailable, lockChanges, sourceOnlyBaselines, censusReports int
+	osvRan, osvMissing, osvNA                                                        int
+	provenanceComplete                                                               int
 }
 
 func (c *routerCoverage) include(r *BulkResult) {
+	if r.LockChange != nil {
+		c.lockChanges++
+		if r.LockChange.ToRegistry {
+			c.sourceOnlyBaselines++
+		}
+	}
 	switch {
 	case r.Stats != nil:
 		s := r.Stats
@@ -183,9 +191,8 @@ func (c *routerCoverage) include(r *BulkResult) {
 		if s.Unavailable != nil {
 			failures = 1
 		}
+		c.censusReports++
 		c.report(s.Ecosystem, s.OSVQueried, failures, s.Provenance != nil && s.Provenance.Complete())
-	case r.LockChange != nil:
-		c.lockChanges++
 	case r.Unavailable != nil:
 		c.unavailable++
 	}
@@ -217,55 +224,51 @@ func (c *routerCoverage) report(eco string, queried bool, unavailable int, prove
 // engine). Shared by bulk and transitive (the transitive changed-module set IS
 // a bulk list); transitive adjusts the coverage line that would otherwise
 // wrongly claim the transitive graph is unchecked.
-func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, added []ModuleRef) {
-	var failed, redirects, newDeps, clean []BulkResult
+func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, added, removed []ModuleRef) {
+	var failed, redirects, newDeps, targetCensuses, clean []BulkResult
 	type sigEntry struct {
 		ref string
 		sig Signal
 	}
 	buckets := map[Code][]sigEntry{}
 	var coverage routerCoverage
-	for _, module := range added {
-		if module.Analysis != nil {
-			coverage.include(module.Analysis)
+	for _, modules := range [][]ModuleRef{added, removed} {
+		for _, module := range modules {
+			if module.Analysis != nil {
+				coverage.include(module.Analysis)
+			}
 		}
 	}
 	for _, r := range results {
 		coverage.include(&r)
 		switch {
-		case r.Unavailable != nil:
-			for _, sig := range DeriveUnavailable(r.Ref, r.Unavailable).Signals {
-				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
-			}
 		case r.Redirect != "":
 			redirects = append(redirects, r)
-		case r.LockChange != nil:
-			for _, sig := range DeriveLockChange(r.Ref, r.LockChange).Signals {
-				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
-			}
-		case r.Census != nil:
-			newDeps = append(newDeps, r)
-			for _, sig := range DeriveCensus(r.Ref, r.Census).Signals {
-				switch sig.Code {
-				case CodeArtifactAbsent, CodeArtifactDenied, CodeArtifactFetch, CodeRegistryChecksum:
-					buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
-				}
-			}
+			continue
 		case r.Note != "":
 			for _, sig := range DeriveBenign(r.Ref, r.Note).Signals {
 				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
 			}
-		case r.Stats == nil:
-			failed = append(failed, r)
-		default:
-			l := Derive(r.Ref, r.Stats)
-			if len(l.Signals) == 0 {
+			continue
+		}
+		if r.Census != nil {
+			if r.LockChange != nil {
+				targetCensuses = append(targetCensuses, r)
+			} else {
+				newDeps = append(newDeps, r)
+			}
+		}
+		l := DeriveBulkResult(r)
+		if len(l.Signals) == 0 {
+			if r.Stats != nil {
 				clean = append(clean, r)
-				continue
+			} else {
+				failed = append(failed, r)
 			}
-			for _, sig := range l.Signals {
-				buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
-			}
+			continue
+		}
+		for _, sig := range l.Signals {
+			buckets[sig.Code] = append(buckets[sig.Code], sigEntry{r.Ref, sig})
 		}
 	}
 
@@ -303,6 +306,13 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 			w("  %s  %s", EscapeText(r.Ref), censusFootprint(r.Census))
 		}
 	}
+	if len(targetCensuses) > 0 {
+		w("")
+		w("canonical registry targets (source-only baseline not inspected; target footprint, not a diff):")
+		for _, r := range targetCensuses {
+			w("  %s  %s", EscapeText(r.Ref), censusFootprint(r.Census))
+		}
+	}
 	if len(clean) > 0 {
 		w("")
 		w("no flags raised (%d): NOT the same as safe. These were not assessed", len(clean))
@@ -327,7 +337,7 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 	switch {
 	case coverage.reports == 0 && coverage.unavailable == 0:
 		if coverage.lockChanges > 0 {
-			w("checked: %d lockfile source/integrity declaration(s); no artifacts inspected or advisory scans run.", coverage.lockChanges)
+			w("checked: %d lockfile metadata declaration(s); no artifacts inspected or advisory scans run.", coverage.lockChanges)
 		} else if transitive {
 			w("checked: dependency graph and name/version changes; no artifacts inspected.")
 		} else {
@@ -340,8 +350,8 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 	default:
 		w("checked: artifact acquisition status only; contents were not inspected.")
 	}
-	if coverage.lockChanges > 0 && coverage.reports > 0 {
-		w("  lockfile source/integrity declarations: %d metadata-only; their package contents were not fetched or advisory-scanned.", coverage.lockChanges)
+	if coverage.sourceOnlyBaselines > 0 {
+		w("  source-only baseline declarations: %d; their baseline contents were not fetched or advisory-scanned.", coverage.sourceOnlyBaselines)
 	}
 	// OSV status is derived from what actually ran, not asserted flat: a
 	// disabled/failed scan is a gap, an unsupported ecosystem is not.
@@ -377,9 +387,11 @@ func writeRouter(w func(string, ...any), results []BulkResult, transitive bool, 
 		}
 		w(" transitive deps these bumps pull in%s. Silence != safe.", prov)
 	}
-	if coverage.artifacts > 0 {
+	if coverage.artifacts > 0 && coverage.censusReports == 0 {
 		w("next: for each dep you rely on, intersect the diff with your usage ->")
 		w(" depsound surface <eco>:<name> <from> <to> --uses=<your imports>")
+	} else if coverage.artifacts > 0 {
+		w("next: inspect each registry target footprint and its declared acquisition metadata.")
 	} else if coverage.unavailable > 0 {
 		w("next: obtain the exact artifact from a source you trust, such as a registry operator;")
 		w(" for crates, re-run with --from-artifact/--to-artifact or --artifact.")
@@ -423,12 +435,8 @@ func digestOf(s *stats.Stats) digest {
 	return d
 }
 
-// joinVulnIDs renders advisory IDs (preferring the CVE alias, more
-// recognizable than a GHSA id) so the router points at what to act on,
-// not just how many. Capped so a heavy dep does not become a wall.
-// malicious and vulnsOnly split an advisory set by record class. They answer
-// opposite questions ("is this package reported malicious" vs "does this code
-// carry a flaw"), so no renderer may show them as one count.
+// malicious and vulnsOnly separate malicious-package records from vulnerability
+// records, which require different incident-response or patch advice.
 func malicious(sets ...[]osv.Vuln) []osv.Vuln {
 	var out []osv.Vuln
 	seen := map[string]bool{}

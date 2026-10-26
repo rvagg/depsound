@@ -1,6 +1,7 @@
 package output
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -82,7 +83,7 @@ func TestTransitiveAdditionOnlyRetainsAdvisoryAndCoverage(t *testing.T) {
 
 func TestTransitiveRendersLockChangesOutsideVersionChanges(t *testing.T) {
 	result := TransitiveResult{
-		Ecosystem: "npm", Flat: true,
+		Ecosystem: "npm", Kind: "npm", Flat: true,
 		LockChanges: []manifest.LockChange{{
 			Ecosystem: "npm", Name: "mirror", Version: "1.2.3",
 			From: []manifest.LockSource{{Location: "old", Resolved: "https://old.example/pkg.tgz", Host: "old.example", Integrity: "sha512-old"}},
@@ -97,5 +98,33 @@ func TestTransitiveRendersLockChangesOutsideVersionChanges(t *testing.T) {
 	}
 	if strings.Contains(out, "only additions/removals") {
 		t.Errorf("lock source changes must not be framed as additions/removals only:\n%s", out)
+	}
+}
+
+func TestTransitiveSourceCollectionAndMetadataCoverage(t *testing.T) {
+	metadata := &manifest.LockChange{
+		Ecosystem: "npm", Name: "mirror", Kind: "added", ToVersion: "1",
+		To: []manifest.LockSource{{Resolved: "https://mirror.example/x.tgz"}},
+	}
+	measured := TransitiveResult{
+		Ecosystem: "npm", Kind: "npm", Flat: true,
+		Added: []ModuleRef{{Path: "mirror", To: "1", Declared: metadata}},
+	}
+	measured.SetCoverage()
+	if measured.Coverage.Uninspected != 1 || len(measured.Coverage.Checked) == 0 || len(measured.Coverage.NotChecked) == 0 {
+		t.Fatalf("metadata coverage is incomplete: %+v", measured.Coverage)
+	}
+	coverageJSON, err := json.Marshal(measured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"checked"`, `"notChecked"`, `"uninspected":1`} {
+		if !strings.Contains(string(coverageJSON), key) {
+			t.Errorf("coverage JSON missing %s: %s", key, coverageJSON)
+		}
+	}
+	uncollected := TransitiveResult{Ecosystem: "go", Kind: "go", Flat: true}
+	if measured.sourceFacts() == uncollected.sourceFacts() {
+		t.Errorf("measured and uncollected source metadata were not distinguishable")
 	}
 }

@@ -89,9 +89,9 @@ func ParsePackageLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 // PackageLockGraph reads the who-pulls-whom edges out of a package-lock v2/v3:
 // node "name@version" -> children it depends on, plus the root's direct set.
 // Each entry's target resolves by npm's shadowing rule: the nearest ancestor
-// node_modules that holds the name. Runtime `dependencies` plus optional, and
-// at the root also devDependencies (your own dev tooling does install; a
-// transitive package's dev deps never do, so they carry no edge).
+// node_modules that holds the name. Follow runtime and optional dependencies.
+// Include devDependencies at the root, where the consumer's tooling installs;
+// omit them for transitive packages.
 func PackageLockGraph(b []byte) (roots []string, edges map[string][]string, err error) {
 	var lock struct {
 		Packages map[string]struct {

@@ -109,9 +109,16 @@ func transitiveCmd(args []string) error {
 	for i := range res.lockChanges {
 		res.lockChanges[i].Ecosystem = te.analysis
 	}
+	for _, refs := range [3][]output.ModuleRef{res.changed, res.added, res.removed} {
+		for i := range refs {
+			if refs[i].Declared != nil {
+				refs[i].Declared.Ecosystem = te.analysis
+			}
+		}
+	}
 	var items []bulkItem
 	for _, c := range res.changed {
-		items = append(items, bulkItem{spec: te.analysis + ":" + c.Path, from: c.From, to: c.To})
+		items = append(items, itemForRef(te.analysis, c))
 	}
 	fmt.Fprintf(os.Stderr, "depsound: transitive %s: %d changed, %d added, %d removed; analysing changes and added modules\n",
 		kind, len(res.changed), len(res.added), len(res.removed))
@@ -127,6 +134,7 @@ func transitiveCmd(args []string) error {
 		LockChanges:     res.lockChanges,
 	}
 	analyseAdded(cacheDir, te.analysis, tr.Added, noOSV)
+	tr.SetCoverage()
 	// the changed subtree with its causality, from the lockfiles that carry
 	// edges (go.mod does not: it is a flat require set). What was removed
 	// only exists in the old graph, so attribute it there.
@@ -146,7 +154,7 @@ func transitiveCmd(args []string) error {
 		}
 	}
 	if evidenceDir != "" {
-		if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr); err != nil {
+		if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr, nil); err != nil {
 			return err
 		}
 	}
@@ -164,20 +172,40 @@ func transitiveCmd(args []string) error {
 // resolved graph. Exact lockfile/projected versions bypass range cooldown:
 // the report must inspect what the resolver selected, even when it is fresh.
 func analyseAdded(cacheDir, eco string, refs []output.ModuleRef, noOSV bool) {
-	items := make([]bulkItem, len(refs))
-	for i, ref := range refs {
-		items[i] = bulkItem{spec: eco + ":" + ref.Path, to: ref.To}
+	items := make([]bulkItem, 0, len(refs))
+	for i := range refs {
+		if refs[i].Declared != nil {
+			refs[i].Analysis = nil
+			continue
+		}
+		items = append(items, itemForRef(eco, refs[i]))
 	}
 	results := runBulk(cacheDir, items, noOSV, provenanceUnavailableFallback, 0)
+	j := 0
 	for i := range refs {
-		refs[i].Analysis = &results[i]
+		if refs[i].Declared == nil {
+			refs[i].Analysis = &results[j]
+			j++
+		}
 	}
 }
 
-// lockGraph reads a lockfile's who-pulls-whom edges where the format carries
-// them. go.mod does not: its require block is a flat resolved set with no
-// edges (`go mod graph` has them, but that is a toolchain call), so go gets
-// no tree rather than a fabricated one.
+func itemForRef(eco string, ref output.ModuleRef) bulkItem {
+	if ref.Declared != nil {
+		ref.Declared.Ecosystem = eco
+		item := bulkItem{spec: eco + ":" + ref.Path, lockChange: ref.Declared}
+		if ref.Declared.ToRegistry {
+			item.to = ref.To
+		}
+		return item
+	}
+	return bulkItem{spec: eco + ":" + ref.Path, from: ref.From, to: ref.To}
+}
+
+// lockGraph reads a lockfile's who-pulls-whom edges when the format records
+// them. go.mod has a flat resolved require set. `go mod graph` can supply
+// edges, but invoking the toolchain is outside this command, so Go reports no
+// tree rather than inventing one.
 func lockGraph(kind string, b []byte) (roots []string, edges map[string][]string, err error) {
 	switch kind {
 	case "npm":
@@ -187,7 +215,7 @@ func lockGraph(kind string, b []byte) (roots []string, edges map[string][]string
 	case "crates":
 		return cratepkg.CargoLockGraph(b)
 	}
-	return nil, nil, fmt.Errorf("%s carries no dependency edges", kind)
+	return nil, nil, fmt.Errorf("%s lockfiles do not record dependency edges", kind)
 }
 
 // wrongKindHint answers the question a bare "not found" leaves open: a repo
@@ -397,12 +425,19 @@ type requireSetDiff struct {
 // otherwise the extra versions are listed as added/removed. Deterministic.
 func diffResolved(old, niu []resolvedDep) requireSetDiff {
 	oldV, newV := versionsByName(old), versionsByName(niu)
-	d := requireSetDiff{lockChanges: diffLockSources(old, niu)}
-	// A retained source change is not a package removal or addition merely
-	// because one endpoint no longer points at the canonical registry.
-	for _, c := range d.lockChanges {
-		delete(oldV[c.Name], c.Version)
-		delete(newV[c.Name], c.Version)
+	oldSources, newSources := lockSources(old), lockSources(niu)
+	d := requireSetDiff{lockChanges: diffLockSources(oldSources, newSources)}
+	declared := func(kind, name, from, to string) *manifest.LockChange {
+		oldDep, newDep := oldV[name][from], newV[name][to]
+		if !oldDep.sourceOnly && !newDep.sourceOnly {
+			return nil
+		}
+		a, b := oldSources[lockIdentity{name, from}], newSources[lockIdentity{name, to}]
+		sortLockSources(a)
+		sortLockSources(b)
+		return &manifest.LockChange{Kind: kind, Name: name, FromVersion: from, ToVersion: to,
+			ToRegistry: kind == "version" && oldDep.sourceOnly && !newDep.sourceOnly,
+			From:       a, To: b, CredentialsChanged: manifest.CredentialsChanged(a, b)}
 	}
 	names := map[string]bool{}
 	for n := range oldV {
@@ -425,7 +460,8 @@ func diffResolved(old, niu []resolvedDep) requireSetDiff {
 			// unchanged
 		case len(added) == 1 && len(removed) == 1:
 			dep := newV[name][added[0]]
-			d.changed = append(d.changed, output.ModuleRef{Path: name, From: removed[0], To: added[0], Indirect: dep.indirect})
+			d.changed = append(d.changed, output.ModuleRef{Path: name, From: removed[0], To: added[0], Indirect: dep.indirect,
+				Declared: declared("version", name, removed[0], added[0])})
 			if dep.indirect {
 				d.indirectChanged++
 			} else {
@@ -433,10 +469,12 @@ func diffResolved(old, niu []resolvedDep) requireSetDiff {
 			}
 		default:
 			for _, v := range added {
-				d.added = append(d.added, output.ModuleRef{Path: name, To: v, Indirect: newV[name][v].indirect})
+				d.added = append(d.added, output.ModuleRef{Path: name, To: v, Indirect: newV[name][v].indirect,
+					Declared: declared("added", name, "", v)})
 			}
 			for _, v := range removed {
-				d.removed = append(d.removed, output.ModuleRef{Path: name, From: v, Indirect: oldV[name][v].indirect})
+				d.removed = append(d.removed, output.ModuleRef{Path: name, From: v, Indirect: oldV[name][v].indirect,
+					Declared: declared("removed", name, v, "")})
 			}
 		}
 	}
@@ -446,12 +484,10 @@ func diffResolved(old, niu []resolvedDep) requireSetDiff {
 func versionsByName(deps []resolvedDep) map[string]map[string]resolvedDep {
 	out := map[string]map[string]resolvedDep{}
 	for _, d := range deps {
-		if d.sourceOnly {
-			continue
-		}
 		if out[d.name] == nil {
 			out[d.name] = map[string]resolvedDep{}
 		}
+		d.sourceOnly = d.sourceOnly || out[d.name][d.version].sourceOnly
 		out[d.name][d.version] = d
 	}
 	return out

@@ -75,7 +75,7 @@ func bulkCmd(args []string) error {
 	}
 	results := runBulk(cacheDir, items, noOSV, policy, cooldown)
 	if evidenceDir != "" {
-		if err := exportEvidence(cacheDir, evidenceDir, "bulk", results); err != nil {
+		if err := exportEvidence(cacheDir, evidenceDir, "bulk", results, bulkReplay(items, results)); err != nil {
 			return err
 		}
 	}
@@ -124,6 +124,9 @@ func readBulkList(inputFile string, pos []string) ([]bulkItem, error) {
 	}
 
 	trimmed := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(trimmed, "{") {
+		return parseReviewPacket(raw)
+	}
 	if strings.HasPrefix(trimmed, "[") {
 		return parseBulkJSON(raw)
 	}
@@ -131,31 +134,32 @@ func readBulkList(inputFile string, pos []string) ([]bulkItem, error) {
 }
 
 func parseBulkJSON(raw []byte) ([]bulkItem, error) {
-	var arr []struct {
-		Ecosystem  string               `json:"ecosystem"`
-		Name       string               `json:"name"`
-		From       string               `json:"from"`
-		To         string               `json:"to"`
-		Redirect   string               `json:"redirect"`
-		LockChange *manifest.LockChange `json:"lockChange"`
-	}
+	var arr []manifest.ReviewItem
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return nil, fmt.Errorf("bulk JSON: %w", err)
 	}
+	return parseReviewItems(arr)
+}
+
+func parseReviewItems(arr []manifest.ReviewItem) ([]bulkItem, error) {
 	var items []bulkItem
 	for _, e := range arr {
 		if e.LockChange != nil {
 			if err := validateLockChange(e.LockChange); err != nil {
 				return nil, fmt.Errorf("bulk JSON lockChange: %w", err)
 			}
-			items = append(items, bulkItem{
+			item := bulkItem{
 				spec:       e.LockChange.Ecosystem + ":" + e.LockChange.Name,
 				lockChange: e.LockChange,
-			})
+			}
+			if e.LockChange.ToRegistry {
+				item.to = e.LockChange.ToVersion
+			}
+			items = append(items, item)
 			continue
 		}
 		if e.Ecosystem == "" || e.Name == "" {
-			return nil, fmt.Errorf("bulk JSON entry needs ecosystem and name: %+v", e)
+			return nil, fmt.Errorf("bulk JSON entry needs ecosystem and name")
 		}
 		spc := e.Ecosystem + ":" + e.Name
 		// a redirect is a flag (no version to diff); otherwise to is required,
@@ -165,7 +169,7 @@ func parseBulkJSON(raw []byte) ([]bulkItem, error) {
 			continue
 		}
 		if e.To == "" {
-			return nil, fmt.Errorf("bulk JSON entry needs to (or redirect): %+v", e)
+			return nil, fmt.Errorf("bulk JSON entry needs to (or redirect)")
 		}
 		items = append(items, bulkItem{spec: spc, from: e.From, to: e.To})
 	}
@@ -176,14 +180,43 @@ func validateLockChange(change *manifest.LockChange) error {
 	if change == nil {
 		return fmt.Errorf("missing lock change")
 	}
-	if change.Ecosystem == "" || change.Name == "" || change.Version == "" {
-		return fmt.Errorf("needs ecosystem, name and version")
+	if change.Ecosystem == "" || change.Name == "" {
+		return fmt.Errorf("needs ecosystem and name")
 	}
 	if _, err := spec.Parse(change.Ecosystem + ":" + change.Name); err != nil {
 		return err
 	}
-	if len(change.From) == 0 || len(change.To) == 0 {
-		return fmt.Errorf("needs declared from and to source sets")
+	switch change.Kind {
+	case "", "source":
+		if change.ToRegistry {
+			return fmt.Errorf("toRegistry requires a version change")
+		}
+		if change.Version == "" || len(change.From) == 0 || len(change.To) == 0 {
+			return fmt.Errorf("source change needs a version and both declared source sets")
+		}
+	case "version":
+		if change.ToRegistry && change.Version != "" {
+			return fmt.Errorf("toRegistry version change must not set version")
+		}
+		if change.FromVersion == "" || change.ToVersion == "" || len(change.From) == 0 || len(change.To) == 0 {
+			return fmt.Errorf("version change needs both versions and declared source sets")
+		}
+	case "added":
+		if change.ToRegistry {
+			return fmt.Errorf("toRegistry requires a version change")
+		}
+		if change.ToVersion == "" || len(change.To) == 0 {
+			return fmt.Errorf("added declaration needs a version and source")
+		}
+	case "removed":
+		if change.ToRegistry {
+			return fmt.Errorf("toRegistry requires a version change")
+		}
+		if change.FromVersion == "" || len(change.From) == 0 {
+			return fmt.Errorf("removed declaration needs a version and source")
+		}
+	default:
+		return fmt.Errorf("unknown lock change kind %q", change.Kind)
 	}
 	return nil
 }
@@ -214,9 +247,13 @@ func parseBulkLines(s string) ([]bulkItem, error) {
 			if err := validateLockChange(&change); err != nil {
 				return nil, fmt.Errorf("bulk lock-change: %w", err)
 			}
-			items = append(items, bulkItem{
+			item := bulkItem{
 				spec: change.Ecosystem + ":" + change.Name, lockChange: &change,
-			})
+			}
+			if change.ToRegistry {
+				item.to = change.ToVersion
+			}
+			items = append(items, item)
 			continue
 		}
 		f := strings.Fields(line)
@@ -314,13 +351,23 @@ func runBulk(cacheDir string, items []bulkItem, noOSV bool, policy provenancePol
 			// a redirect is a flag, not an artifact: nothing to fetch or diff,
 			// the signal is that a trusted name points off the registry
 			if it.redirect != "" {
-				results[i] = output.BulkResult{Ref: it.spec, Redirect: it.redirect}
+				results[i] = output.BulkResult{Ref: it.spec, Redirect: manifest.PublicLocator(it.redirect)}
 				return
 			}
 			if it.lockChange != nil {
-				results[i] = output.BulkResult{
-					Ref: it.spec + " " + it.lockChange.Version, LockChange: it.lockChange,
+				ref := it.lockChange.Ref()
+				if !it.lockChange.ToRegistry {
+					results[i] = output.BulkResult{Ref: ref, LockChange: it.lockChange}
+					return
 				}
+				c, err := censusForBulk(cacheDir, it.spec, it.to, noOSV, policy, cooldown)
+				if err != nil {
+					result := bulkFail(ref, err)
+					result.LockChange = it.lockChange
+					results[i] = result
+					return
+				}
+				results[i] = output.BulkResult{Ref: ref, LockChange: it.lockChange, Census: c}
 				return
 			}
 			// no from = a newly-added dependency: census its whole footprint,

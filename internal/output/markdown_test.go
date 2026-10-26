@@ -3,6 +3,7 @@ package output
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/osv"
@@ -111,13 +112,72 @@ func TestMarkdownEscapesLockSourceEvidence(t *testing.T) {
 		To:   []manifest.LockSource{{Location: "lock/to", Resolved: "https://new.example/<tag>", Host: "new.example", Integrity: "sha512-new"}},
 	}
 	out := Markdown([]BulkResult{{Ref: "npm:mirror 1.2.3", LockChange: change}})
-	for _, value := range []string{"old.example", "new.example", "sha512-old", "sha512-new", "declared lockfile source/integrity metadata"} {
+	for _, value := range []string{"old.example", "new.example", "sha512-old", "sha512-new", "declared lockfile metadata"} {
 		if !strings.Contains(out, value) {
 			t.Errorf("lock source markdown lost %q:\n%s", value, out)
 		}
 	}
 	if strings.Contains(out, "\x1b") || strings.Contains(out, "<tag>") {
 		t.Errorf("tainted source metadata escaped its Markdown boundary:\n%q", out)
+	}
+}
+
+func TestMarkdownRedactsLockSourceCredentials(t *testing.T) {
+	change := &manifest.LockChange{
+		Ecosystem: "npm", Name: "private", Version: "1", CredentialsChanged: true,
+		From: []manifest.LockSource{{Resolved: "https://ci:FAKE_USERINFO@registry.example/x.tgz?token=FAKE_TOKEN&keep=1"}},
+		To:   []manifest.LockSource{{Resolved: "https://ci:ROTATED_USERINFO@registry.example/x.tgz?token=ROTATED_TOKEN&keep=1"}},
+	}
+	out := Markdown([]BulkResult{{Ref: change.Ref(), LockChange: change}})
+	for _, secret := range []string{"FAKE_USERINFO", "FAKE_TOKEN", "ROTATED_USERINFO", "ROTATED_TOKEN"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("credential leaked in markdown: %s", secret)
+		}
+	}
+	for _, want := range []string{"registry.example", "keep=1", "credentials", "redacted"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("credential change fact missing %q", want)
+		}
+	}
+}
+
+func TestMarkdownBoundsFindingDetailWithoutChangingHeadline(t *testing.T) {
+	results := make([]BulkResult, 500)
+	for i := range results {
+		change := &manifest.LockChange{
+			Ecosystem: "npm", Name: "many", Version: "1", Kind: "source",
+			From: []manifest.LockSource{{Resolved: "https://old.example/" + strings.Repeat("a", 180)}},
+			To:   []manifest.LockSource{{Resolved: "https://new.example/" + strings.Repeat("b", 180)}},
+		}
+		results[i] = BulkResult{Ref: change.Ref(), LockChange: change}
+	}
+	out := Markdown(results)
+	if len(out) > maxMarkdownBytes {
+		t.Errorf("markdown exceeds its byte budget: %d", len(out))
+	}
+	for _, want := range []string{"<!-- depsound-title:", "dependency changes", "omitted", "full JSON", "retained evidence", "<!-- depsound -->"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bounded markdown lost %q", want)
+		}
+	}
+}
+
+func TestMarkdownBoundsUTF8ByBytes(t *testing.T) {
+	results := make([]BulkResult, 500)
+	for i := range results {
+		change := &manifest.LockChange{
+			Ecosystem: "npm", Name: "many", Version: "1", Kind: "source",
+			From: []manifest.LockSource{{Resolved: "https://old.example/" + strings.Repeat("é", 180)}},
+			To:   []manifest.LockSource{{Resolved: "https://new.example/" + strings.Repeat("é", 180)}},
+		}
+		results[i] = BulkResult{Ref: change.Ref(), LockChange: change}
+	}
+	out := Markdown(results)
+	if len(out) > maxMarkdownBytes || !utf8.ValidString(out) {
+		t.Errorf("markdown byte boundary broke UTF-8: %d bytes", len(out))
+	}
+	if !strings.Contains(out, "omitted") || !strings.HasSuffix(strings.TrimSpace(out), "<!-- depsound -->") {
+		t.Errorf("bounded markdown lost its delivery route:\n%s", out)
 	}
 }
 

@@ -165,6 +165,11 @@ Global flags: `--format=json` (full machine contract, any command),
 (matches an install cooldown; reports the newer versions an uncooled consumer
 gets instead). `--evidence-dir=<new-dir>` on diff, census, bulk and
 transitive retains the run's JSON, archives, sidecars and bounded inert trees.
+Bulk exports save `review-input.json` with the depsound version used. To collect
+those inputs again, run `depsound bulk --file=review-input.json` with that version.
+Read the saved report for any inputs that could not be collected again.
+Structured report and sidecar URLs are credential-redacted; transformed metadata
+records original and retained hashes. Archives, diffs and trees keep their bytes.
 `--against=<lockfile>` makes a transitive census marginal. crates-only
 `--artifact` / `--from-artifact` / `--to-artifact` accept a caller-supplied
 `.crate` as inert evidence when the registry no longer has it. `detect` is

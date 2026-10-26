@@ -8,11 +8,12 @@ import (
 	"github.com/rvagg/depsound/internal/cache"
 	"github.com/rvagg/depsound/internal/evidence"
 	"github.com/rvagg/depsound/internal/fetch"
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/output"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
-func exportEvidence(cacheDir, destination, kind string, report any) error {
+func exportEvidence(cacheDir, destination, kind string, report any, replay *manifest.ReviewPacket) error {
 	c, err := cache.Open(cacheDir)
 	if err != nil {
 		return err
@@ -22,7 +23,7 @@ func exportEvidence(cacheDir, destination, kind string, report any) error {
 		return err
 	}
 	_, err = evidence.Export(c.Root, destination, evidence.Input{
-		Kind: kind, Report: report, Items: items,
+		Kind: kind, Report: report, Replay: replay, Items: items,
 	}, evidence.DefaultLimits)
 	if err != nil {
 		return fmt.Errorf("export evidence: %w", err)

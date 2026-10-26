@@ -232,10 +232,9 @@ func normalizeUnit(eco spec.Ecosystem, modulePath, unit string) ([]string, strin
 	case spec.Go:
 		return normalizeGoUnit(modulePath, unit)
 	case spec.NPM:
-		// an npm import specifier (package name / subpath) needs exports
-		// entrypoint resolution we do not do yet; treating it as an
-		// artifact-relative path yields a FALSE clean when it matches nothing.
-		// UNMAPPED until entrypoint resolution lands, never a no-change result.
+		// An npm import specifier needs exports-entrypoint resolution before it
+		// can be matched to artifact paths. Treating it as a path would wrongly
+		// report that matching files were unchanged, so return an unmapped result.
 		return nil, "npm import specifier not resolved to artifact paths (entrypoint resolution not implemented)", true
 	case spec.Crates:
 		// a rust module path (crate::a::b) needs a module mapper we do not

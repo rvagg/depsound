@@ -9,8 +9,8 @@ import (
 // help and guide so the gateway framing never drifts.
 const identity = `depsound: sound the depths of a dependency change. It fetches the published
 artifact, diffs two versions, and lays out the evidence.
-A gateway to review, never a verdict: it surfaces mechanical facts; the
-judgement is yours. "No flags" is a starting point, never a clean bill.`
+Use it to start a review. It surfaces mechanical facts; the judgement is yours.
+A report with no flags is only a starting point.`
 
 // routingTable answers the highest-leverage question, which command when. It
 // is generated (not hand-spaced) so the command column stays aligned, and
@@ -122,11 +122,14 @@ guess stale versions from weights). Publish/anomaly provenance runs by default
 	"bulk": `depsound bulk [--file=<list>] [--cooldown=<days>] [--evidence-dir=<dir>] [--format=stats|json|markdown] [--no-osv] [--no-provenance]
 
 Runs the per-pair analysis over a LIST of bumps (one "<eco>:<name> <from> <to>"
-per line, or a JSON array) from stdin or --file, and renders a prioritized
+per line, a JSON array, or retained review-input.json) from stdin or --file,
+and renders a prioritized
 ROUTER: which deps tripped which signals, most-severe first, each a POINTER to
 inspect (drill with the single-pair command, instant once cached). The list is
 yours to supply, from a PR diff, a go.mod diff, etc. A from/to may be a semver
 range; --cooldown applies to the whole list (see help diff).
+Retained bulk inputs require the collecting depsound version; omitted findings
+remain evidence-only rows. They never become commands reconstructed from labels.
 --no-provenance skips publishing metadata, including for missing artifacts.` + evidenceHelp,
 
 	"transitive": `depsound transitive <go|crates|npm|pnpm> --old=<lockfile> --new=<lockfile> [--evidence-dir=<dir>] [--format=stats|json] [--no-osv]

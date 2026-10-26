@@ -54,6 +54,10 @@ func (r ledgerRow) phrases() string {
 	f := r.findings()
 	out := make([]string, 0, len(f))
 	for _, sig := range f {
+		if r.kind == rowLockChange && sig.Code == CodeCensusNew && r.c != nil {
+			out = append(out, fmt.Sprintf("canonical registry target inspected: %s files; source-only baseline not inspected", commas(r.c.Files)))
+			continue
+		}
 		out = append(out, mdSignal(sig, r.s, r.c))
 	}
 	return strings.Join(out, "; ")
@@ -168,20 +172,20 @@ func ledgerRows(results []BulkResult) []ledgerRow {
 	rows := make([]ledgerRow, 0, len(results))
 	for _, r := range results {
 		switch {
-		case r.Unavailable != nil:
-			rows = append(rows, ledgerRow{l: DeriveUnavailable(r.Ref, r.Unavailable), ref: r.Ref, kind: rowStats})
 		case r.Redirect != "":
 			rows = append(rows, ledgerRow{l: DeriveRedirect(r.Ref, r.Redirect), ref: r.Ref, kind: rowRedirect})
-		case r.LockChange != nil:
-			rows = append(rows, ledgerRow{l: DeriveLockChange(r.Ref, r.LockChange), ref: r.Ref, kind: rowLockChange})
 		case r.Note != "":
 			rows = append(rows, ledgerRow{l: DeriveBenign(r.Ref, r.Note), ref: r.Ref, kind: rowStats})
-		case r.Census != nil:
-			rows = append(rows, ledgerRow{l: DeriveCensus(r.Ref, r.Census), c: r.Census, ref: r.Ref, kind: rowCensus})
-		case r.Stats != nil:
-			rows = append(rows, ledgerRow{l: Derive(r.Ref, r.Stats), s: r.Stats, ref: r.Ref, kind: rowStats})
 		default:
-			rows = append(rows, ledgerRow{l: DeriveFailure(r.Ref, r.Err), ref: r.Ref, kind: rowFailed})
+			kind := rowStats
+			if r.LockChange != nil {
+				kind = rowLockChange
+			} else if r.Census != nil {
+				kind = rowCensus
+			} else if r.Stats == nil {
+				kind = rowFailed
+			}
+			rows = append(rows, ledgerRow{l: DeriveBulkResult(r), s: r.Stats, c: r.Census, ref: r.Ref, kind: kind})
 		}
 	}
 	return rows
@@ -203,63 +207,87 @@ func Markdown(results []BulkResult) string {
 	}
 	v := Assess(ledgers...)
 
-	// worst first; clean rows (an empty ledger) collapse to a count
+	// Worst first; clean rows are digest candidates. The headline is assessed
+	// before rendering limits apply, so omitted detail cannot soften it.
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].tier() > rows[j].tier() })
-
-	var b strings.Builder
-	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-
-	total := len(results)
-	w("<!-- depsound-title: depsound: %s -->", checkTitle(v, total))
-	w("**depsound** · %d dependency change%s · %s", total, plural(total), triage(v))
-
-	// findings first, then a digest for each quiet change, so a row that tripped
-	// nothing still says what it is. Digests are capped so a wide PR cannot
-	// become a wall; the remainder collapses to a stated count.
-	var bullets, digests []string
-	nQuiet := 0
+	var details []string
+	quietOmitted, digests := 0, 0
 	for _, r := range rows {
 		if len(r.findings()) > 0 {
-			bullets = append(bullets, r.bullet())
+			details = append(details, r.bullet())
 			continue
 		}
-		nQuiet++
-		if len(digests) < maxDigestRows {
+		if digests < maxDigestRows {
 			if d := r.digest(); d != "" {
-				digests = append(digests, d)
+				details = append(details, d)
+				digests++
 			}
+		} else {
+			quietOmitted++
 		}
 	}
-	if len(bullets)+len(digests) > 0 {
-		w("")
-		for _, bl := range append(bullets, digests...) {
-			w("%s", bl)
+
+	total := len(results)
+	coverage := fmt.Sprintf("<i>%s</i>", coverageLine(results, rows))
+	var b strings.Builder
+	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	w("<!-- depsound-title: depsound: %s -->", checkTitle(v, total))
+	w("**depsound** · %d dependency change%s · %s", total, plural(total), triage(v))
+	written := markdownByteLen(b.String())
+
+	// Reserve the coverage boundary, upsert marker and an omission route before
+	// adding rows. Limits are byte based to fit GitHub's posting boundary while
+	// every appended string preserves valid UTF-8 rune boundaries.
+	reserved := markdownByteLen("\n- 999999999 detail rows omitted; inspect full JSON and retained evidence for every fact.\n\n") +
+		markdownByteLen(coverage) + markdownByteLen("\n<!-- depsound -->\n")
+	omitted := quietOmitted
+	for i, detail := range details {
+		line := "\n" + detail + "\n"
+		lineBytes := markdownByteLen(line)
+		if written+lineBytes+reserved > maxMarkdownBytes {
+			omitted += len(details) - i
+			break
 		}
-		if rest := nQuiet - len(digests); rest > 0 {
-			w("- %d other%s: nothing tripped.", rest, plural(rest))
-		}
+		b.WriteString(line)
+		written += lineBytes
+	}
+	if omitted > 0 {
+		w("- %d detail row%s omitted; inspect full JSON and retained evidence for every fact.", omitted, plural(omitted))
 	}
 	w("")
-	w("<i>%s</i>", coverageLine(results, rows))
+	w("%s", coverage)
 	w("<!-- depsound -->")
 	return b.String()
 }
 
-// maxDigestRows caps the quiet-change detail so the comment's length tracks
-// what moved, never the size of the dependency list.
-const maxDigestRows = 10
+// maxDigestRows avoids a digest wall in ordinary reports; maxMarkdownBytes
+// bounds the remaining finding detail for delivery surfaces.
+const (
+	maxDigestRows    = 10
+	maxMarkdownBytes = 50000
+)
+
+func markdownByteLen(s string) int {
+	return len(s)
+}
 
 // coverageLine is the boundary in one small-print block: what was checked
 // across this set, what cannot be, and the ecosystem coverage notes hoisted
 // out of the rows. It is scoped by what is actually in the set, so a GitHub
 // Actions PR is not told about import reachability.
 func coverageLine(results []BulkResult, rows []ledgerRow) string {
-	gha, pkg, artifact, unavailable, lockMetadata := false, false, false, false, false
+	gha, pkg, artifact, unavailable, lockMetadata, sourceOnlyBaseline := false, false, false, false, false, false
+	metadataOnly := false
 	for _, r := range results {
-		switch {
-		case r.LockChange != nil:
+		if r.LockChange != nil {
 			lockMetadata = true
-		case r.Stats != nil:
+			sourceOnlyBaseline = sourceOnlyBaseline || r.LockChange.ToRegistry
+			metadataOnly = metadataOnly || !r.LockChange.ToRegistry
+		}
+		if r.Unavailable != nil {
+			unavailable = true
+		}
+		if r.Stats != nil {
 			if r.Stats.Package.Ecosystem == "gha" {
 				gha = true
 			}
@@ -271,7 +299,8 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 					pkg = true
 				}
 			}
-		case r.Census != nil:
+		}
+		if r.Census != nil {
 			if r.Census.Unavailable != nil {
 				unavailable = true
 			} else {
@@ -287,11 +316,16 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 	var checked []string
 	notChecked := []string{"runtime behaviour", "intent (an obfuscated payload reads as ordinary code)"}
 	if lockMetadata {
-		checked = append(checked, "declared lockfile source/integrity metadata")
-		notChecked = append(notChecked, "package content, artifact integrity verification and advisory scanning for metadata-only rows")
+		checked = append(checked, "declared lockfile metadata")
+		if sourceOnlyBaseline {
+			notChecked = append(notChecked, "source-only baseline contents, integrity verification and advisory scanning")
+		}
+		if metadataOnly {
+			notChecked = append(notChecked, "package content, artifact integrity verification and advisory scanning for metadata-only rows")
+		}
 	}
 	if artifact {
-		checked = append(checked, "the published artifact diff")
+		checked = append(checked, "published artifact reports")
 	}
 	if unavailable {
 		checked = append(checked, "artifact acquisition status")
@@ -311,7 +345,11 @@ func coverageLine(results []BulkResult, rows []ledgerRow) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Checked: %s. Not checked: %s.", strings.Join(checked, ", "), strings.Join(notChecked, ", "))
 	if lockMetadata {
-		out.WriteString(" Next: inspect both declared lockfile entries and confirm the intended registry, mirror or local link.")
+		out.WriteString(" Next: inspect both declared lockfile entries and confirm the intended registry, mirror or local link")
+		if sourceOnlyBaseline {
+			out.WriteString(", and inspect the target footprint")
+		}
+		out.WriteString(".")
 	}
 	// the hoisted coverage notes, once each, with the count they apply to
 	byCode := map[Code]int{}

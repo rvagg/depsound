@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/stats"
 )
 
@@ -20,11 +21,11 @@ func TestExportRetainsEvidenceAndDeduplicates(t *testing.T) {
 	tree := filepath.Join(cache, "tree")
 	mustMkdir(t, workspace)
 	mustMkdir(t, tree)
-	mustWrite(t, filepath.Join(workspace, "stats.json"), "persisted stats")
+	mustWrite(t, filepath.Join(workspace, "stats.json"), `{}`)
 	mustWrite(t, filepath.Join(workspace, "diff.patch"), "patch")
 	mustWrite(t, filepath.Join(workspace, "surface.json"), "surface")
 	mustWrite(t, filepath.Join(cache, "package.crate"), "archive bytes")
-	mustWrite(t, filepath.Join(cache, "sidecar.json"), "sidecar")
+	mustWrite(t, filepath.Join(cache, "sidecar.json"), `{"url":"https://registry.example/pkg","digest":"sha256-test"}`)
 	mustWrite(t, filepath.Join(tree, "nested", "payload.js"), "payload")
 
 	destination := filepath.Join(t.TempDir(), "evidence")
@@ -84,6 +85,135 @@ func TestExportRetainsEvidenceAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestExportRetainsReviewInput(t *testing.T) {
+	cache := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "evidence")
+	packet := &manifest.ReviewPacket{
+		Schema: 1, ToolVersion: "v1.2.3", Mode: "bulk", Reason: "lockfile input",
+		Items: []manifest.ReviewItem{{
+			Ecosystem: "npm", Name: "example", From: "1.0.0", To: "2.0.0",
+			LockChange: &manifest.LockChange{
+				Ecosystem: "npm", Name: "example", FromVersion: "1.0.0", ToVersion: "2.0.0",
+			},
+		}},
+	}
+	want, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Export(cache, destination, Input{Report: map[string]bool{}, Replay: packet}, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReplayFile == nil {
+		t.Fatal("review input record missing")
+	}
+	if got.ReplayFile.Path != "review-input.json" || got.ReplayFile.Role != "review-input" {
+		t.Fatalf("unsafe review input record: %+v", got.ReplayFile)
+	}
+	digest := sha256.Sum256(want)
+	if got.ReplayFile.Bytes != int64(len(want)) || got.ReplayFile.SHA256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("review input hash mismatch: %+v", got.ReplayFile)
+	}
+	if retained := mustRead(t, filepath.Join(destination, got.ReplayFile.Path)); string(retained) != string(want) {
+		t.Fatalf("review input bytes changed: %q", retained)
+	}
+	var disk Manifest
+	if err := json.Unmarshal(mustRead(t, filepath.Join(destination, manifestName)), &disk); err != nil {
+		t.Fatal(err)
+	}
+	if disk.ReplayFile == nil || *disk.ReplayFile != *got.ReplayFile {
+		t.Fatalf("review input record was not retained: %+v", disk.ReplayFile)
+	}
+}
+
+func TestExportOmitsReviewInputWithoutReplay(t *testing.T) {
+	cache := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "evidence")
+	got, err := Export(cache, destination, Input{Report: map[string]bool{}}, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReplayFile != nil {
+		t.Fatalf("unexpected review input record: %+v", got.ReplayFile)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "review-input.json")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected review input file: %v", err)
+	}
+}
+
+func TestExportCountsReviewInputAgainstMetadataLimit(t *testing.T) {
+	cache := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "evidence")
+	report := map[string]string{"report": "retained"}
+	packet := &manifest.ReviewPacket{Schema: 1, ToolVersion: "v1.2.3", Mode: "bulk", Reason: strings.Repeat("x", 128)}
+	reportBytes, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayBytes, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(len(reportBytes) + len(replayBytes) - 1)
+	_, err = Export(cache, destination, Input{Report: report, Replay: packet}, Limits{
+		MaxFiles: 1, MaxFileBytes: 1, MaxTotalBytes: limit, MaxMetadataBytes: limit,
+	})
+	if err == nil || !strings.Contains(err.Error(), "review input exceed metadata limit") {
+		t.Fatalf("review input did not consume metadata budget: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(destination, manifestName)); !os.IsNotExist(statErr) {
+		t.Fatalf("failed export retained a manifest: %v", statErr)
+	}
+}
+
+func TestExportCountsCombinedReviewMetadata(t *testing.T) {
+	cache := t.TempDir()
+	packet := &manifest.ReviewPacket{Schema: 1, ToolVersion: "v1.2.3", Mode: "bulk"}
+	report := map[string]string{"report": "retained"}
+	reportBytes, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayBytes, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(len(reportBytes) + len(replayBytes) + 1)
+	destination := filepath.Join(t.TempDir(), "evidence")
+	_, err = Export(cache, destination, Input{Report: report, Replay: packet}, Limits{
+		MaxFiles: 1, MaxFileBytes: 1, MaxTotalBytes: limit, MaxMetadataBytes: limit,
+	})
+	if err == nil || !strings.Contains(err.Error(), "manifest exceed metadata limit") {
+		t.Fatalf("combined metadata budget accepted report, review input, and manifest: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(destination, manifestName)); !os.IsNotExist(statErr) {
+		t.Fatalf("metadata failure retained a manifest: %v", statErr)
+	}
+}
+
+func TestExportTotalIncludesReviewInput(t *testing.T) {
+	cache := t.TempDir()
+	packet := &manifest.ReviewPacket{Schema: 1, ToolVersion: "v1.2.3", Mode: "bulk", Reason: strings.Repeat("x", 64)}
+	report := map[string]string{"report": "retained"}
+	limits := Limits{MaxFiles: 1, MaxFileBytes: 1, MaxTotalBytes: 10000, MaxMetadataBytes: 9000}
+	destination := filepath.Join(t.TempDir(), "evidence")
+	if _, err := Export(cache, destination, Input{Report: report, Replay: packet}, limits); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, name := range []string{"report.json", "review-input.json", manifestName} {
+		info, err := os.Stat(filepath.Join(destination, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += info.Size()
+	}
+	if total > limits.MaxTotalBytes {
+		t.Fatalf("metadata bytes %d exceed total limit %d", total, limits.MaxTotalBytes)
+	}
+}
+
 func TestExportPrioritizesArchivesOverWorkspace(t *testing.T) {
 	cache := t.TempDir()
 	workspace := filepath.Join(cache, "workspace")
@@ -114,6 +244,117 @@ func TestExportPrioritizesArchivesOverWorkspace(t *testing.T) {
 	}
 	if len(manifest.Omissions) == 0 || manifest.Omissions[0].Reason != "file limit reached" {
 		t.Fatalf("missing explicit cap omission: %+v", manifest.Omissions)
+	}
+}
+
+func TestExportSanitizesCachedMetadata(t *testing.T) {
+	cache := t.TempDir()
+	workspace := filepath.Join(cache, "workspace")
+	sidecar := filepath.Join(cache, "package.meta.json")
+	mustWrite(t, sidecar, `{"url":"https://sidecar-user:sidecar-pass@registry.example/pkg","digest":"sha256-test"}`)
+	mustWrite(t, filepath.Join(workspace, "stats.json"), `{
+		"artifact":{
+			"sourceFrom":{"url":"https://source-user:source-pass@registry.example/from","digest":"from"},
+			"sourceTo":{"url":"https://to-user:to-pass@registry.example/to","digest":"to"},
+			"unavailable":[{"version":"2.0.0","kind":"denied","url":"https://unavailable-user:unavailable-pass@registry.example/to","artifactUrl":"https://artifact-user:artifact-pass@registry.example/to"}]
+		}
+	}`)
+	destination := filepath.Join(t.TempDir(), "evidence")
+	manifest, err := Export(cache, destination, Input{
+		Kind: "diff", Report: map[string]bool{},
+		Items: []Item{{Ref: "npm:example 1 -> 2", Workspace: workspace, Sources: []Source{{
+			Side: "to", MetaFile: sidecar,
+			Metadata: &stats.Source{URL: "https://manifest-user:manifest-pass@registry.example/to", Digest: "to"},
+			Unavailable: &stats.Unavailable{
+				Version: "2.0.0", Kind: "denied",
+				URL: "https://manifest-unavailable-user:manifest-unavailable-pass@registry.example/to",
+			},
+		}}}},
+	}, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := []string{
+		"sidecar-pass", "source-pass", "to-pass", "unavailable-pass", "artifact-pass",
+		"manifest-pass", "manifest-unavailable-pass",
+	}
+	metadataFiles := 0
+	for _, file := range manifest.Files {
+		if file.Role != "sidecar" && file.Role != "workspace" {
+			continue
+		}
+		metadataFiles++
+		if file.Transform != "structured-url-redaction" {
+			t.Fatalf("metadata transform missing: %+v", file)
+		}
+		retained := mustRead(t, filepath.Join(destination, filepath.FromSlash(file.Path)))
+		digest := sha256.Sum256(retained)
+		if file.Bytes != int64(len(retained)) || file.SHA256 != hex.EncodeToString(digest[:]) {
+			t.Fatalf("metadata digest does not describe retained bytes: %+v", file)
+		}
+		originalPath := sidecar
+		if file.Role == "workspace" {
+			originalPath = filepath.Join(workspace, "stats.json")
+		}
+		originalDigest := sha256.Sum256(mustRead(t, originalPath))
+		if file.OriginalSHA256 != hex.EncodeToString(originalDigest[:]) {
+			t.Fatalf("metadata original digest does not describe input bytes: %+v", file)
+		}
+		for _, secret := range secrets {
+			if strings.Contains(string(retained), secret) {
+				t.Fatalf("retained metadata contains URL credential %q: %s", secret, retained)
+			}
+		}
+	}
+	if metadataFiles != 2 {
+		t.Fatalf("sanitized metadata files = %d, want 2", metadataFiles)
+	}
+	retainedManifest := string(mustRead(t, filepath.Join(destination, manifestName)))
+	for _, secret := range secrets {
+		if strings.Contains(retainedManifest, secret) {
+			t.Fatalf("manifest contains URL credential %q", secret)
+		}
+	}
+}
+
+func TestExportOmitsInvalidOrOversizedMetadata(t *testing.T) {
+	cache := t.TempDir()
+	invalid := filepath.Join(cache, "invalid.meta.json")
+	oversized := filepath.Join(cache, "oversized.meta.json")
+	mustWrite(t, invalid, "not json")
+	mustWrite(t, oversized, `{"url":"https://registry.example/`+strings.Repeat("x", 128)+`","digest":"sha256-test"}`)
+	limits := Limits{MaxFiles: 4, MaxFileBytes: 64, MaxTotalBytes: 8192, MaxMetadataBytes: 4096}
+	manifest, err := Export(cache, filepath.Join(t.TempDir(), "evidence"), Input{
+		Report: map[string]bool{}, Items: []Item{{Sources: []Source{
+			{MetaFile: invalid}, {MetaFile: oversized},
+		}}},
+	}, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Files) != 0 {
+		t.Fatalf("invalid metadata was retained: %+v", manifest.Files)
+	}
+	if len(manifest.Omissions) != 2 ||
+		!strings.Contains(manifest.Omissions[0].Reason, "invalid metadata") ||
+		manifest.Omissions[1].Reason != "file size limit exceeded" {
+		t.Fatalf("metadata omissions = %+v", manifest.Omissions)
+	}
+}
+
+func TestExportRefusesMetadataOutsideCache(t *testing.T) {
+	cache := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.meta.json")
+	mustWrite(t, outside, `{"url":"https://user:pass@registry.example/pkg","digest":"sha256-test"}`)
+	manifest, err := Export(cache, filepath.Join(t.TempDir(), "evidence"), Input{
+		Report: map[string]bool{}, Items: []Item{{Sources: []Source{{MetaFile: outside}}}},
+	}, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Files) != 0 || len(manifest.Omissions) != 1 ||
+		!strings.Contains(manifest.Omissions[0].Reason, "outside cache root") {
+		t.Fatalf("outside metadata was retained: %+v", manifest)
 	}
 }
 

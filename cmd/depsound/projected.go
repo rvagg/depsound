@@ -55,8 +55,9 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 				spec: string(sp.Eco) + ":" + sp.Name, from: from, to: to,
 			}}, noOSV, provenanceUnavailableFallback, cooldown),
 		}
+		tr.SetCoverage()
 		if evidenceDir != "" {
-			if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr); err != nil {
+			if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr, nil); err != nil {
 				return err
 			}
 		}
@@ -76,7 +77,7 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 
 	var items []bulkItem
 	for _, c := range res.changed {
-		items = append(items, bulkItem{spec: string(sp.Eco) + ":" + c.Path, from: c.From, to: c.To})
+		items = append(items, itemForRef(string(sp.Eco), c))
 	}
 	fmt.Fprintf(os.Stderr, "depsound: %s projected: %d changed (incl. the bump), %d added, %d removed; analysing changes and added modules\n",
 		output.EscapeText(sp.Name), len(res.changed), len(res.added), len(res.removed))
@@ -92,9 +93,10 @@ func transitiveProjected(cacheDir, specStr, fromArg, toArg string, cooldown time
 	attributeCause(oldG.Root, oldG.Edges[oldG.Root], oldG.Edges, tr.Removed)
 	analyseAdded(cacheDir, string(sp.Eco), tr.Added, noOSV)
 	tr.Tree, tr.TreeNote = buildChurnTree([]string{newG.Root}, newG.Edges, res.changed, res.added)
+	tr.SetCoverage()
 
 	if evidenceDir != "" {
-		if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr); err != nil {
+		if err := exportEvidence(cacheDir, evidenceDir, "transitive", tr, nil); err != nil {
 			return err
 		}
 	}

@@ -1,13 +1,59 @@
 package stats
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/rvagg/depsound/internal/fetch"
 	"github.com/rvagg/depsound/internal/gitdiff"
 	"github.com/rvagg/depsound/internal/npmpkg"
 )
+
+func TestPublicSourceAndUnavailableSerialization(t *testing.T) {
+	raw := "https://user:SECRET@registry.example/pkg?token=TOKEN&keep=1"
+	malformed := "https://user:SECRET@registry.example/%zz?token=TOKEN"
+	report := struct {
+		Source      Source       `json:"source"`
+		Unavailable *Unavailable `json:"unavailable"`
+	}{
+		Source: Source{
+			URL: raw, Digest: "sha512-digest",
+			RegistryChecksum: &fetch.RegistryChecksum{
+				State: "lookup-failed", URL: malformed,
+				Error: `Get "` + malformed + `": connection refused`,
+			},
+		},
+		Unavailable: &Unavailable{
+			URL: raw, ArtifactURL: malformed,
+			Hint: `Get "` + raw + `": connection refused`,
+		},
+	}
+	b, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b); strings.Contains(got, "SECRET") || strings.Contains(got, "TOKEN") {
+		t.Fatalf("report leaked credentials: %s", got)
+	}
+	if !strings.Contains(string(b), "sha512-digest") || !strings.Contains(string(b), "connection refused") {
+		t.Fatalf("report lost public facts: %s", b)
+	}
+
+	var cached Source
+	if err := json.Unmarshal([]byte(`{"url":"https://user:SECRET@registry.example/pkg?token=TOKEN","digest":"sha512-digest"}`), &cached); err != nil {
+		t.Fatal(err)
+	}
+	b, err = json.Marshal(cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "SECRET") || strings.Contains(string(b), "TOKEN") {
+		t.Fatalf("cached source leaked credentials: %s", b)
+	}
+}
 
 func TestBuild(t *testing.T) {
 	dir := t.TempDir()

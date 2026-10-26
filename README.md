@@ -2,17 +2,17 @@
 
 Sound the depths of a dependency change.
 
-depsound is the **data layer for agent-driven dependency review**. Give it a change (a version bump, a new package, a lockfile diff, a GitHub PR) and it fetches the **published artifact** (what actually installs, not the source repo), diffs it, runs cheap risk heuristics, scans OSV and publish-provenance, and lays out organized facts plus a grep-able workspace for an agent to judge.
+depsound is the **data layer for agent-driven dependency review**. Give it a change (a version bump, a new package, a lockfile diff, a GitHub PR) and it fetches the **published artifact** (what actually installs, not the source repo), diffs it, runs cheap risk heuristics, scans OSV and publish provenance, then writes the facts and a grep-able workspace for an agent to inspect.
 
-It gathers; it does not verdict. The output is **built for, and tuned for, AI context ingestion**. Every report marks which signals are hard facts versus gameable heuristics, and states what it did **not** check, so an agent knows exactly how far to trust each one. "No flags" is a starting point, never an all-clear.
+depsound gathers facts; reviewers decide whether to accept a change. Its output distinguishes hard facts from heuristics an attacker can game, and records what it did **not** check, so an agent can judge how much weight to give each signal. If a report raises no flags, inspect the recorded coverage and evidence before treating the change as routine.
 
 ## Why
 
 Dependency volume and churn keep climbing, and CVEs with them. Static, heuristic gates barely function at this scale: block on every advisory or flagged heuristic and nothing ships; loosen them enough to move and you miss what matters. A fixed threshold can't tell a reachable RCE from noise.
 
-An agent with context can. The model is layered: depsound is the fast, dumb bottom, surfacing signal in agent-friendly form; the agent above it has tools and some judgement to turn that signal into an assessment; you sit at the top, deciding how much rope to give the agent and how much to gate yourself. The decision bubbles up to whoever you choose to hold it. depsound's job is only to put the facts on the table.
+An agent with context can make that distinction. depsound quickly gathers signals in a form an agent can use; the agent investigates and assesses them; you decide what to accept and what to gate. depsound's job is to put the facts on the table.
 
-The flow it's tuned for: the agent clears the easy **YES** upgrades, lays out the decision surface around the **MAYBE**s so you settle them fast, and is loud about the obvious **NO**s. depsound feeds that triage with facts, not verdicts.
+In that flow, the agent clears the easy **YES** upgrades, lays out the decision surface around the **MAYBE**s so you can settle them fast, and calls out the obvious **NO**s. depsound supplies the facts for that triage.
 
 ## What it gives you
 
@@ -31,9 +31,11 @@ If you have a copy of a missing Rust release, supply its `.crate` archive:
 depsound crates:arrayref 0.3.9 0.3.10 --to-artifact=/path/to/arrayref-0.3.10.crate
 ```
 
-Follow the report's drill-down commands to keep reviewing the same local archives. Archives are inspected as data, never executed.
+Follow the report's drill-down commands to continue reviewing the same local archives. Archives are inspected as data, never executed.
 
-To keep evidence before a release disappears, add `--evidence-dir=./review-evidence` to a diff, census, bulk or transitive command. Use a new directory outside the cache. The export keeps the report and bounded package bytes; `manifest.json` maps retained files and records omissions. Retained `.crate` archives work with the local-artifact flags above. Contents remain untrusted data and may include private package code.
+To retain evidence before a release disappears, add `--evidence-dir=./review-evidence` to a diff, census, bulk or transitive command. depsound writes the report and bounded package bytes there; `manifest.json` maps retained files and records omissions. Retained `.crate` archives work with the local-artifact flags above. Contents remain untrusted data and may include private package code.
+
+Bulk exports include replay input: use the same depsound version with `depsound bulk --file=./review-evidence/review-input.json`. Replaying it restores the collected input, but findings omitted from the export still need separate investigation. The original evidence remains available for that work. Known URL credentials are redacted from structured metadata, not from package archives, diffs or trees.
 
 ## Install
 
@@ -83,15 +85,18 @@ next steps:
 
 Ecosystems: `npm`, `go`, `crates`, `gha`. `--format=json` emits the full machine contract for any command.
 
-Lockfile reviews also catch changed download URLs, checksums and versioned npm
-links when the package version stays fixed (npm, pnpm and Cargo). These are
-declarations, not verified bytes: depsound does not fetch replacement URLs or
-open link targets. A mirror can be intentional; inspect both entries.
+Lockfile reviews retain version changes and additions even for mirrors or other
+unsupported sources. They also catch changed download URLs, checksums and npm
+links when the version stays fixed (npm, pnpm and Cargo). The report records
+these declarations and their locations. depsound does not fetch replacement URLs
+or link targets, so their bytes remain unverified. It can census a supported new
+registry target, while the old source remains unavailable for inspection. A
+mirror can be intentional; inspect both entries.
 
 ## Using it with an agent
 
-- **Cold, no setup.** Tell an agent: *"Using the depsound CLI, evaluate this dependency change: foojs 1.2.3 to 2.0.0."* It's self-documenting: `depsound help` lists the commands, `depsound guide` gives the threat model and how to read the output, and every report routes to the next command. An agent can drive it with no further instruction; it figures out the ecosystem and syntax itself.
-- **With a skill.** For a repeatable workflow, [`skills/`](skills/) has ready, self-contained skills (review a change, adopt a new package). Load one into a skill-aware agent, or curl and read it. Copy one as a template to write your own.
+- **Start with the CLI.** Tell an agent: *"Using the depsound CLI, evaluate this dependency change: foojs 1.2.3 to 2.0.0."* `depsound help` lists the commands, `depsound guide` explains the threat model and report format, and every report points to the next command. The agent can identify the ecosystem and command syntax from there.
+- **Use a skill for a repeatable workflow.** [`skills/`](skills/) has self-contained skills to review a change or adopt a new package. Load one into a skill-aware agent, or curl and read it. Copy one as a template for your own workflow.
 
 ## License
 

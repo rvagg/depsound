@@ -4,7 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
+
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 // Acquisition-failure kinds. The distinction matters: an ABSENT artifact
@@ -32,6 +36,14 @@ type AcquisitionFailure struct {
 	Hint         string `json:"hint,omitempty"`
 }
 
+// Public returns a copy safe to emit in reports.
+func (f AcquisitionFailure) Public() AcquisitionFailure {
+	f.Hint = redactRelatedURLs(f.Hint, f.URL, f.ArtifactURL)
+	f.URL = manifest.PublicURL(f.URL)
+	f.ArtifactURL = manifest.PublicURL(f.ArtifactURL)
+	return f
+}
+
 // UnavailableError is any acquisition failure that can survive as structured
 // report data while independent metadata and advisory lookups continue.
 type UnavailableError interface {
@@ -52,9 +64,10 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	msg := fmt.Sprintf("GET %s: %d %s", e.URL, e.Status, http.StatusText(e.Status))
-	if e.Hint != "" {
-		msg += " (" + e.Hint + ")"
+	failure := e.Unavailable()
+	msg := fmt.Sprintf("GET %s: %d %s", failure.URL, failure.Status, http.StatusText(failure.Status))
+	if failure.Hint != "" {
+		msg += " (" + failure.Hint + ")"
 	}
 	return msg
 }
@@ -83,7 +96,7 @@ func (e *HTTPError) Unavailable() AcquisitionFailure {
 	return AcquisitionFailure{
 		Kind: e.Kind(), Stage: e.Stage, URL: e.URL, ArtifactURL: e.ArtifactURL,
 		Status: e.Status, Reason: e.Reason, PolicyReason: e.PolicyReason, Hint: e.Hint,
-	}
+	}.Public()
 }
 
 // acquisitionError records a transport or parse failure where no HTTP error
@@ -93,7 +106,9 @@ type acquisitionError struct {
 	err error
 }
 
-func (e *acquisitionError) Error() string { return e.err.Error() }
+func (e *acquisitionError) Error() string {
+	return fmt.Sprintf("%s: %s", manifest.PublicURL(e.URL), transportHint(e.err, e.URL))
+}
 func (e *acquisitionError) Unwrap() error { return e.err }
 func (e *acquisitionError) Unavailable() AcquisitionFailure {
 	return e.AcquisitionFailure
@@ -101,8 +116,11 @@ func (e *acquisitionError) Unavailable() AcquisitionFailure {
 
 func failedAcquisition(stage, u string, status int, err error) error {
 	return &acquisitionError{
-		AcquisitionFailure: AcquisitionFailure{Kind: Transient, Stage: stage, URL: u, Status: status, Hint: err.Error()},
-		err:                err,
+		AcquisitionFailure: AcquisitionFailure{
+			Kind: Transient, Stage: stage, URL: u, Status: status,
+			Hint: transportHint(err, u),
+		}.Public(),
+		err: err,
 	}
 }
 
@@ -144,9 +162,26 @@ func (e *RegistryMissing) Unavailable() AcquisitionFailure {
 	return AcquisitionFailure{
 		Kind: Absent, Stage: "registry-index", URL: e.URL, ArtifactURL: e.ArtifactURL,
 		Status: e.Status, Reason: "version-absent", Hint: e.Hint,
-	}
+	}.Public()
 }
 
 func statusErrAt(stage, u string, status int, hint string) *HTTPError {
 	return &HTTPError{URL: u, Stage: stage, Status: status, Hint: hint}
+}
+
+func transportHint(err error, requestedURL string) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return redactRelatedURLs(urlErr.Err.Error(), requestedURL, urlErr.URL)
+	}
+	return redactRelatedURLs(err.Error(), requestedURL)
+}
+
+func redactRelatedURLs(value string, urls ...string) string {
+	for _, raw := range urls {
+		if raw != "" {
+			value = strings.ReplaceAll(value, raw, manifest.PublicURL(raw))
+		}
+	}
+	return value
 }

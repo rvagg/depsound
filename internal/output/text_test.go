@@ -296,3 +296,27 @@ func TestUnavailableCensusKeepsAdvisoriesAndRegistryHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestTextRedactsDirectReportURLs(t *testing.T) {
+	raw := "https://user:SECRET@registry.example/pkg?token=TOKEN&keep=1"
+	st := &stats.Stats{
+		Package: stats.PkgRef{Ecosystem: "crates", Name: "pkg", From: "1", To: "2"},
+		Artifact: stats.Artifact{
+			SourceTo: &stats.Source{RegistryChecksum: &fetch.RegistryChecksum{
+				State: "lookup-failed", URL: raw, Error: `Get "` + raw + `": connection refused`,
+			}},
+			Unavailable: []*stats.Unavailable{{URL: raw, ArtifactURL: raw}},
+		},
+	}
+	for medium, out := range map[string]string{
+		"text":     Text(st),
+		"markdown": Markdown([]BulkResult{{Ref: "crates:pkg 1 -> 2", Stats: st}}),
+	} {
+		if strings.Contains(out, "SECRET") || strings.Contains(out, "TOKEN") {
+			t.Fatalf("%s leaked credentials: %s", medium, out)
+		}
+		if !strings.Contains(out, "connection refused") {
+			t.Fatalf("%s lost transport reason: %s", medium, out)
+		}
+	}
+}

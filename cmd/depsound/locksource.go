@@ -75,11 +75,7 @@ func sortLockSources(sources []manifest.LockSource) {
 	})
 }
 
-func diffLockSources(old, niu []resolvedDep) []manifest.LockChange {
-	if len(old) == 0 || len(niu) == 0 {
-		return nil
-	}
-	a, b := lockSources(old), lockSources(niu)
+func diffLockSources(a, b map[lockIdentity][]manifest.LockSource) []manifest.LockChange {
 	var changes []manifest.LockChange
 	for key, from := range a {
 		to := b[key]
@@ -88,7 +84,8 @@ func diffLockSources(old, niu []resolvedDep) []manifest.LockChange {
 		}
 		sortLockSources(from)
 		sortLockSources(to)
-		changes = append(changes, manifest.LockChange{Name: key.name, Version: key.version, From: from, To: to})
+		changes = append(changes, manifest.LockChange{Kind: "source", Name: key.name, Version: key.version,
+			From: from, To: to, CredentialsChanged: manifest.CredentialsChanged(from, to)})
 	}
 	sort.Slice(changes, func(i, j int) bool {
 		if changes[i].Name != changes[j].Name {

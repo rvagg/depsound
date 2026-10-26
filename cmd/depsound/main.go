@@ -23,6 +23,7 @@ import (
 	"github.com/rvagg/depsound/internal/ghapkg"
 	"github.com/rvagg/depsound/internal/gitdiff"
 	"github.com/rvagg/depsound/internal/gopkg"
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/npmpkg"
 	"github.com/rvagg/depsound/internal/osv"
 	"github.com/rvagg/depsound/internal/output"
@@ -169,7 +170,7 @@ func localCrateKey(version_ string, meta fetch.Meta) string {
 
 func artifactSource(meta fetch.Meta) *stats.Source {
 	return &stats.Source{
-		URL: meta.URL, Digest: meta.Digest, Verification: meta.Verification,
+		URL: manifest.PublicURL(meta.URL), Digest: meta.Digest, Verification: meta.Verification,
 		RegistryChecksum: meta.RegistryChecksum,
 	}
 }
@@ -375,10 +376,9 @@ func analyzeWithArtifacts(cacheDir, specStr, fromArg, toArg string, cooldown tim
 	return &resolved{ws: ws, cacheRoot: c.Root, sp: sp, st: st, idx: idx}, nil
 }
 
-// buildResolution records a from/to arg that was a range or "latest" (not an
-// exact version), plus the to side's newer-satisfying ambiguity set. Returns
-// nil when both args were exact, so an ordinary diff carries no resolution
-// noise.
+// buildResolution records a from/to arg that was a range or "latest" rather
+// than an exact version, plus the to side's newer-satisfying ambiguity set.
+// It returns nil for two exact args, so ordinary diffs omit resolution metadata.
 func buildResolution(fromArg string, fromRes fetch.Resolved, toArg string, toRes fetch.Resolved) *stats.Resolution {
 	derived := func(arg string, r fetch.Resolved) bool { return r.Range != "" || arg == "latest" }
 	if !derived(fromArg, fromRes) && !derived(toArg, toRes) {
@@ -443,7 +443,7 @@ func diffCmd(args []string) error {
 			unavailableSides(r.st.Artifact.Unavailable), format)
 	}
 	if evidenceDir != "" {
-		if err := exportEvidence(r.cacheRoot, evidenceDir, "diff", r.st); err != nil {
+		if err := exportEvidence(r.cacheRoot, evidenceDir, "diff", r.st, nil); err != nil {
 			return err
 		}
 	}
@@ -664,7 +664,7 @@ func materialize(c *cache.Cache, sp spec.Spec, from, to, ws string, ghaPins map[
 		}
 		arts[v] = dest
 		if m := fetch.ReadMeta(dest); m != nil {
-			src := &stats.Source{URL: m.URL, Digest: m.Digest, Verification: m.Verification}
+			src := &stats.Source{URL: manifest.PublicURL(m.URL), Digest: m.Digest, Verification: m.Verification}
 			src.RefKind = ghaPins[v].kind // empty for non-gha; the pin tier of this ref, freshly resolved
 			srcs[v] = src
 		}
@@ -858,11 +858,13 @@ func reportUnavailable(err error, version_, side string) *stats.Unavailable {
 		return nil
 	}
 	failure := unavailable.Unavailable()
-	return &stats.Unavailable{
+	report := stats.Unavailable{
 		Side: side, Version: version_, Kind: failure.Kind, Stage: failure.Stage,
-		Status: failure.Status, URL: failure.URL, ArtifactURL: failure.ArtifactURL,
+		Status: failure.Status, URL: manifest.PublicURL(failure.URL), ArtifactURL: manifest.PublicURL(failure.ArtifactURL),
 		Reason: failure.Reason, PolicyReason: failure.PolicyReason, Hint: failure.Hint,
 	}
+	public := report.Public()
+	return &public
 }
 
 func unavailableSides(failures []*stats.Unavailable) string {

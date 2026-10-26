@@ -413,9 +413,8 @@ func readCache(cacheRoot, osvEco, name, version string) ([]Vuln, time.Time, bool
 	if time.Since(env.FetchedAt) > cacheTTL {
 		return nil, time.Time{}, false
 	}
-	// an entry written before Kind existed carries none; the ids it stored are
-	// the ground truth, so classify on read rather than let a cache age decide
-	// whether a malware record reads as one
+	// Older cache entries lack Kind. Classify the stored IDs when reading them
+	// so known malware records are still labelled correctly.
 	for i := range env.Vulns {
 		if env.Vulns[i].Kind == "" {
 			env.Vulns[i].Kind = kindOf(env.Vulns[i].ID, env.Vulns[i].Aliases, nil)

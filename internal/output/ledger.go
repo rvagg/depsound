@@ -133,6 +133,7 @@ func signalDetail(sig Signal, escape func(string) string) string {
 }
 
 func checksumEvidence(checksum *fetch.RegistryChecksum, side string) []EvidenceField {
+	checksum = checksumPublic(checksum)
 	evidence := make([]EvidenceField, 0, 5)
 	if side != "" {
 		evidence = append(evidence, EvidenceField{Label: "endpoint", Value: side})
@@ -148,6 +149,16 @@ func checksumEvidence(checksum *fetch.RegistryChecksum, side string) []EvidenceF
 		evidence = append(evidence, EvidenceField{Label: "error", Value: checksum.Error})
 	}
 	return evidence
+}
+
+func checksumPublic(checksum *fetch.RegistryChecksum) *fetch.RegistryChecksum {
+	public := checksum.Public()
+	return &public
+}
+
+func unavailablePublic(unavailable *Unavailable) *Unavailable {
+	public := unavailable.Public()
+	return &public
 }
 
 // Ledger is the single derived signal set for one dependency change. Inclusion
@@ -409,11 +420,11 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		if p.Yanked {
 			shapes = append(shapes, "version yanked")
 		}
-		// a claimed-vs-source repo difference on its own says nothing about
-		// publisher identity, and has ordinary causes (a rename, a redirect, a
-		// monorepo path). It gets its own bucket rather than the takeover
-		// heading; the attested-source mismatch above is the sharp one, because
-		// there a VALID attestation names a repo the package does not claim.
+		// A difference between the claimed and source repositories does not
+		// identify the publisher. Renames, redirects and monorepo paths can all
+		// cause it. Keep it separate from the takeover heading. An attested
+		// source mismatch is sharper because a valid attestation names a
+		// repository the package does not claim.
 		if p.RepoMismatch {
 			add(CodeRepoMismatch, KindFact, LensSecurity, weightWeigh,
 				"the package's claimed repo differs from its registry source repo",
@@ -471,10 +482,10 @@ func Derive(ref string, s *stats.Stats) Ledger {
 				bytes(s.Artifact.UnreviewableFrom), bytes(s.Artifact.BytesFrom), pctOf(s.Artifact.UnreviewableFrom, s.Artifact.BytesFrom)))
 	}
 
-	// a range endpoint (a declaration-fallback line, or a range arg) resolves
-	// to one concrete version at review time; the note scopes trust exactly
-	// there: the review covered that version, a consumer may install another
-	// satisfying one, and declaration-level views are direct-deps-only
+	// A range endpoint (a declaration fallback or range argument) resolves to
+	// one concrete version at review time. The review covers that version; a
+	// consumer may install another satisfying version. Declaration-level views
+	// cover direct dependencies only.
 	if r := s.Resolution; r != nil && (r.FromSpec != "" || r.ToSpec != "") {
 		spec := r.ToSpec
 		if spec == "" {
@@ -482,7 +493,7 @@ func Derive(ref string, s *stats.Stats) Ledger {
 		}
 		add(CodeRangeResolved, KindNote, LensCoverage, weightPositive,
 			"endpoints resolved from a range at review time",
-			fmt.Sprintf("%q reviewed at one satisfying version; a consumer may install another, and a declaration-level change carries no transitive resolution", spec))
+			fmt.Sprintf("%q reviewed at one satisfying version; a consumer may install another; declaration-level review covers direct dependencies only", spec))
 	}
 
 	// a provenance source that failed is lost coverage, exactly like a failed
@@ -614,10 +625,8 @@ func derivePinDelta(add func(Code, SignalKind, Lens, int, string, string), pins 
 }
 
 // looksExactRelease reports whether a gha ref is shaped like an exact release
-// tag (vX.Y.Z), which convention treats as pointing at one release forever, as
-// opposed to a floating major/minor tag (v4, v4.2) or a branch, which move
-// routinely. Shape is the only distinction available: a tag carries no
-// declared mutability policy.
+// tag (vX.Y.Z). The ref's shape is all we have: tags do not declare whether
+// they are mutable.
 func looksExactRelease(ref string) bool {
 	parts := strings.Split(strings.TrimPrefix(ref, "v"), ".")
 	for _, part := range parts {
@@ -792,8 +801,8 @@ func DeriveBenign(ref, note string) Ledger {
 	}}}
 }
 
-// DeriveRedirect is the FACT-grade flag that a dependency is served from a
-// non-registry source; it needs no fetch, so it carries no other analysis.
+// DeriveRedirect is the FACT-grade flag for a dependency served from a
+// non-registry source. It records the redirect from declaration data alone.
 func DeriveRedirect(ref, target string) Ledger {
 	return Ledger{Ref: ref, Signals: []Signal{{
 		Code: CodeRedirect, Kind: KindFact, Lens: LensSecurity, Weight: weightLook,
@@ -801,24 +810,85 @@ func DeriveRedirect(ref, target string) Ledger {
 	}}}
 }
 
-// DeriveLockChange records a declared source or integrity change for a package
-// whose version did not move. It neither fetches nor verifies package bytes.
+// DeriveBulkResult combines declaration evidence with any exact registry
+// target evidence. A source-only baseline is never treated as a diff endpoint.
+func DeriveBulkResult(r BulkResult) Ledger {
+	l := Ledger{Ref: r.Ref}
+	add := func(part Ledger) {
+		l.Signals = append(l.Signals, part.Signals...)
+	}
+	if r.LockChange != nil {
+		add(DeriveLockChange(r.Ref, r.LockChange))
+	}
+	if r.Census != nil {
+		target := DeriveCensus(r.Ref, r.Census)
+		if r.LockChange != nil {
+			for i := range target.Signals {
+				if target.Signals[i].Code == CodeCensusNew {
+					target.Signals[i].Title = fmt.Sprintf(
+						"canonical registry target inspected: %s file(s); source-only baseline not inspected",
+						commas(r.Census.Files))
+				}
+			}
+		}
+		add(target)
+	}
+	if r.Stats != nil {
+		add(Derive(r.Ref, r.Stats))
+	}
+	if r.Unavailable != nil {
+		add(DeriveUnavailable(r.Ref, r.Unavailable))
+	}
+	if r.Err != "" && r.Stats == nil && r.Census == nil {
+		add(DeriveFailure(r.Ref, r.Err))
+	}
+	sortSignals(l.Signals)
+	return l
+}
+
+// DeriveLockChange records declared lockfile metadata without fetching or
+// verifying package bytes.
 func DeriveLockChange(ref string, change *manifest.LockChange) Ledger {
-	evidence := make([]EvidenceField, 0, 4*(max(1, len(change.From))+max(1, len(change.To)))+len(change.Files))
+	evidence := make([]EvidenceField, 0, 4*(max(1, len(change.From))+max(1, len(change.To)))+len(change.Files)+3)
 	for _, file := range change.Files {
 		evidence = append(evidence, EvidenceField{Label: "lockfile", Value: file})
 	}
+	if change.Version != "" {
+		evidence = append(evidence, EvidenceField{Label: "version", Value: change.Version})
+	}
+	if change.FromVersion != "" {
+		evidence = append(evidence, EvidenceField{Label: "from version", Value: change.FromVersion})
+	}
+	if change.ToVersion != "" {
+		evidence = append(evidence, EvidenceField{Label: "to version", Value: change.ToVersion})
+	}
+	if change.CredentialsChanged {
+		evidence = append(evidence, EvidenceField{Label: "declared credentials", Value: "changed (redacted)"})
+	}
+	absent := func(side string) bool {
+		switch change.Kind {
+		case "added":
+			return side == "from"
+		case "removed":
+			return side == "to"
+		}
+		return false
+	}
 	add := func(side string, sources []manifest.LockSource) {
 		if len(sources) == 0 {
+			value := "unknown"
+			if absent(side) {
+				value = "absent"
+			}
 			evidence = append(evidence,
-				EvidenceField{Label: side + " location", Value: "unknown"},
-				EvidenceField{Label: side + " resolved URL", Value: "unknown"},
-				EvidenceField{Label: side + " host", Value: "unknown"},
-				EvidenceField{Label: side + " integrity", Value: "unknown"})
+				EvidenceField{Label: side + " location", Value: value},
+				EvidenceField{Label: side + " resolved URL", Value: value},
+				EvidenceField{Label: side + " host", Value: value},
+				EvidenceField{Label: side + " integrity", Value: value})
 			return
 		}
 		for _, source := range sources {
-			location, resolved, host, integrity := source.Location, source.Resolved, source.Host, source.Integrity
+			location, resolved, host, integrity := source.PublicLocation(), source.PublicResolved(), source.PublicHost(), source.Integrity
 			locationLabel := side + " location"
 			if source.Link {
 				locationLabel += " (link)"
@@ -844,12 +914,58 @@ func DeriveLockChange(ref string, change *manifest.LockChange) Ledger {
 	}
 	add("from", change.From)
 	add("to", change.To)
+	title, detail := "declared lockfile source or integrity changed; package content was not fetched or scanned",
+		"inspect both declarations and confirm the intended registry, mirror or local link"
+	switch change.Kind {
+	case "version":
+		title = "declared lockfile version changed; package content was not fetched or scanned"
+		detail = "inspect the declared version movement and acquisition metadata before using a registry-only review"
+	case "added":
+		title = "declared dependency added; package content was not fetched or scanned"
+		detail = "inspect the added declaration and acquisition metadata before adopting it"
+	case "removed":
+		title = "declared dependency removed; package content was not fetched or scanned"
+		detail = "inspect the removed declaration and acquisition metadata"
+	}
+	if change.ToRegistry {
+		title = "canonical registry target; old source-only baseline contents not inspected"
+		detail = "the target census, where it completed, is the only content inspected; this is not a content diff"
+	}
+	kind, lens, weight := KindDegradation, LensCoverage, weightLook
+	if change.Kind == "" || change.Kind == "source" || change.CredentialsChanged || lockOriginsChanged(change) {
+		kind, lens = KindFact, LensSecurity
+	}
 	return Ledger{Ref: ref, Signals: []Signal{{
-		Code: CodeLockSource, Kind: KindFact, Lens: LensSecurity, Weight: weightLook,
-		Title:    "declared lockfile source or integrity changed; package content was not fetched or scanned",
-		Detail:   "inspect both declarations and confirm the intended registry, mirror or local link",
-		Evidence: evidence,
+		Code: CodeLockSource, Kind: kind, Lens: lens, Weight: weight,
+		Title: title, Detail: detail, Evidence: evidence,
 	}}}
+}
+
+func lockOriginsChanged(change *manifest.LockChange) bool {
+	if len(change.From) == 0 || len(change.To) == 0 {
+		return false
+	}
+	type origin struct {
+		host string
+		link bool
+	}
+	seen := make(map[origin]bool, len(change.From))
+	for _, source := range change.From {
+		seen[origin{source.PublicHost(), source.Link}] = false
+	}
+	for _, source := range change.To {
+		key := origin{source.PublicHost(), source.Link}
+		if _, ok := seen[key]; !ok {
+			return true
+		}
+		seen[key] = true
+	}
+	for _, matched := range seen {
+		if !matched {
+			return true
+		}
+	}
+	return false
 }
 
 // DeriveFailure records a dependency that could not be analysed as a
@@ -868,6 +984,7 @@ type Unavailable = stats.Unavailable
 // DeriveUnavailable turns an acquisition failure into a signal. A metadata
 // absence is a scoped fact; denied and transient acquisition are degradations.
 func DeriveUnavailable(ref string, u *Unavailable) Ledger {
+	u = unavailablePublic(u)
 	evidence := make([]EvidenceField, 0, 8)
 	if u.Side != "" || u.Version != "" {
 		evidence = append(evidence, EvidenceField{Label: "endpoint", Value: strings.TrimSpace(u.Side + " " + u.Version)})

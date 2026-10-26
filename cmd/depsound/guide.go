@@ -30,16 +30,16 @@ navigation only; attackers can game them: file classification
 NEVER base a security decision on a heuristic; read the data.
 
 == The coverage boundary (why every report ends in one) ==
-depsound is triage, not a verdict. Each report states checked and NOT checked,
+depsound helps you triage a change. Each report states checked and NOT checked,
 then routes each gap to a command (or "manual, no pathway").
-Quiet means "no cheap signal fired", not "safe". Silence is not safety.
-depsound does not check: whether YOUR code reaches the change (reachability),
-what it does at runtime (semantics), your test coverage, or (mostly) publish
-provenance. Those gaps are yours to close.
+A quiet report means no cheap signal fired. It does not establish that the
+dependency is safe. depsound does not check: whether YOUR code reaches the
+change (reachability), what it does at runtime (semantics), your test coverage,
+or (mostly) publish provenance. Those gaps are yours to close.
 
 == OSV is a backward-looking known-CVE scan ==
-"No advisories" means no KNOWN CVE; it says nothing about novel or injected
-malicious code (which has no advisory by construction). Advisories FIXED by an
+OSV reports known advisory records, including CVEs. Inspect the code for novel
+or injected malicious code, which may have no advisory. Advisories FIXED by an
 upgrade are an argument FOR it; STILL-PRESENT or INTRODUCED ones need you to
 judge relevance to your usage.
 

@@ -36,13 +36,12 @@ func ParsePnpmLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 	}
 	for originalKey, p := range lock.Packages {
 		key := pnpmKey(originalKey)
-		at := strings.LastIndexByte(key, '@')
-		if at <= 0 { // no version, or a bare @scope with no trailing version
-			continue
+		if alias := strings.Index(key, "@npm:"); alias > 0 {
+			key = key[alias+len("@npm:"):]
 		}
-		name, version := key[:at], key[at+1:]
-		if alias := strings.Index(name, "@npm:"); alias >= 0 {
-			name = name[alias+len("@npm:"):]
+		name, version, ok := pnpmIdentity(key)
+		if !ok {
+			continue
 		}
 		// Registry deps carry a semver version + integrity; git/tarball deps
 		// have a url-ish version or a non-registry resolution, not fetchable
@@ -52,11 +51,15 @@ func ParsePnpmLock(b []byte) (deps []LockedDep, nonRegistry int, err error) {
 		if nonRegistryEntry {
 			nonRegistry++
 		}
+		resolved := p.Resolution.Tarball
+		if resolved == "" && strings.Contains(version, "://") {
+			resolved = version
+		}
 		deps = append(deps, LockedDep{
 			Name:        name,
-			Version:     version,
+			Version:     manifest.PublicLocator(version),
 			NonRegistry: nonRegistryEntry,
-			Source:      manifest.NewLockSource(originalKey, p.Resolution.Tarball, p.Resolution.Integrity),
+			Source:      manifest.NewLockSource(originalKey, resolved, p.Resolution.Integrity),
 		})
 	}
 	sort.Slice(deps, func(i, j int) bool {
@@ -127,13 +130,32 @@ func PnpmLockGraph(b []byte) (roots []string, edges map[string][]string, err err
 // whole subtree under it.
 func pnpmID(name, version string) (string, bool) {
 	version = pnpmKey(strings.TrimPrefix(version, "npm:"))
-	if at := strings.LastIndexByte(version, '@'); at > 0 {
-		name, version = version[:at], version[at+1:]
+	if strings.Contains(version, ":") {
+		return "", false
+	}
+	if realName, realVersion, ok := pnpmIdentity(version); ok {
+		name, version = realName, realVersion
 	}
 	if version == "" || version[0] < '0' || version[0] > '9' {
 		return "", false
 	}
 	return name + "@" + version, true
+}
+
+func pnpmIdentity(key string) (name, version string, ok bool) {
+	start := 0
+	if strings.HasPrefix(key, "@") {
+		start = 1
+	}
+	at := strings.IndexByte(key[start:], '@')
+	if at < 0 {
+		return "", "", false
+	}
+	at += start
+	if at == 0 {
+		return "", "", false
+	}
+	return key[:at], key[at+1:], true
 }
 
 // pnpmKey drops the peer-resolution suffix a key or version can carry, so

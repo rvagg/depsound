@@ -87,6 +87,6 @@ func TestPackageLockGraphRootDevDeps(t *testing.T) {
 		t.Errorf("typescript edges = %v", got)
 	}
 	if got := edges["inner@2.0.0"]; len(got) != 0 {
-		t.Errorf("transitive dev deps must carry no edge, got %v", got)
+		t.Errorf("transitive dev dependencies added unexpected graph edges: %v", got)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rvagg/depsound/internal/manifest"
 	"github.com/rvagg/depsound/internal/version"
 )
 
@@ -100,6 +101,18 @@ type RegistryChecksum struct {
 	Error      string `json:"error,omitempty"`
 }
 
+// Public returns a copy suitable for reports and persisted sidecars.
+func (c RegistryChecksum) Public() RegistryChecksum {
+	c.Error = redactRelatedURLs(c.Error, c.URL)
+	c.URL = manifest.PublicURL(c.URL)
+	return c
+}
+
+func (c RegistryChecksum) MarshalJSON() ([]byte, error) {
+	type registryChecksum RegistryChecksum
+	return json.Marshal(registryChecksum(c.Public()))
+}
+
 // Meta records an artifact's source and integrity. Registry fetches persist
 // it in sidecars; local imports return it with their immutable byte path.
 // A GitHub Actions pin tier (sha|tag|branch) deliberately does not live here:
@@ -112,6 +125,21 @@ type Meta struct {
 	Digest           string            `json:"digest"`
 	Verification     string            `json:"verification,omitempty"`
 	RegistryChecksum *RegistryChecksum `json:"registryChecksum,omitempty"`
+}
+
+// Public returns a copy suitable for reports and persisted sidecars.
+func (m Meta) Public() Meta {
+	m.URL = manifest.PublicURL(m.URL)
+	if m.RegistryChecksum != nil {
+		checksum := m.RegistryChecksum.Public()
+		m.RegistryChecksum = &checksum
+	}
+	return m
+}
+
+func (m Meta) MarshalJSON() ([]byte, error) {
+	type meta Meta
+	return json.Marshal(meta(m.Public()))
 }
 
 func MetaPath(artifactPath string) string { return artifactPath + ".meta.json" }

@@ -387,23 +387,20 @@ func writeSecurity(w func(string, ...any), sec osv.Assessment) {
 	}
 	total := len(sec.FixedByUpgrade) + len(sec.StillPresent) + len(sec.Introduced)
 	if total == 0 {
-		// the false-security hotspot: an empty result must not read green.
-		// OSV is backward-looking, so "no advisories" is silent on exactly
-		// the novel/injected-code case an attacker relies on
+		// OSV lists reported advisories. New attacks may not have a record yet.
 		w("%s, %s: none for either version", cveScanLabel, sec.FetchedAt)
-		w("  (reported records only; says nothing about novel or unreported code)")
+		w("  (OSV lists reported advisories; inspect the code for new or unreported attacks)")
 		return
 	}
 	w("%s, %s:", cveScanLabel, sec.FetchedAt)
 	writeVulns(w, "fixed by this upgrade", sec.FixedByUpgrade)
 	writeVulns(w, "still present after upgrade", sec.StillPresent)
 	writeVulns(w, "introduced by this upgrade", sec.Introduced)
-	w("  (leads, not a gate; confirm relevance to your usage. reported records only, silent on novel or unreported code)")
+	w("  (check each advisory against your usage; inspect the code for attacks that have not been reported)")
 }
 
-// vulnClass marks a malicious-package record so it cannot be read as an
-// ordinary vulnerability in a mixed list. Vulnerabilities carry no prefix:
-// they are the common case and do not need one.
+// vulnClass labels malicious-package records separately from vulnerability
+// records so readers can distinguish incident response from patch advice.
 func vulnClass(v osv.Vuln) string {
 	if v.Malicious() {
 		return "[malware] "

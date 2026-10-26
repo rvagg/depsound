@@ -371,7 +371,7 @@ func writeRegistryChecksum(w func(string, ...any), side string, source *stats.So
 	if source == nil || source.RegistryChecksum == nil {
 		return
 	}
-	checksum := source.RegistryChecksum
+	checksum := checksumPublic(source.RegistryChecksum)
 	prefix := "registry checksum"
 	if side != "" {
 		prefix += " (" + side + ")"
@@ -667,7 +667,7 @@ func writeSubtreeOSV(w func(string, ...any), c *Census) {
 	w("")
 	if len(affected) == 0 {
 		w("OSV across the subtree (backward-looking): 0 of %d deps affected", len(c.Subtree))
-		w("  (reported records only; says nothing about novel or unreported code)")
+		w("  (covers reported records; inspect code for novel or unreported threats)")
 		return
 	}
 	w("OSV subtree scan: %d of %d deps carry known advisories:", len(affected), len(c.Subtree))
@@ -696,7 +696,7 @@ func writeRootOSV(w func(string, ...any), c *Census) {
 		}
 	} else if len(c.Vulns) == 0 {
 		w("OSV known-advisory scan (backward-looking), %s: none for this version", c.OSVFetchedAt)
-		w("  (reported records only; says nothing about novel or unreported code)")
+		w("  (covers reported records; inspect code for novel or unreported threats)")
 	} else {
 		w("OSV known-advisory scan (backward-looking), %s: %d for this version:", c.OSVFetchedAt, len(c.Vulns))
 		for _, v := range c.Vulns {
@@ -709,7 +709,7 @@ func writeRootOSV(w func(string, ...any), c *Census) {
 			}
 			w("%s", line)
 		}
-		w("  (reported records only; the scan says nothing about novel or unreported code)")
+		w("  (covers reported records; inspect code for novel or unreported threats)")
 	}
 }
 

@@ -15,13 +15,25 @@ type ModuleRef struct {
 	From     string `json:"from,omitempty"`
 	To       string `json:"to,omitempty"`
 	Indirect bool   `json:"indirect"`
-	// Via is what pulls this module in (a parent id, "+N more" when several),
-	// so churn reads causally even where the tree is suppressed. Set only
-	// where the source carries edges; empty is "not known", never "no parent".
+	// Via identifies the parent that pulls this module in ("+N more" for several).
+	// It is populated when graph edges are available. An empty value means the
+	// parent was not determined.
 	Via string `json:"via,omitempty"`
-	// Analysis is the full census of an added node. Removed nodes have no
-	// artifact left in the new graph and therefore no analysis.
+	// Analysis is the full census of an added node. Removed nodes are absent
+	// from the new graph and their Analysis field is unset.
 	Analysis *BulkResult `json:"analysis,omitempty"`
+	// Declared preserves metadata for a node whose acquisition cannot be
+	// analysed as a registry artifact.
+	Declared *manifest.LockChange `json:"declared,omitempty"`
+}
+
+// TransitiveCoverage records the inventory and analysis boundary for machine
+// consumers. Uninspected counts metadata-only rows, never parser workspaces.
+type TransitiveCoverage struct {
+	Checked              []string `json:"checked"`
+	NotChecked           []string `json:"notChecked"`
+	Uninspected          int      `json:"uninspected"`
+	UninspectedBaselines int      `json:"uninspectedBaselines,omitempty"`
 }
 
 // TransitiveResult is the whole change set a bump drags in: the analysed
@@ -35,6 +47,7 @@ type TransitiveResult struct {
 	LockChanges []manifest.LockChange `json:"lockChanges,omitempty"`
 	Added       []ModuleRef           `json:"added"`
 	Removed     []ModuleRef           `json:"removed"`
+	Coverage    TransitiveCoverage    `json:"coverage"`
 	// Projected names the package whose subtree was resolved (deps.dev) rather
 	// than diffed from a lockfile pair: set only in the no-lockfile mode, and
 	// the renderer scopes trust on it.
@@ -76,30 +89,31 @@ func Transitive(t TransitiveResult) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
+	sourceFacts := t.sourceFacts()
 	switch {
 	case t.ProjectionGap != "":
 		w("depsound transitive %s: subtree projection unavailable.", t.label())
-		w("  %d version-change(s), %d source/integrity change(s), %d added, %d removed retained from available evidence.",
-			len(t.Changed), len(t.LockChanges), len(t.Added), len(t.Removed))
+		w("  %d version-change(s), %s, %d added, %d removed retained from available evidence.",
+			len(t.Changed), sourceFacts, len(t.Added), len(t.Removed))
 		w("  deps.dev did not supply both endpoint graphs: %s", EscapeText(t.ProjectionGap))
 		w("  the root bump is still analysed below; no transitive additions/removals are claimed.")
 	case t.Projected != "":
-		w("depsound transitive %s: %d version-change(s), %d source/integrity change(s), %d added, %d removed.",
-			t.label(), len(t.Changed), len(t.LockChanges), len(t.Added), len(t.Removed))
+		w("depsound transitive %s: %d version-change(s), %s, %d added, %d removed.",
+			t.label(), len(t.Changed), sourceFacts, len(t.Added), len(t.Removed))
 		w("  %s's own tree at each endpoint, resolved live by deps.dev in isolation:", EscapeText(t.Projected))
 		w("  an upper bound on what it adds to you (your tree may already carry some, and")
 		w("  optional/platform-conditional deps are counted whole), and not reproducible")
 		w("  the way a diff is. For your actual tree, generate a lockfile per endpoint")
 		w("  (resolution only, no package code runs) -> depsound guide, \"No lockfile?\".")
 	case t.Flat:
-		w("depsound transitive %s: %d version-change(s), %d source/integrity change(s), %d added, %d removed.",
-			t.label(), len(t.Changed), len(t.LockChanges), len(t.Added), len(t.Removed))
+		w("depsound transitive %s: %d version-change(s), %s, %d added, %d removed.",
+			t.label(), len(t.Changed), sourceFacts, len(t.Added), len(t.Removed))
 		w("  This is the whole resolved set the bump moves (from the lockfile).")
 	default:
 		w("depsound transitive %s: %d module version-change(s) (%d direct, %d indirect),",
 			t.label(), len(t.Changed), t.DirectChanged, t.IndirectChanged)
-		w("  %d source/integrity change(s), %d added, %d removed. This is the whole subtree the bump moves, direct and",
-			len(t.LockChanges), len(t.Added), len(t.Removed))
+		w("  %s, %d added, %d removed. This is the whole subtree the bump moves, direct and",
+			sourceFacts, len(t.Added), len(t.Removed))
 		w("  indirect (from go.mod incl. // indirect; go.sum is fuller with test-only).")
 	}
 
@@ -110,13 +124,17 @@ func Transitive(t TransitiveResult) string {
 	}
 
 	if len(t.Added) > 0 {
-		where := "added to your tree"
+		label := "added to your tree"
 		if t.Projected != "" {
-			where = "added under " + EscapeText(t.Projected)
+			label = "added under " + EscapeText(t.Projected)
 		}
-		w("")
-		w("%s (%d), new code; each node was censused at its resolved version:",
-			where, len(t.Added))
+		if t.hasDeclared(t.Added) {
+			w("%s (%d); registry-supported nodes were censused, metadata-only nodes were not:",
+				label, len(t.Added))
+		} else {
+			w("%s (%d), new code; each node was censused at its resolved version:",
+				label, len(t.Added))
+		}
 		t.writeGrouped(w, t.Added, true)
 	}
 	if len(t.Removed) > 0 {
@@ -129,21 +147,28 @@ func Transitive(t TransitiveResult) string {
 		t.writeGrouped(w, t.Removed, false)
 	}
 
-	if len(t.Changed) == 0 && len(t.LockChanges) == 0 {
+	if len(t.Changed) == 0 && t.metadataOnlyRows() == 0 {
 		w("")
 		w("no version or source/integrity changes to analyse (only additions/removals above).")
 	}
-	results := make([]BulkResult, 0, len(t.Changed)+len(t.LockChanges))
+	results := make([]BulkResult, 0, len(t.Changed)+len(t.LockChanges)+len(t.Added)+len(t.Removed))
 	results = append(results, t.Changed...)
 	for i := range t.LockChanges {
 		change := &t.LockChanges[i]
 		results = append(results, BulkResult{
-			Ref:        change.Ecosystem + ":" + change.Name + " " + change.Version,
+			Ref:        change.Ref(),
 			LockChange: change,
 		})
 	}
+	for _, refs := range [][]ModuleRef{t.Added, t.Removed} {
+		for _, ref := range refs {
+			if ref.Declared != nil {
+				results = append(results, BulkResult{Ref: ref.Declared.Ref(), LockChange: ref.Declared})
+			}
+		}
+	}
 	w("")
-	writeRouter(w, results, true, t.Added)
+	writeRouter(w, results, true, t.Added, t.Removed)
 	return b.String()
 }
 
@@ -159,6 +184,115 @@ func (t TransitiveResult) label() string {
 		return t.Kind + " (" + t.Ecosystem + " packages)"
 	}
 	return t.Ecosystem
+}
+
+func (t TransitiveResult) sourceFacts() string {
+	if t.Projected != "" || t.ProjectionGap != "" ||
+		(t.Kind != "npm" && t.Kind != "pnpm" && t.Kind != "crates") {
+		return "source/integrity metadata not collected"
+	}
+	source := t.sourceChangeCount()
+	other := t.metadataOnlyRows() - source
+	if other == 0 {
+		return fmt.Sprintf("%d source/integrity change(s)", source)
+	}
+	return fmt.Sprintf("%d source/integrity change(s), %d metadata-only version/add/remove change(s)", source, other)
+}
+
+func (t TransitiveResult) sourceChangeCount() int {
+	n := 0
+	count := func(change *manifest.LockChange) {
+		if change != nil && (change.Kind == "" || change.Kind == "source") {
+			n++
+		}
+	}
+	for i := range t.LockChanges {
+		count(&t.LockChanges[i])
+	}
+	for _, result := range t.Changed {
+		count(result.LockChange)
+	}
+	for _, refs := range [][]ModuleRef{t.Added, t.Removed} {
+		for _, ref := range refs {
+			count(ref.Declared)
+		}
+	}
+	return n
+}
+
+func (t TransitiveResult) hasDeclared(refs []ModuleRef) bool {
+	for _, ref := range refs {
+		if ref.Declared != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// SetCoverage derives the machine boundary after all metadata-only rows have
+// been attached. Call it immediately before emitting a TransitiveResult.
+func (t *TransitiveResult) SetCoverage() {
+	uninspected := t.metadataOnlyRows()
+	sourceOnlyBaselines := 0
+	artifactReports := 0
+	count := func(result *BulkResult) {
+		if result == nil {
+			return
+		}
+		if result.LockChange != nil && result.LockChange.ToRegistry {
+			sourceOnlyBaselines++
+		}
+		if result.Stats != nil && len(result.Stats.Artifact.Unavailable) == 0 {
+			artifactReports++
+		}
+		if result.Census != nil && result.Census.Unavailable == nil {
+			artifactReports++
+		}
+	}
+	for i := range t.Changed {
+		count(&t.Changed[i])
+	}
+	for _, ref := range t.Added {
+		count(ref.Analysis)
+	}
+	checked := []string{"resolved dependency identity and version inventory"}
+	if artifactReports > 0 {
+		checked = append(checked, "published artifact reports for registry-supported rows")
+	}
+	notChecked := []string{"runtime behaviour", "intent", "consumer reachability and test coverage"}
+	if sourceOnlyBaselines > 0 {
+		notChecked = append(notChecked,
+			fmt.Sprintf("source-only baseline contents, integrity verification and advisory scanning for %d canonical target row(s)", sourceOnlyBaselines))
+		checked = append(checked, "declared baseline acquisition metadata")
+	}
+	if uninspected > 0 {
+		checked = append(checked, "declared acquisition metadata")
+		notChecked = append(notChecked,
+			fmt.Sprintf("package contents, artifact integrity verification and advisory scanning for %d wholly metadata-only row(s)", uninspected))
+	}
+	t.Coverage = TransitiveCoverage{
+		Checked:              checked,
+		NotChecked:           notChecked,
+		Uninspected:          uninspected,
+		UninspectedBaselines: sourceOnlyBaselines,
+	}
+}
+
+func (t TransitiveResult) metadataOnlyRows() int {
+	n := len(t.LockChanges)
+	for _, result := range t.Changed {
+		if result.LockChange != nil && result.Census == nil && result.Stats == nil {
+			n++
+		}
+	}
+	for _, refs := range [][]ModuleRef{t.Added, t.Removed} {
+		for _, ref := range refs {
+			if ref.Declared != nil && ref.Analysis == nil {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // writeGrouped renders a module set grouped by what pulls it in, biggest
@@ -199,8 +333,8 @@ func (t TransitiveResult) writeGrouped(w func(string, ...any), refs []ModuleRef,
 			w("  via %s (%d):", EscapeText(via), len(items))
 			indent = "    "
 		} else if len(vias) > 1 {
-			// with other groups attributed, the gap is worth naming; alone it
-			// just means this source carries no edges, said in the header
+			// With other groups attributed, name the gap. The source does not
+			// record an edge for these modules, as stated in the header.
 			w("  not attributed (%d) (new direct dep, or outside the resolved graph):", len(items))
 			indent = "    "
 		}
@@ -212,6 +346,9 @@ func (t TransitiveResult) writeGrouped(w func(string, ...any), refs []ModuleRef,
 
 func moduleAnalysis(m ModuleRef) string {
 	switch {
+	case m.Declared != nil:
+		sig := DeriveLockChange(m.Declared.Ref(), m.Declared).Signals[0]
+		return EscapeText(sig.Title)
 	case m.Analysis == nil:
 		return "census not available"
 	case m.Analysis.Census != nil:

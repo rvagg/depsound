@@ -83,9 +83,8 @@ func Guide(s *stats.Stats, cacheRoot string) (*stats.Coverage, []stats.NextActio
 		checked = append([]string(nil), coverageChecked...)
 		checked[0] = "caller-supplied quarantined artifact diff (origin + sha256 recorded; registry checksum cross-checked when obtained)"
 	}
-	// an action is reviewed on its own terms: it runs on a runner rather than
-	// inside your code, so what it can reach is decided by the calling
-	// workflow, and import reachability says nothing about it
+	// An action runs on a runner. The calling workflow determines what it can
+	// reach, so import reachability in your code does not apply.
 	if len(s.Artifact.Unavailable) == 0 && s.Package.Ecosystem == "gha" {
 		checked = []string{
 			"the repo tree at the pinned commit (what the runner checks out)",
@@ -189,12 +188,10 @@ func Guide(s *stats.Stats, cacheRoot string) (*stats.Coverage, []stats.NextActio
 		add("compatibility constraints changed; check your usage against the compat section", "")
 	}
 
-	// route the transitive NOT-checked line to a real command for every
-	// ecosystem that has a lockfile transitive mode, so a single-pair diff
-	// never leaves the agent thinking the subtree is unreachable. A
-	// range-valued endpoint means no lockfile resolved this change, so naming
-	// a lockfile pair would route to files that do not exist: point at the
-	// recipe that generates the pair instead.
+	// Route the transitive NOT-checked line to a real command for every
+	// ecosystem with a lockfile transitive mode. When an endpoint came from a
+	// range, this review did not use a lockfile; point to the recipe that
+	// generates the pair instead.
 	if eco := s.Package.Ecosystem; transitiveLock[eco] != "" {
 		switch r := s.Resolution; {
 		case r != nil && (r.FromSpec != "" || r.ToSpec != "") && projectable[eco]:

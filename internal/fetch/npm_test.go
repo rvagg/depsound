@@ -6,16 +6,81 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPublicMetaSerializationRedactsCredentials(t *testing.T) {
+	raw := "https://user:SECRET@registry.example/pkg.tgz?token=TOKEN&keep=1"
+	meta := Meta{
+		URL: raw, Digest: "sha512-digest",
+		RegistryChecksum: &RegistryChecksum{
+			State: "lookup-failed", URL: raw, Error: `Get "` + raw + `": connection refused`,
+		},
+	}
+	b, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b); strings.Contains(got, "SECRET") || strings.Contains(got, "TOKEN") {
+		t.Fatalf("metadata leaked credentials: %s", got)
+	}
+	if !strings.Contains(string(b), "sha512-digest") || !strings.Contains(string(b), "connection refused") {
+		t.Fatalf("metadata lost public facts: %s", b)
+	}
+
+	var legacy Meta
+	if err := json.Unmarshal([]byte(`{"url":"`+raw+`","digest":"sha512-digest"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	b, err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "SECRET") || strings.Contains(string(b), "TOKEN") {
+		t.Fatalf("legacy metadata leaked credentials: %s", b)
+	}
+
+	dest := filepath.Join(t.TempDir(), "pkg.tgz")
+	if err := writeMeta(dest, meta); err != nil {
+		t.Fatal(err)
+	}
+	sidecar, err := os.ReadFile(MetaPath(dest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sidecar), "SECRET") || strings.Contains(string(sidecar), "TOKEN") {
+		t.Fatalf("sidecar leaked credentials: %s", sidecar)
+	}
+}
+
+func TestFailedAcquisitionRedactsTransportURL(t *testing.T) {
+	raw := "https://user:SECRET@registry.example/pkg.tgz?token=TOKEN"
+	err := failedAcquisition("artifact", raw, 0, &url.Error{
+		Op: "Get", URL: raw, Err: errors.New("connection refused"),
+	})
+	var unavailable UnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("unavailable error = %v", err)
+	}
+	failure := unavailable.Unavailable()
+	if strings.Contains(failure.URL, "SECRET") || strings.Contains(failure.Hint, "SECRET") ||
+		strings.Contains(failure.URL, "TOKEN") || strings.Contains(failure.Hint, "TOKEN") {
+		t.Fatalf("transport failure leaked credentials: %+v", failure)
+	}
+	if !strings.Contains(failure.Hint, "connection refused") {
+		t.Fatalf("transport reason missing: %+v", failure)
+	}
+}
 
 // Exercises the full artifact lifecycle: fresh fetch with sidecar, cache
 // hit verified without a network trip, tamper-triggered refetch, and

@@ -114,7 +114,7 @@ func censusCmd(args []string) error {
 	}
 	c.Coverage, c.NextActions = output.CensusGuide(c)
 	if evidenceDir != "" {
-		if err := exportEvidence(cacheDir, evidenceDir, "census", c); err != nil {
+		if err := exportEvidence(cacheDir, evidenceDir, "census", c, nil); err != nil {
 			return err
 		}
 	}
@@ -215,9 +215,6 @@ func parseAgainstTree(eco, src string) (map[string]map[string]bool, error) {
 	}
 	set := map[string]map[string]bool{}
 	for _, d := range deps {
-		if d.sourceOnly {
-			continue
-		}
 		if set[d.name] == nil {
 			set[d.name] = map[string]bool{}
 		}

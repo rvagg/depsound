@@ -100,7 +100,7 @@ snapshots:
 	if err != nil {
 		t.Fatal(err)
 	}
-	// workspace links carry no version to fetch, so they are not roots
+	// Workspace links are excluded because they don't specify a registry version.
 	if len(roots) != 2 || roots[0] != "astro@5.16.0" || roots[1] != "msw@2.12.3" {
 		t.Errorf("roots = %v", roots)
 	}

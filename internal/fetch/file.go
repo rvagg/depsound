@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/rvagg/depsound/internal/manifest"
 )
 
 // maxManifestBytes caps a caller-pointed text file (a go.mod, not an
@@ -21,17 +23,17 @@ const maxManifestBytes = 16 << 20
 // SSRF-from-a-package concern; the bytes are still untrusted DATA.
 func GetURL(ctx context.Context, client *http.Client, u string) ([]byte, error) {
 	if strings.HasPrefix(u, "http://") {
-		return nil, fmt.Errorf("refusing non-TLS URL %q (use https)", u)
+		return nil, fmt.Errorf("refusing non-TLS URL %q (use https)", manifest.PublicURL(u))
 	}
 	if !strings.HasPrefix(u, "https://") {
-		return nil, fmt.Errorf("not a URL: %q", u)
+		return nil, fmt.Errorf("not a URL: %q", manifest.PublicURL(u))
 	}
 	u = rewriteGitHubBlob(u)
 	ctx, cancel := context.WithTimeout(ctx, metaTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, failedAcquisition("input", u, 0, err)
 	}
 	req.Header.Set("User-Agent", userAgent)
 	if isGitHubHost(u) {
@@ -41,7 +43,7 @@ func GetURL(ctx context.Context, client *http.Client, u string) ([]byte, error) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, failedAcquisition("input", u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -62,7 +64,7 @@ func GitHubContents(ctx context.Context, client *http.Client, name, ref, path st
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, failedAcquisition("input", u, 0, err)
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/vnd.github.raw+json")
@@ -71,7 +73,7 @@ func GitHubContents(ctx context.Context, client *http.Client, name, ref, path st
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, failedAcquisition("input", u, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
@@ -87,10 +89,10 @@ func GitHubContents(ctx context.Context, client *http.Client, name, ref, path st
 func readCapped(r io.Reader, u string) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(r, maxManifestBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, failedAcquisition("input", u, 0, err)
 	}
 	if len(b) > maxManifestBytes {
-		return nil, fmt.Errorf("%s exceeds %d byte manifest limit", u, maxManifestBytes)
+		return nil, fmt.Errorf("%s exceeds %d byte manifest limit", manifest.PublicURL(u), maxManifestBytes)
 	}
 	return b, nil
 }

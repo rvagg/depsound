@@ -1,6 +1,7 @@
 package output
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -54,7 +55,8 @@ func TestDeriveLockChangeKeepsDeclaredMetadataSeparate(t *testing.T) {
 		To:   []manifest.LockSource{{Location: "packages/b", Resolved: "https://new.example/mirror.tgz", Host: "new.example", Integrity: "sha512-new"}},
 	}
 	l := DeriveLockChange("npm:mirror 1.2.3", change)
-	if len(l.Signals) != 1 || l.Signals[0].Code != CodeLockSource || l.Signals[0].Weight != weightLook {
+	if len(l.Signals) != 1 || l.Signals[0].Code != CodeLockSource || l.Signals[0].Weight != weightLook ||
+		l.Signals[0].Kind != KindFact || l.Signals[0].Lens != LensSecurity {
 		t.Fatalf("unexpected lock source ledger: %+v", l)
 	}
 	if Assess(l).Tier != weightLook {
@@ -68,6 +70,51 @@ func TestDeriveLockChangeKeepsDeclaredMetadataSeparate(t *testing.T) {
 		if !found {
 			t.Errorf("declared metadata missing %q: %+v", want, l.Signals[0].Evidence)
 		}
+	}
+}
+
+func TestDeriveLockChangeRedactsCredentialsAndScopesAbsentSides(t *testing.T) {
+	change := &manifest.LockChange{
+		Ecosystem: "npm", Name: "private", Kind: "added", ToVersion: "2.0.0", CredentialsChanged: true,
+		To: []manifest.LockSource{{
+			Resolved: "https://ci:FAKE_SECRET@registry.example/private.tgz?access_token=FAKE_TOKEN&keep=1",
+			Host:     "ci:FAKE_SECRET@registry.example",
+		}},
+	}
+	l := DeriveLockChange(change.Ref(), change)
+	raw, err := json.Marshal(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(raw)
+	for _, secret := range []string{"FAKE_SECRET", "FAKE_TOKEN"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("credential leaked in ledger: %s", secret)
+		}
+	}
+	for _, want := range []string{"credentials", "redacted", "absent", "registry.example", "keep=1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metadata fact missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestDeriveLockChangeMetadataKinds(t *testing.T) {
+	titles := map[string]bool{}
+	for _, kind := range []string{"version", "added", "removed"} {
+		change := &manifest.LockChange{Ecosystem: "npm", Name: "x", Kind: kind, FromVersion: "1", ToVersion: "2"}
+		l := DeriveLockChange(change.Ref(), change)
+		if len(l.Signals) != 1 || l.Signals[0].Title == "" {
+			t.Errorf("%s metadata change lost its fact: %+v", kind, l)
+			continue
+		}
+		if l.Signals[0].Kind != KindDegradation || l.Signals[0].Lens != LensCoverage || l.Signals[0].Weight != weightLook {
+			t.Errorf("%s metadata severity = %+v", kind, l.Signals[0])
+		}
+		titles[l.Signals[0].Title] = true
+	}
+	if len(titles) != 3 {
+		t.Errorf("metadata variants collapsed into one fact: %+v", titles)
 	}
 }
 
@@ -380,7 +427,7 @@ func TestNonRegistryDepSignal(t *testing.T) {
 	if got := sig([]manifest.DepChange{{Name: "helper", Status: "removed", From: "github:o/r", Flag: "git dependency"}}); got.Code != "" {
 		t.Errorf("removed must not fire: %+v", got)
 	}
-	// registry specs carry no flag and say nothing
+	// Registry specs do not trigger the non-registry dependency signal.
 	if got := sig([]manifest.DepChange{{Name: "ok", Status: "added", To: "^1.0.0"}}); got.Code != "" {
 		t.Errorf("registry spec must not fire: %+v", got)
 	}

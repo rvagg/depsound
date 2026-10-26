@@ -158,9 +158,9 @@ func getGitHubJSON(ctx context.Context, client *http.Client, u string, v any) er
 	return failure
 }
 
-// downloadPlain fetches url to dest with NO integrity check, for artifacts
-// that carry no registry checksum (GHA tarballs). It keeps the stall
-// watchdog so a slow codeload transfer is never killed while progressing.
+// downloadPlain fetches GitHub Action tarballs without a registry checksum.
+// The resolved commit identifies their source. A stall watchdog allows slow
+// transfers to continue while data is arriving.
 func downloadPlain(ctx context.Context, client *http.Client, u, dest string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
