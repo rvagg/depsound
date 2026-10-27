@@ -1,0 +1,18 @@
+{
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "version.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}

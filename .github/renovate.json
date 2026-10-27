@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
+  "enabledManagers": ["custom.regex"],
+  "schedule": ["before 4am on monday"],
+  "minimumReleaseAge": "5 days",
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "internalChecksFilter": "strict",
+  "automerge": false,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/release-binaries\\.yml$/"],
+      "matchStrings": [
+        "(?:^|\\r?\\n)[ \\t]*distribution:[ \\t]*goreleaser[ \\t]*\\r?\\n[ \\t]*version:[ \\t]*(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)[ \\t]*(?:\\r?\\n|$)"
+      ],
+      "depNameTemplate": "goreleaser/goreleaser",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/",
+        "/^AGENTS\\.md$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\r?\\n)[ \\t]*go (?:install|run) honnef\\.co/go/tools/cmd/staticcheck@(?<currentValue>[0-9]{4}\\.[0-9]+(?:\\.[0-9]+)?)(?:[ \\t]+\\./\\.\\.\\.)?[ \\t]*(?:\\r?\\n|$)"
+      ],
+      "depNameTemplate": "dominikh/go-tools",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "regex:^(?<major>[0-9]{4})\\.(?<minor>[0-9]+)(?:\\.(?<patch>[0-9]+))?$"
+    }
+  ]
+}

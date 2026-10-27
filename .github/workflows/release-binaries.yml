@@ -1,46 +1,165 @@
-name: GoReleaser
+name: Release
 
-# Triggers ONLY on a published release (the unified Releaser publishes it after
-# a version.json bump) and manual dispatch. NOT on workflow_run: that fired
-# goreleaser on the default branch with no tag, so `release --clean` failed.
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
+  push:
+    tags: ['v*']
 
-permissions:
-  contents: write
-  id-token: write     # sigstore identity for the build-provenance attestation
-  attestations: write # store the attestation against the repo
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  bin-releaser:
-    name: Release Binaries
+  build:
+    # Tag rulesets enforce creation authority; this actor check is additional.
+    if: github.repository == 'rvagg/depsound' && github.ref_type == 'tag' && github.actor == 'rvagg'
+    name: Build archives
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
+      - name: Checkout approved tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+      - name: Check tag and release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          [[ "$GITHUB_REF" == "refs/tags/$tag" && "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(git rev-parse "$GITHUB_REF^{commit}")" == "$GITHUB_SHA" ]]
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+          [[ "$(jq -r '.version' version.json)" == "$tag" ]]
+          [[ "$(jq -r '.["."]' .github/release-please-manifest.json)" == "${tag#v}" ]]
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Release Binaries
+      - name: Build release archives
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
+          version: v2.19.0
+          args: release --clean --skip=publish
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Attest build provenance
-        # checksums.txt ships with the release, so it cannot vouch for it.
-        # This attestation is stored independently; consumers (including
-        # depsound-action) verify downloads with `gh attestation verify`.
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Smoke release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          dir=$(mktemp -d)
+          tar -xzf "dist/depsound_${tag#v}_linux_amd64.tar.gz" -C "$dir"
+          reported=$("$dir/depsound" --version)
+          read -r name version rest <<<"$reported"
+          [[ "$name" == depsound && "${version#v}" == "${tag#v}" ]]
+          printf 'jobs:\n  b:\n    steps:\n      - uses: actions/checkout@aaaa # v1\n' > "$dir/old.yml"
+          printf 'jobs:\n  b:\n    steps:\n      - uses: actions/checkout@bbbb # v2\n' > "$dir/new.yml"
+          printf '.github/workflows/ci.yml\t%s\t%s\n' "$dir/old.yml" "$dir/new.yml" > "$dir/pairs.tsv"
+          "$dir/depsound" detect --file="$dir/pairs.tsv" | grep -qx 'gha:actions/checkout aaaa bbbb'
+          python3 .github/scripts/release-notes.py "$tag" > dist/release-notes.md
+      - name: Retain release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          subject-path: |
+          name: release-files-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
             dist/*.tar.gz
             dist/*.zip
             dist/checksums.txt
+            dist/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish approved tag
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download this run's release files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-files
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release-files/*.tar.gz
+            release-files/*.zip
+            release-files/checksums.txt
+      - name: Upload draft and publish last
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          cd release-files
+          assets=(
+            checksums.txt
+            "depsound_${tag#v}_darwin_all.zip"
+            "depsound_${tag#v}_linux_amd64.tar.gz"
+            "depsound_${tag#v}_linux_arm64.tar.gz"
+            "depsound_${tag#v}_windows_amd64.zip"
+            "depsound_${tag#v}_windows_arm64.zip"
+          )
+          sha256sum -c checksums.txt
+          for asset in "${assets[@]}"; do
+            gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-binaries.yml" \
+              --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA" \
+              --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
+          done
+          require_tag() {
+            local object kind sha i
+            object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object)
+            for ((i = 0; i < 16; i++)); do
+              kind=$(jq -r .type <<<"$object")
+              sha=$(jq -r .sha <<<"$object")
+              if [[ "$kind" == commit ]]; then
+                [[ "$sha" == "$GITHUB_SHA" ]]
+                return
+              fi
+              [[ "$kind" == tag && "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+              object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .object)
+            done
+            return 1
+          }
+          require_tag
+          existing=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          jq -e --arg tag "$tag" 'all(.[][]; .tag_name != $tag)' <<<"$existing"
+          payload=$(jq -n --arg tag "$tag" --arg sha "$GITHUB_SHA" --rawfile notes release-notes.md \
+            '{tag_name: $tag, target_commitish: $sha, name: $tag, body: $notes, draft: true}')
+          release=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" --input - <<<"$payload")
+          jq -e --arg tag "$tag" --arg sha "$GITHUB_SHA" \
+            '.draft == true and .tag_name == $tag and .target_commitish == $sha and (.assets | length) == 0' <<<"$release"
+          id=$(jq -er '.id | select(type == "number")' <<<"$release")
+          for asset in "${assets[@]}"; do
+            gh api --method POST "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$asset" \
+              --header 'Content-Type: application/octet-stream' --input "$asset" --silent
+          done
+          require_tag
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id")
+          names=$(printf '%s\n' "${assets[@]}" | jq -R . | jq -s .)
+          jq -e --arg tag "$tag" --arg sha "$GITHUB_SHA" --argjson names "$names" \
+            '.draft == true and .tag_name == $tag and .target_commitish == $sha and
+             ([.assets[].name] | sort) == $names' <<<"$release"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F draft=false
+          gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
+          for asset in "${assets[@]}"; do
+            gh release verify-asset "$tag" "$asset" --repo "$GITHUB_REPOSITORY"
+          done
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id")
+          jq -e --argjson names "$names" \
+            '.draft == false and .immutable == true and ([.assets[].name] | sort) == $names' <<<"$release"

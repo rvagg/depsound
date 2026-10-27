@@ -298,12 +298,13 @@ on-demand routing in `help`. ASCII `->` in output, never an arrow glyph.
    go test ./...
    gofmt -s -l .                                       # prints nothing
    go vet ./...
-   go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+   go run honnef.co/go/tools/cmd/staticcheck@2026.1 ./...
    go mod tidy && git diff --exit-code go.mod go.sum
    ```
 
-   There is no hosted test workflow; this gate runs locally. The repository's
-   own workflows are the release build and the dogfood dependency review.
+   Use Go 1.26 for this gate. `.github/workflows/ci.yml` runs it on master,
+   pull requests and explicitly dispatched candidate commits with a read-only
+   token. A dispatched run checks its expected SHA before checking out code.
 4. Smoke the binary against real registry artifacts for the ecosystem you
    touched, and read the output as the agent would: does it route to a next
    action, does every heuristic say it is one, does a clean run still state
@@ -331,8 +332,8 @@ on-demand routing in `help`. ASCII `->` in output, never an arrow glyph.
 - Simple language in prose, output and messages. Short sentences. Plain
   punctuation: no em or en dashes, no emoji, no characters that break
   monospace alignment. Output uses ASCII `->`.
-- Nothing new at the repository root. Commands in `cmd/depsound/`, packages
-  in `internal/`, skills in `skills/`.
+- Keep automation under `.github/`. Commands belong in `cmd/depsound/`,
+  packages in `internal/`, skills in `skills/`; the changelog stays at the root.
 - Never delete files to tidy; move them to `_archive/`.
 - Prefer a hand-rolled parser over a dependency when the format is small
   (semver ranges, lockfiles, package.json exports all are).
@@ -348,9 +349,17 @@ on-demand routing in `help`. ASCII `->` in output, never an arrow glyph.
 - Default branch is `master`. History is linear: squash or rebase, no merge
   commits. Dependabot PRs (gomod and github-actions, monthly, five-day
   cooldown) are squash-merged with the title as the subject.
-- `version.json` is bumped only by a release commit. Do not touch it, the
-  release workflow, `.goreleaser.yaml` or the dependabot configuration unless
-  that is the point of the PR.
+- Renovate (`.github/renovate.json`) updates only the GoReleaser and
+  staticcheck pins in the workflows and this guide. It runs before 04:00 on
+  Mondays and requires releases to have a publish timestamp and be at least
+  five days old.
+  Automerge is disabled. The app must be enabled and the config on the default
+  branch. Tool bumps change approved release controls; review them and refresh
+  the private release helper's fingerprints before releasing.
+- Release Please updates `version.json` and `CHANGELOG.md` in a preparation PR.
+  Merging that PR does not publish. Change the release workflows,
+  `.goreleaser.yaml` or Dependabot configuration only when that is the point
+  of the PR.
 - Every `uses:` in `.github/workflows/` pins a full commit sha with a
   `# vX.Y.Z` tracking comment, never a moving tag. This is the tool's own
   advice; Dependabot bumps the sha and the comment together.
@@ -360,40 +369,66 @@ on-demand routing in `help`. ASCII `->` in output, never an arrow glyph.
 
 ## Releases
 
-`version.json` (`{"version":"vX.Y.Z"}`) is the single source of the version.
-`internal/version` derives the binary's version from the release tag at
-build time, or from the module version under `go install ...@vX.Y.Z`, so
-nothing else is edited. A release is cut by the maintainer, in this order:
+`version.json` (`{"version":"vX.Y.Z"}`) is the source version. Release Please
+updates it and `CHANGELOG.md` in one preparation PR; its tracking version in
+`.github/release-please-manifest.json` must agree. It prepares releases but
+does not create tags or GitHub releases. Its workflow holds write permissions
+for branches, PRs and labels, plus `actions: write` to dispatch candidate CI.
+Tests run separately with `contents: read` and without publication credentials.
 
-1. On a clean, up-to-date `master`, bump `version.json` and commit
-   `chore: release vX.Y.Z`; push.
-2. Create the GitHub release `vX.Y.Z` targeted at that exact commit, with
-   generated notes. The tag is created by the release so it can never land
-   on a stale head.
-3. `.github/workflows/release-binaries.yml` fires on `release: published`
-   only (never on `workflow_run` or a push) and runs goreleaser: linux,
-   darwin and windows for amd64 and arm64, darwin as one universal binary,
-   `CGO_ENABLED=0`, `-trimpath`, the version injected by `-X` into
-   `internal/version`. It uploads the archives
-   (`depsound_<ver>_linux_<arch>.tar.gz`, `depsound_<ver>_darwin_all.zip`,
-   windows as zip) and `checksums.txt` to the existing release, then attests
-   build provenance for every asset. The attestation, not `checksums.txt`,
-   is the independent anchor; consumers verify it with
-   `gh attestation verify <asset> --repo rvagg/depsound`.
-4. Verify the published linux binary before anything depends on it:
-   `depsound --version` reports the new version, and `detect` on a
-   two-line workflow pair that moves `actions/checkout` from one sha to
-   another prints `gha:actions/checkout <old> <new>`. A failed check stops
-   the release here.
-5. Cascade to `depsound-action`: bump its `depsound-version` default and
-   README, release the Action, and re-pin every `uses: rvagg/depsound-action`
-   reference (including `.github/workflows/depsound.yml` in this repository)
-   to the new Action sha. The Action's own guide describes that half.
+The maintainer command must select a candidate and verify CI on its exact head
+SHA. It must recheck the base and head, merge with a head-SHA lease, take the
+merge commit from that PR's merge result, and require its tree to match the
+reviewed candidate. It must create `vX.Y.Z` at that commit using the maintainer's
+credential, without executing checkout code or creating a GitHub release.
+A version-tag push starts the configured publisher.
 
-Contributors do not release. If your change is something the Action needs,
-say so in the PR; it becomes usable there only after a CLI release and an
-Action bump. The Action verifies release attestations, so a release whose
-binaries were built anywhere but this workflow cannot be consumed by it.
+`.github/workflows/release-binaries.yml` runs on version-tag pushes. It checks
+the tag, source version and tracking version, then builds with GoReleaser in a
+read-only job: Linux and Windows amd64/arm64, Darwin universal, `CGO_ENABLED=0`,
+`-trimpath`, and the version injected into `internal/version`. The Linux binary
+must report that version and detect a workflow action bump before upload.
+
+The publisher consumes only this run attempt's archives and checksums. It
+attests their build provenance, checks the expected workflow, tag and source
+SHA, creates its own draft, uploads by release ID, and publishes last. A
+matching existing release or draft stops the run. The published release must
+be immutable and contain exactly the expected assets; each frozen asset must
+match the locally attested bytes.
+
+Before tagging, the maintainer command must check all-tag creation/update/
+deletion protection, immutable releases enabled, and a `release` environment
+allowing version tags only. Ruleset bypass must be `RepositoryRole: admin`
+(currently rvagg only), never Write/Maintain roles, GitHub Actions, other apps
+or deploy keys. Adding another administrator changes who can release.
+The workflow's actor check is additional protection. Branch workflows and
+write-capable collaborators can still interfere with drafts or publish early;
+the checks do not prevent every pre-publication race. Older mutable releases
+remain mutable.
+
+For an archive, resolve the protected tag's commit and verify before execution:
+
+```bash
+gh attestation verify <archive> --repo rvagg/depsound \
+  --signer-workflow rvagg/depsound/.github/workflows/release-binaries.yml \
+  --source-ref refs/tags/vX.Y.Z --source-digest <tag-commit-sha> \
+  --signer-digest <tag-commit-sha> --deny-self-hosted-runners
+```
+
+After verified publication, the maintainer command must change the selected
+merged PR's label from `autorelease: pending` to `autorelease: tagged`;
+otherwise Release Please stops preparing the next version. Recovery uses a full workflow rerun,
+not just failed jobs, because artifacts are attempt-specific. A partial draft
+needs maintainer inspection before removal and retry. Published immutable tags
+and assets are never replaced.
+
+The Action has an independent version and release candidate. Combined releases
+must select and show both prepared versions and head/base SHAs before starting.
+The Action candidate must already bind its CLI default to the selected Go
+version. Complete and verify Go publication before merging and releasing that
+same Action candidate, then re-pin consumers to the released Action commit.
+Head/base drift must stop the flow; it must not choose a later candidate.
+Standalone Action and explicit depsound-only releases remain supported.
 
 ## Direction
 

@@ -37,9 +37,8 @@ checksum:
   name_template: checksums.txt
 
 release:
-  # the unified Releaser already created the GitHub Release and its notes;
-  # goreleaser only uploads the binaries to it
-  mode: keep-existing
+  # The tag workflow uploads these archives and publishes after attestation.
+  disable: true
 
 changelog:
   disable: true
